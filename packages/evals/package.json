@@ -1,0 +1,38 @@
+{
+  "name": "@jobpilot/evals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "eval:providers": "tsx src/run-provider-eval.ts"
+  },
+  "dependencies": {
+    "@jobpilot/embeddings": "0.1.0",
+    "@jobpilot/form-engine": "0.1.0",
+    "@jobpilot/ingestion": "0.1.0",
+    "@jobpilot/llm": "0.1.0",
+    "@jobpilot/shared": "0.1.0",
+    "@jobpilot/tailoring": "0.1.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "happy-dom": "^17.4.4",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

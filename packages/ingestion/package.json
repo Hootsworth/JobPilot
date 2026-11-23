@@ -1,0 +1,37 @@
+{
+  "name": "@jobpilot/ingestion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "crawl": "tsx src/cli/crawl.ts",
+    "embed": "tsx src/cli/embed.ts",
+    "score": "tsx src/cli/score.ts"
+  },
+  "dependencies": {
+    "@jobpilot/embeddings": "0.1.0",
+    "@jobpilot/llm": "0.1.0",
+    "@jobpilot/shared": "0.1.0",
+    "@supabase/supabase-js": "^2.49.4",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

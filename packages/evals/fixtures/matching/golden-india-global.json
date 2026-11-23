@@ -1,0 +1,479 @@
+{
+  "profiles": [
+    {
+      "profileId": "india_fresher_backend",
+      "fullName": "Rohan Verma",
+      "activeProfileVersion": 1,
+      "jsonResume": {
+        "basics": { "name": "Rohan Verma", "label": "CS Graduate - Backend & Full-Stack" },
+        "work": [
+          {
+            "id": "w1",
+            "name": "FinTech Labs",
+            "position": "Backend Engineering Intern",
+            "employmentType": "Internship",
+            "startDate": "2025-05",
+            "endDate": "2025-07",
+            "highlights": ["Built TypeScript Fastify APIs backed by PostgreSQL and Redis"]
+          }
+        ],
+        "projects": [
+          {
+            "id": "p1",
+            "name": "QueueFlow",
+            "keywords": ["TypeScript", "Node.js", "PostgreSQL", "Redis", "Docker"],
+            "highlights": ["Processed 5k jobs/min with Redis streams"]
+          }
+        ],
+        "skills": [
+          { "name": "Backend", "keywords": ["TypeScript", "Node.js", "PostgreSQL", "Redis", "Docker", "REST APIs"] },
+          { "name": "Frontend", "keywords": ["React", "Next.js"] }
+        ]
+      },
+      "indiaProfile": {
+        "currentCtcLpa": 0,
+        "expectedCtcLpa": 12,
+        "ctcCurrency": "INR",
+        "noticePeriodDays": 0,
+        "preferredCities": ["Bengaluru", "Hyderabad", "Remote (Global)"],
+        "willingToRelocate": false,
+        "isFresher": true,
+        "internshipStatus": "completed_internship",
+        "cgpa": 8.8,
+        "cgpaScale": 10,
+        "collegeName": "IIIT Bengaluru"
+      },
+      "searchPreferences": {
+        "targetRoles": ["Software Engineer", "Backend Engineer"],
+        "workModes": ["remote", "hybrid", "onsite"],
+        "seniorityLevels": ["intern", "fresher", "junior"],
+        "countries": ["IN"],
+        "minSalaryLpa": 10,
+        "maxExperienceYears": 2
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "fullName": "Meera Nair",
+      "activeProfileVersion": 2,
+      "jsonResume": {
+        "basics": { "name": "Meera Nair", "label": "Mid-level Python & AI Backend Engineer" },
+        "work": [
+          {
+            "id": "w1",
+            "name": "DataScale India",
+            "position": "Software Engineer",
+            "startDate": "2023-06",
+            "endDate": "2026-06",
+            "highlights": ["Built Python FastAPI RAG services with pgvector and AWS"]
+          }
+        ],
+        "skills": [
+          { "name": "Backend & AI", "keywords": ["Python", "FastAPI", "PostgreSQL", "pgvector", "LLMs", "RAG", "AWS", "Docker"] }
+        ]
+      },
+      "indiaProfile": {
+        "currentCtcLpa": 18,
+        "expectedCtcLpa": 25,
+        "ctcCurrency": "INR",
+        "noticePeriodDays": 30,
+        "preferredCities": ["Bengaluru", "Pune", "Remote (India)"],
+        "willingToRelocate": true,
+        "isFresher": false,
+        "internshipStatus": "none",
+        "cgpa": 8.4,
+        "cgpaScale": 10
+      },
+      "searchPreferences": {
+        "targetRoles": ["Backend Engineer", "AI Engineer"],
+        "workModes": ["remote", "hybrid", "onsite"],
+        "seniorityLevels": ["mid", "senior"],
+        "countries": ["IN"],
+        "minSalaryLpa": 22,
+        "maxExperienceYears": 6
+      }
+    }
+  ],
+  "cases": [
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 3,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000001",
+        "title": "Software Development Engineer 1 (Backend)",
+        "companyName": "Razorpay",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "hybrid",
+        "seniority": "junior",
+        "experienceMinYears": 0,
+        "salaryMinLpa": 14,
+        "salaryMaxLpa": 20,
+        "extractedSkills": ["TypeScript", "Node.js", "PostgreSQL", "Redis"],
+        "descriptionClean": "Build payment APIs in TypeScript, Node.js, PostgreSQL, and Redis in Bengaluru."
+      }
+    },
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 3,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000002",
+        "title": "Junior Full-Stack Engineer (Remote Global)",
+        "companyName": "Vercel",
+        "city": null,
+        "countryCode": "US",
+        "workMode": "remote",
+        "seniority": "junior",
+        "experienceMinYears": 0,
+        "salaryMinLpa": null,
+        "salaryMaxLpa": null,
+        "extractedSkills": ["TypeScript", "React", "Next.js", "Node.js"],
+        "descriptionClean": "Work remotely worldwide building Next.js, React, TypeScript, and Node.js tooling."
+      }
+    },
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 2,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000003",
+        "title": "Backend Engineer - Fresher",
+        "companyName": "BrowserStack",
+        "city": "Hyderabad",
+        "countryCode": "IN",
+        "workMode": "onsite",
+        "seniority": "fresher",
+        "experienceMinYears": 0,
+        "salaryMinLpa": 12,
+        "salaryMaxLpa": 16,
+        "extractedSkills": ["Node.js", "Docker", "PostgreSQL", "Kafka"],
+        "descriptionClean": "Join our Hyderabad team using Node.js, Docker, PostgreSQL, and Kafka."
+      }
+    },
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 1,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000004",
+        "title": "Software Engineer Intern",
+        "companyName": "Cloudflare",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "hybrid",
+        "seniority": "intern",
+        "experienceMinYears": 0,
+        "salaryMinLpa": null,
+        "salaryMaxLpa": null,
+        "extractedSkills": ["Go", "Rust", "Linux", "Docker"],
+        "descriptionClean": "Systems engineering internship working with Go, Rust, Linux, and Docker."
+      }
+    },
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 0,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000005",
+        "title": "Associate Embedded Firmware Engineer",
+        "companyName": "Silicon India",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "onsite",
+        "seniority": "junior",
+        "experienceMinYears": 0,
+        "salaryMinLpa": 11,
+        "salaryMaxLpa": 14,
+        "extractedSkills": ["C++", "Linux"],
+        "descriptionClean": "Write bare-metal RTOS C++ drivers and embedded firmware."
+      }
+    },
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000006",
+        "title": "Junior Backend Developer",
+        "companyName": "LowPay IT",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "onsite",
+        "seniority": "junior",
+        "experienceMinYears": 0,
+        "salaryMinLpa": 4,
+        "salaryMaxLpa": 6,
+        "extractedSkills": ["Node.js", "PostgreSQL"],
+        "descriptionClean": "Node.js developer 4 - 6 LPA."
+      }
+    },
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000007",
+        "title": "SDE-1 Backend",
+        "companyName": "Chennai Corp",
+        "city": "Chennai",
+        "countryCode": "IN",
+        "workMode": "onsite",
+        "seniority": "junior",
+        "experienceMinYears": 0,
+        "salaryMinLpa": 12,
+        "salaryMaxLpa": 15,
+        "extractedSkills": ["Node.js", "TypeScript"],
+        "descriptionClean": "Must work onsite in Chennai."
+      }
+    },
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000008",
+        "title": "Staff Backend Engineer",
+        "companyName": "Stripe",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "hybrid",
+        "seniority": "staff",
+        "experienceMinYears": 8,
+        "salaryMinLpa": 60,
+        "salaryMaxLpa": 80,
+        "extractedSkills": ["TypeScript", "Node.js", "PostgreSQL"],
+        "descriptionClean": "Lead critical payments architecture with 8+ years experience."
+      }
+    },
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000009",
+        "title": "Junior Software Engineer (Onsite Berlin)",
+        "companyName": "Berlin GmbH",
+        "city": "Berlin",
+        "countryCode": "DE",
+        "workMode": "onsite",
+        "seniority": "junior",
+        "experienceMinYears": 0,
+        "salaryMinLpa": null,
+        "salaryMaxLpa": null,
+        "extractedSkills": ["TypeScript", "React"],
+        "descriptionClean": "Onsite in Berlin only."
+      }
+    },
+    {
+      "profileId": "india_fresher_backend",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "10000000-0000-4000-8000-000000000010",
+        "title": "Backend Engineer",
+        "companyName": "Scale Corp",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "hybrid",
+        "seniority": "unknown",
+        "experienceMinYears": 4,
+        "salaryMinLpa": 24,
+        "salaryMaxLpa": 32,
+        "extractedSkills": ["TypeScript", "Node.js", "PostgreSQL"],
+        "descriptionClean": "Requires 4+ years of production backend systems experience."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 3,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000001",
+        "title": "Senior AI Backend Engineer",
+        "companyName": "Postman",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "hybrid",
+        "seniority": "senior",
+        "experienceMinYears": 3,
+        "salaryMinLpa": 28,
+        "salaryMaxLpa": 38,
+        "extractedSkills": ["Python", "FastAPI", "PostgreSQL", "pgvector", "LLMs", "RAG", "AWS"],
+        "descriptionClean": "Build production RAG pipelines using Python, FastAPI, pgvector, LLMs, and AWS."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 3,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000002",
+        "title": "SDE-2 Python Platform",
+        "companyName": "Groww",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "hybrid",
+        "seniority": "mid",
+        "experienceMinYears": 2,
+        "salaryMinLpa": 24,
+        "salaryMaxLpa": 32,
+        "extractedSkills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
+        "descriptionClean": "Scale Python FastAPI microservices on AWS with PostgreSQL and Docker."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 2,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000003",
+        "title": "Backend Engineer (Relocation OK)",
+        "companyName": "PhonePe",
+        "city": "Hyderabad",
+        "countryCode": "IN",
+        "workMode": "onsite",
+        "seniority": "mid",
+        "experienceMinYears": 2,
+        "salaryMinLpa": 25,
+        "salaryMaxLpa": 30,
+        "extractedSkills": ["Python", "PostgreSQL", "Docker", "Kafka"],
+        "descriptionClean": "Build scalable data services in Hyderabad with Python, PostgreSQL, and Kafka."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 1,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000004",
+        "title": "SDE-2 Java Microservices",
+        "companyName": "Meesho",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "hybrid",
+        "seniority": "mid",
+        "experienceMinYears": 3,
+        "salaryMinLpa": 24,
+        "salaryMaxLpa": 32,
+        "extractedSkills": ["Java", "Spring Boot", "MySQL", "Kafka", "AWS"],
+        "descriptionClean": "Build high-throughput Java Spring Boot commerce APIs on AWS."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": true,
+      "relevanceTier": 0,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000005",
+        "title": "Senior iOS Engineer",
+        "companyName": "CRED",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "onsite",
+        "seniority": "senior",
+        "experienceMinYears": 3,
+        "salaryMinLpa": 30,
+        "salaryMaxLpa": 40,
+        "extractedSkills": ["Swift"],
+        "descriptionClean": "Build native SwiftUI mobile banking experiences."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000006",
+        "title": "Mid-level Python Engineer",
+        "companyName": "SmallShop",
+        "city": "Pune",
+        "countryCode": "IN",
+        "workMode": "hybrid",
+        "seniority": "mid",
+        "experienceMinYears": 2,
+        "salaryMinLpa": 12,
+        "salaryMaxLpa": 18,
+        "extractedSkills": ["Python", "FastAPI"],
+        "descriptionClean": "Python role capped at 18 LPA."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000007",
+        "title": "Software Engineer Intern",
+        "companyName": "StartupX",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "onsite",
+        "seniority": "intern",
+        "experienceMinYears": 0,
+        "salaryMinLpa": null,
+        "salaryMaxLpa": null,
+        "extractedSkills": ["Python"],
+        "descriptionClean": "Summer internship for students."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000008",
+        "title": "Principal AI Architect",
+        "companyName": "BigCloud",
+        "city": "Bengaluru",
+        "countryCode": "IN",
+        "workMode": "hybrid",
+        "seniority": "staff",
+        "experienceMinYears": 10,
+        "salaryMinLpa": 70,
+        "salaryMaxLpa": 95,
+        "extractedSkills": ["Python", "LLMs"],
+        "descriptionClean": "10+ years architectural leadership."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000009",
+        "title": "AI Engineer (Remote US Only)",
+        "companyName": "USCorp",
+        "city": "San Francisco",
+        "countryCode": "US",
+        "workMode": "remote",
+        "seniority": "mid",
+        "experienceMinYears": 2,
+        "salaryMinLpa": null,
+        "salaryMaxLpa": null,
+        "extractedSkills": ["Python", "LLMs"],
+        "descriptionClean": "US work authorization required."
+      }
+    },
+    {
+      "profileId": "india_mid_python_ai",
+      "expectedHardFilterPass": false,
+      "relevanceTier": 0,
+      "job": {
+        "id": "20000000-0000-4000-8000-000000000010",
+        "title": "Mid Python Developer",
+        "companyName": "LegacyTech",
+        "city": "Pune",
+        "countryCode": "IN",
+        "workMode": "onsite",
+        "seniority": "mid",
+        "experienceMinYears": 8,
+        "salaryMinLpa": 24,
+        "salaryMaxLpa": 30,
+        "extractedSkills": ["Python"],
+        "descriptionClean": "Requires 8+ years."
+      }
+    }
+  ]
+}

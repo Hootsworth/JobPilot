@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SDE 1 Backend - Swiggy - Naukri.com</title>
+  </head>
+  <body>
+    <main>
+      <header class="styles_job-header-container__top">
+        <h1 class="styles_jd-header-title__main">Software Development Engineer 1</h1>
+        <div class="styles_jd-header-comp-name__main"><a href="#">Swiggy</a></div>
+        <div class="styles_jhc__loc___main"><a href="#">Bengaluru, India</a></div>
+        <div class="styles_jhc__salary__main">18 - 25 LPA</div>
+      </header>
+      <section class="styles_JDC__dang-inner-html__main">
+        Build real-time order logistics and payments pipelines in Node.js and PostgreSQL.
+      </section>
+
+      <!-- Naukri Quick Apply / Chatbot Screening Questions Modal -->
+      <form id="naukri-apply-modal">
+        <div class="field">
+          <label for="nk_phone">Mobile Phone *</label>
+          <input id="nk_phone" type="tel" value="+91-9000011111" required />
+        </div>
+        <div class="field">
+          <label for="nk_cctc">Current CTC (LPA)</label>
+          <input id="nk_cctc" name="currentCtc" type="number" />
+        </div>
+        <div class="field">
+          <label for="nk_ectc">Expected CTC (LPA)</label>
+          <input id="nk_ectc" name="expectedCtc" type="number" />
+        </div>
+        <div class="field">
+          <label for="nk_notice">Notice Period</label>
+          <select id="nk_notice" name="noticePeriod">
+            <option value="">Select...</option>
+            <option value="Immediate">Immediate</option>
+            <option value="15 days">15 days</option>
+            <option value="30 days">30 days</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="nk_city">Preferred City / Location</label>
+          <input id="nk_city" type="text" />
+        </div>
+        <fieldset>
+          <legend>Willing to relocate to Bengaluru?</legend>
+          <label><input type="radio" name="nk_reloc" value="Yes" /> Yes</label>
+          <label><input type="radio" name="nk_reloc" value="No" /> No</label>
+        </fieldset>
+        <div class="field">
+          <label for="nk_resume">Upload Updated Resume</label>
+          <input id="nk_resume" type="file" style="display:none" />
+        </div>
+        <button type="submit">Submit Application</button>
+      </form>
+    </main>
+  </body>
+</html>

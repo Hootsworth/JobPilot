@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Linear - Backend Software Engineer</title>
+    <meta property="og:site_name" content="Linear" />
+  </head>
+  <body>
+    <main>
+      <h1 class="ashby-job-posting-heading">Backend Software Engineer</h1>
+      <div class="ashby-job-posting-brief-list"><p>Remote</p></div>
+      <div id="overview" class="ashby-job-posting-description">TypeScript GraphQL backend engineering.</div>
+      <form id="ashby-form">
+        <div class="ashby-application-form-field-entry">
+          <label for="_systemfield_name">Name</label>
+          <input id="_systemfield_name" name="_systemfield_name" type="text" required />
+        </div>
+        <div class="ashby-application-form-field-entry">
+          <label for="_systemfield_email">Email</label>
+          <input id="_systemfield_email" name="_systemfield_email" type="email" required />
+        </div>
+        <div class="ashby-application-form-field-entry">
+          <label for="_systemfield_phone">Phone</label>
+          <input id="_systemfield_phone" name="_systemfield_phone" type="tel" />
+        </div>
+        <div class="ashby-application-form-field-entry">
+          <label for="_systemfield_location">Location</label>
+          <input id="_systemfield_location" name="_systemfield_location" type="text" />
+        </div>
+        <div class="ashby-application-form-field-entry">
+          <label for="_systemfield_resume">Resume</label>
+          <input id="_systemfield_resume" name="_systemfield_resume" type="file" style="display:none" />
+        </div>
+        <div class="ashby-application-form-field-entry">
+          <label for="ashby_deg">Degree</label>
+          <select id="ashby_deg">
+            <option value="">Select...</option>
+            <option value="btech">B.Tech</option>
+            <option value="mtech">M.Tech</option>
+          </select>
+        </div>
+        <fieldset>
+          <legend>Are you authorized to work?</legend>
+          <label><input type="radio" name="ashby_auth" value="Yes" /> Yes</label>
+          <label><input type="radio" name="ashby_auth" value="No" /> No</label>
+        </fieldset>
+        <div id="ashby-shadow-slot"></div>
+        <button type="submit">Submit Application</button>
+      </form>
+    </main>
+  </body>
+</html>

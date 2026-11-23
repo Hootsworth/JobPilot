@@ -1,0 +1,218 @@
+import { z } from 'zod';
+import { LlmProviderIdSchema } from './llm.js';
+
+export const JobSourceTypeSchema = z.enum([
+  'greenhouse',
+  'lever',
+  'ashby',
+  'workable',
+  'workday',
+  'adzuna',
+  'jooble',
+  'remotive',
+  'arbeitnow',
+  'remoteok',
+  'jsearch',
+  'naukri',
+  'foundit',
+  'internshala',
+  'instahyre',
+  'wellfound',
+  'linkedin',
+  'extension_capture',
+  'manual'
+]);
+export type JobSourceType = z.infer<typeof JobSourceTypeSchema>;
+
+export const JobWorkModeSchema = z.enum(['remote', 'hybrid', 'onsite', 'unknown']);
+export type JobWorkMode = z.infer<typeof JobWorkModeSchema>;
+
+export const JobSenioritySchema = z.enum([
+  'intern',
+  'fresher',
+  'junior',
+  'mid',
+  'senior',
+  'staff',
+  'lead',
+  'manager',
+  'unknown'
+]);
+export type JobSeniority = z.infer<typeof JobSenioritySchema>;
+
+export const NormalizedJobInputSchema = z.object({
+  sourceType: JobSourceTypeSchema,
+  externalId: z.string().min(1),
+  sourceUrl: z.string().url(),
+  applyUrl: z.string().url().nullable().default(null),
+  companyName: z.string().min(1),
+  companyDomain: z.string().nullable().default(null),
+  companyLogoUrl: z.string().url().nullable().default(null),
+  title: z.string().min(1),
+  normalizedTitle: z.string().default(''),
+  locationRaw: z.string().default(''),
+  city: z.string().nullable().default(null),
+  countryCode: z.string().nullable().default(null),
+  workMode: JobWorkModeSchema.default('unknown'),
+  seniority: JobSenioritySchema.default('unknown'),
+  experienceMinYears: z.number().min(0).max(50).nullable().default(null),
+  experienceMaxYears: z.number().min(0).max(50).nullable().default(null),
+  salaryMin: z.number().min(0).nullable().default(null),
+  salaryMax: z.number().min(0).nullable().default(null),
+  salaryCurrency: z.string().nullable().default(null),
+  salaryPeriod: z.enum(['year', 'month', 'hour']).nullable().default(null),
+  salaryMinLpa: z.number().min(0).nullable().default(null),
+  salaryMaxLpa: z.number().min(0).nullable().default(null),
+  descriptionRaw: z.string().default(''),
+  descriptionClean: z.string().default(''),
+  extractedSkills: z.array(z.string()).default([]),
+  postedAt: z.string().nullable().default(null),
+  rawPayload: z.record(z.unknown()).optional()
+});
+export type NormalizedJobInput = z.infer<typeof NormalizedJobInputSchema>;
+
+export const JobSightingSchema = z.object({
+  sourceType: JobSourceTypeSchema,
+  externalId: z.string(),
+  sourceUrl: z.string(),
+  seenAt: z.string()
+});
+export type JobSighting = z.infer<typeof JobSightingSchema>;
+
+export const JobRecordSchema = z.object({
+  id: z.string().uuid(),
+  ownerUserId: z.string().uuid().nullable().default(null),
+  dedupeFingerprint: z.string(),
+  sourceType: JobSourceTypeSchema,
+  externalId: z.string().nullable().default(null),
+  sourceUrl: z.string(),
+  applyUrl: z.string().nullable().default(null),
+  companyName: z.string(),
+  companyDomain: z.string().nullable().default(null),
+  companyLogoUrl: z.string().nullable().default(null),
+  title: z.string(),
+  normalizedTitle: z.string().nullable().default(null),
+  locationRaw: z.string().nullable().default(null),
+  city: z.string().nullable().default(null),
+  countryCode: z.string().nullable().default(null),
+  workMode: JobWorkModeSchema.default('unknown'),
+  seniority: JobSenioritySchema.default('unknown'),
+  experienceMinYears: z.number().nullable().default(null),
+  experienceMaxYears: z.number().nullable().default(null),
+  salaryMin: z.number().nullable().default(null),
+  salaryMax: z.number().nullable().default(null),
+  salaryCurrency: z.string().nullable().default(null),
+  salaryPeriod: z.string().nullable().default(null),
+  salaryMinLpa: z.number().nullable().default(null),
+  salaryMaxLpa: z.number().nullable().default(null),
+  descriptionClean: z.string().default(''),
+  extractedSkills: z.array(z.string()).default([]),
+  postedAt: z.string().nullable().default(null),
+  isActive: z.boolean().default(true),
+  lastSeenAt: z.string(),
+  embeddingModel: z.string().nullable().default(null),
+  embeddingModelVersion: z.string().nullable().default(null),
+  embeddedAt: z.string().nullable().default(null),
+  sightingsCount: z.number().int().min(1).default(1)
+});
+export type JobRecord = z.infer<typeof JobRecordSchema>;
+
+export const JobMatchSchema = z.object({
+  id: z.string().uuid().optional(),
+  jobId: z.string().uuid(),
+  profileVersion: z.number().int().min(1),
+  hardFilterPassed: z.boolean(),
+  hardFilterReasons: z.array(z.string()).default([]),
+  vectorSimilarity: z.number().min(-1).max(1).nullable().default(null),
+  llmScore: z.number().int().min(0).max(100).nullable().default(null),
+  matchReason: z.string().nullable().default(null),
+  matchedSkills: z.array(z.string()).default([]),
+  skillGaps: z.array(z.string()).default([]),
+  provider: LlmProviderIdSchema.nullable().default(null),
+  model: z.string().nullable().default(null),
+  dismissed: z.boolean().default(false),
+  computedAt: z.string()
+});
+export type JobMatch = z.infer<typeof JobMatchSchema>;
+
+export const JobFeedItemSchema = z.object({
+  job: JobRecordSchema,
+  match: JobMatchSchema.nullable(),
+  applicationStatus: z.string().nullable().default(null)
+});
+export type JobFeedItem = z.infer<typeof JobFeedItemSchema>;
+
+export const JobFeedQuerySchema = z.object({
+  q: z.string().optional(),
+  country: z.string().optional(),
+  city: z.string().optional(),
+  workMode: JobWorkModeSchema.optional(),
+  seniority: JobSenioritySchema.optional(),
+  minSalaryLpa: z.coerce.number().min(0).optional(),
+  maxExperienceYears: z.coerce.number().min(0).optional(),
+  source: JobSourceTypeSchema.optional(),
+  onlyPassed: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .transform((v) => (typeof v === 'string' ? v === 'true' : v))
+    .optional(),
+  includeDismissed: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .transform((v) => (typeof v === 'string' ? v === 'true' : v))
+    .optional(),
+  sortBy: z.enum(['match_score', 'recent', 'salary_lpa']).default('match_score'),
+  limit: z.coerce.number().int().min(1).max(100).default(40),
+  offset: z.coerce.number().int().min(0).default(0)
+});
+export type JobFeedQuery = z.infer<typeof JobFeedQuerySchema>;
+
+export const LlmMatchRerankItemSchema = z.object({
+  jobId: z.string().min(1),
+  score: z.number().int().min(0).max(100),
+  oneLineReason: z.string().min(1).max(260),
+  matchedSkills: z.array(z.string()).default([]),
+  skillGaps: z.array(z.string()).default([])
+});
+
+export const LlmMatchRerankOutputSchema = z.object({
+  results: z.array(LlmMatchRerankItemSchema)
+});
+export type LlmMatchRerankOutput = z.infer<typeof LlmMatchRerankOutputSchema>;
+
+export const SeedBoardSchema = z.object({
+  sourceType: z.enum(['greenhouse', 'lever', 'ashby', 'workable']),
+  slug: z.string().min(1),
+  displayName: z.string().min(1),
+  regionFocus: z.enum(['india', 'global', 'hybrid']),
+  enabled: z.boolean().default(true)
+});
+export type SeedBoard = z.infer<typeof SeedBoardSchema>;
+
+export const JobSourceStatusSchema = z.object({
+  id: z.string(),
+  sourceType: z.string(),
+  slug: z.string(),
+  displayName: z.string(),
+  regionFocus: z.string(),
+  enabled: z.boolean(),
+  lastCrawledAt: z.string().nullable(),
+  lastStatus: z.string().nullable(),
+  consecutiveFailures: z.number().int()
+});
+export type JobSourceStatus = z.infer<typeof JobSourceStatusSchema>;
+
+export const CrawlRunSummarySchema = z.object({
+  id: z.string(),
+  jobName: z.string(),
+  startedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  status: z.string(),
+  stats: z.record(z.unknown())
+});
+export type CrawlRunSummary = z.infer<typeof CrawlRunSummarySchema>;
+
+export const RefreshMatchesRequestSchema = z.object({
+  topKVector: z.number().int().min(5).max(100).default(30),
+  topKLlm: z.number().int().min(0).max(30).default(15),
+  forceRecompute: z.boolean().default(false)
+});
+export type RefreshMatchesRequest = z.infer<typeof RefreshMatchesRequestSchema>;

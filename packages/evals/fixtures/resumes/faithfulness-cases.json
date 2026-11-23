@@ -1,0 +1,119 @@
+{
+  "masterProfile": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "fullName": "Siddharth Rao",
+    "email": "siddharth@iitb.ac.in",
+    "activeProfileVersion": 1,
+    "jsonResume": {
+      "basics": {
+        "name": "Siddharth Rao",
+        "label": "Software Engineer",
+        "email": "siddharth@iitb.ac.in",
+        "summary": "Backend engineer focused on TypeScript, Node.js, and PostgreSQL."
+      },
+      "work": [
+        {
+          "id": "work-1",
+          "name": "Razorpay",
+          "position": "Backend Intern",
+          "startDate": "2025-05",
+          "endDate": "2025-07",
+          "highlights": [
+            "Built TypeScript webhook retry worker handling 15k events/hour.",
+            "Optimized PostgreSQL settlement queries reducing p95 latency by 42%."
+          ]
+        }
+      ],
+      "projects": [
+        {
+          "id": "proj-1",
+          "name": "LedgerLite",
+          "description": "Double-entry ledger service",
+          "keywords": ["TypeScript", "Node.js", "PostgreSQL", "Redis", "Docker"],
+          "highlights": ["Processed 2k concurrent transactions/sec in load tests using Redis locks."]
+        }
+      ],
+      "education": [
+        {
+          "id": "edu-1",
+          "institution": "IIT Bombay",
+          "studyType": "B.Tech",
+          "area": "Computer Science",
+          "startDate": "2022",
+          "endDate": "2026",
+          "score": "8.92"
+        }
+      ],
+      "skills": [
+        { "name": "Languages", "level": "", "keywords": ["TypeScript", "Python", "SQL"] },
+        { "name": "Backend", "level": "", "keywords": ["Node.js", "Fastify", "PostgreSQL", "Redis", "Docker"] }
+      ]
+    },
+    "indiaProfile": {
+      "collegeName": "IIT Bombay",
+      "degree": "B.Tech",
+      "branch": "Computer Science",
+      "cgpa": 8.92,
+      "cgpaScale": 10
+    }
+  },
+  "stories": [
+    {
+      "id": "story-1",
+      "userId": "11111111-1111-4111-8111-111111111111",
+      "title": "Settlement Worker Optimization",
+      "category": "optimization",
+      "action": "Added composite B-tree index and batch inserts in Postgres.",
+      "result": "Cut batch job runtime from 12m to 4m (3x speedup).",
+      "metrics": [{ "label": "Speedup", "value": "3x", "unit": "" }],
+      "skillsUsed": ["PostgreSQL", "TypeScript"]
+    }
+  ],
+  "faithfulCases": [
+    {
+      "name": "faithful_rephrase_with_story_metric",
+      "patch": {
+        "summary": "Backend Software Engineer experienced in TypeScript, Node.js, Fastify, and PostgreSQL.",
+        "workHighlights": [
+          "Engineered idempotent webhook retry workers in TypeScript handling 15k events/hour.",
+          "Cut PostgreSQL settlement batch runtime 3x and reduced p95 query latency by 42%."
+        ],
+        "skills": ["PostgreSQL", "TypeScript", "Node.js", "Fastify", "Redis"]
+      }
+    },
+    {
+      "name": "faithful_reordered_skills_docker",
+      "patch": {
+        "summary": "CS undergrad building high-throughput Node.js and Dockerized PostgreSQL systems.",
+        "workHighlights": ["Reduced PostgreSQL p95 query latency by 42% during peak webhook load."],
+        "skills": ["Docker", "Redis", "PostgreSQL", "TypeScript"]
+      }
+    }
+  ],
+  "adversarialCases": [
+    {
+      "name": "invented_skill_kubernetes",
+      "mutation": { "addSkill": "Kubernetes" }
+    },
+    {
+      "name": "invented_skill_rust",
+      "mutation": { "addSkill": "Rust" }
+    },
+    {
+      "name": "altered_employer_name",
+      "mutation": { "overrideEmployer": "Stripe" }
+    },
+    {
+      "name": "altered_employment_dates",
+      "mutation": { "overrideWorkStartDate": "2023-01" }
+    },
+    {
+      "name": "altered_cgpa_score",
+      "mutation": { "overrideCgpa": "9.75" }
+    },
+    {
+      "name": "fabricated_metric_89_percent",
+      "mutation": { "overrideWorkHighlight": "Improved API throughput by 89% across 1M users." }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "jobpilot",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "npm@11.12.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:api": "npm run dev --workspace=@jobpilot/api",
+    "dev:web": "npm run dev --workspace=@jobpilot/web",
+    "build:packages": "npm run build --workspace=@jobpilot/shared && npm run build --workspace=@jobpilot/embeddings && npm run build --workspace=@jobpilot/llm && npm run build --workspace=@jobpilot/ingestion && npm run build --workspace=@jobpilot/tailoring && npm run build --workspace=@jobpilot/form-engine && npm run build --workspace=@jobpilot/evals",
+    "build": "npm run build:packages && npm run build --workspace=@jobpilot/api && npm run build --workspace=@jobpilot/web && npm run build --workspace=@jobpilot/extension",
+    "typecheck": "npm run build:packages && npm run typecheck --workspace=@jobpilot/shared && npm run typecheck --workspace=@jobpilot/embeddings && npm run typecheck --workspace=@jobpilot/llm && npm run typecheck --workspace=@jobpilot/ingestion && npm run typecheck --workspace=@jobpilot/tailoring && npm run typecheck --workspace=@jobpilot/form-engine && npm run typecheck --workspace=@jobpilot/evals && npm run typecheck --workspace=@jobpilot/api && npm run typecheck --workspace=@jobpilot/web && npm run typecheck --workspace=@jobpilot/extension",
+    "test": "npm run build:packages && npm run test --workspace=@jobpilot/shared && npm run test --workspace=@jobpilot/embeddings && npm run test --workspace=@jobpilot/llm && npm run test --workspace=@jobpilot/ingestion && npm run test --workspace=@jobpilot/tailoring && npm run test --workspace=@jobpilot/form-engine && npm run test --workspace=@jobpilot/evals && npm run test --workspace=@jobpilot/api",
+    "lint": "npm run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "turbo": "^2.9.6",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

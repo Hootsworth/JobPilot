@@ -1,0 +1,254 @@
+@import "tailwindcss";
+
+:root {
+  --font-opencode: "Berkeley Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  /* Light theme tokens from DESIGN.md (opencode.ai) */
+  --canvas-light: #fdfcfc;
+  --surface-soft-light: #f8f7f7;
+  --surface-card-light: #f1eeee;
+  --ink-light: #201d1d;
+  --ink-deep-light: #0f0000;
+  --charcoal-light: #302c2c;
+  --body-light: #424245;
+  --mute-light: #646262;
+  --stone-light: #6e6e73;
+  --ash-light: #9a9898;
+  --hairline-light: rgba(15, 0, 0, 0.12);
+  --hairline-strong-light: #646262;
+  --accent-text-light: #0056b3;
+  --danger-text-light: #b91c1c;
+  --danger-bg-light: #fef2f2;
+  --success-text-light: #15803d;
+  --success-bg-light: #f0fdf4;
+  --warning-text-light: #a16207;
+  --warning-bg-light: #fefce8;
+
+  /* Dark theme tokens derived directly from DESIGN.md surface-dark / on-dark ladder */
+  --canvas-dark: #201d1d;
+  --surface-soft-dark: #282424;
+  --surface-card-dark: #302c2c;
+  --ink-dark: #fdfcfc;
+  --ink-deep-dark: #ffffff;
+  --charcoal-dark: #e8e5e5;
+  --body-dark: #d4d0d0;
+  --mute-dark: #9a9898;
+  --stone-dark: #9a9898;
+  --ash-dark: #757373;
+  --hairline-dark: rgba(253, 252, 252, 0.14);
+  --hairline-strong-dark: #9a9898;
+  --accent-text-dark: #60a5fa;
+  --danger-text-dark: #ff6961;
+  --danger-bg-dark: rgba(255, 59, 48, 0.14);
+  --success-text-dark: #30d158;
+  --success-bg-dark: rgba(48, 209, 88, 0.14);
+  --warning-text-dark: #ff9f0a;
+  --warning-bg-dark: rgba(255, 159, 10, 0.14);
+
+  /* Active resolved tokens (default: light, overridden by system or meta[name="color-scheme"]) */
+  --canvas: var(--canvas-light);
+  --surface-soft: var(--surface-soft-light);
+  --surface-card: var(--surface-card-light);
+  --surface-dark: #201d1d;
+  --surface-dark-elevated: #302c2c;
+  --on-dark: #fdfcfc;
+  --on-dark-mute: #9a9898;
+
+  --ink: var(--ink-light);
+  --ink-deep: var(--ink-deep-light);
+  --on-primary: #fdfcfc;
+  --charcoal: var(--charcoal-light);
+  --body: var(--body-light);
+  --mute: var(--mute-light);
+  --stone: var(--stone-light);
+  --ash: var(--ash-light);
+  --hairline: var(--hairline-light);
+  --hairline-strong: var(--hairline-strong-light);
+
+  /* Apple HIG semantic ramp from DESIGN.md */
+  --accent: #007aff;
+  --accent-hover: #0056b3;
+  --accent-active: #004085;
+  --accent-text: var(--accent-text-light);
+  --warning: #ff9f0a;
+  --warning-text: var(--warning-text-light);
+  --warning-bg: var(--warning-bg-light);
+  --danger: #ff3b30;
+  --danger-hover: #d70015;
+  --danger-text: var(--danger-text-light);
+  --danger-bg: var(--danger-bg-light);
+  --success: #30d158;
+  --success-text: var(--success-text-light);
+  --success-bg: var(--success-bg-light);
+
+  --radius-none: 0px;
+  --radius-sm: 4px;
+  --radius-full: 9999px;
+
+  color-scheme: light dark;
+  accent-color: var(--accent);
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(:has(> head > meta[name="color-scheme"][content="light"])) {
+    --canvas: var(--canvas-dark);
+    --surface-soft: var(--surface-soft-dark);
+    --surface-card: var(--surface-card-dark);
+    --ink: var(--ink-dark);
+    --ink-deep: var(--ink-deep-dark);
+    --on-primary: #201d1d;
+    --charcoal: var(--charcoal-dark);
+    --body: var(--body-dark);
+    --mute: var(--mute-dark);
+    --stone: var(--stone-dark);
+    --ash: var(--ash-dark);
+    --hairline: var(--hairline-dark);
+    --hairline-strong: var(--hairline-strong-dark);
+    --accent-text: var(--accent-text-dark);
+    --warning-text: var(--warning-text-dark);
+    --warning-bg: var(--warning-bg-dark);
+    --danger-text: var(--danger-text-dark);
+    --danger-bg: var(--danger-bg-dark);
+    --success-text: var(--success-text-dark);
+    --success-bg: var(--success-bg-dark);
+  }
+}
+
+:root:has(> head > meta[name="color-scheme"][content="dark"]) {
+  color-scheme: dark;
+  --canvas: var(--canvas-dark);
+  --surface-soft: var(--surface-soft-dark);
+  --surface-card: var(--surface-card-dark);
+  --ink: var(--ink-dark);
+  --ink-deep: var(--ink-deep-dark);
+  --on-primary: #201d1d;
+  --charcoal: var(--charcoal-dark);
+  --body: var(--body-dark);
+  --mute: var(--mute-dark);
+  --stone: var(--stone-dark);
+  --ash: var(--ash-dark);
+  --hairline: var(--hairline-dark);
+  --hairline-strong: var(--hairline-strong-dark);
+  --accent-text: var(--accent-text-dark);
+  --warning-text: var(--warning-text-dark);
+  --warning-bg: var(--warning-bg-dark);
+  --danger-text: var(--danger-text-dark);
+  --danger-bg: var(--danger-bg-dark);
+  --success-text: var(--success-text-dark);
+  --success-bg: var(--success-bg-dark);
+}
+
+:root:has(> head > meta[name="color-scheme"][content="light"]) {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+  border-color: var(--hairline);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-opencode);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Force pure monospace everywhere per DESIGN.md */
+input,
+textarea,
+select,
+button,
+code,
+pre,
+kbd {
+  font-family: var(--font-opencode);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* OpenCode flat input focus + accessible keyboard focus ring */
+.oc-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  background-color: var(--surface-soft);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  font-size: max(1rem, 1em);
+  line-height: 1.5;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.oc-input:focus {
+  background-color: var(--canvas);
+  border-color: var(--ink);
+  outline: none;
+}
+
+.oc-input:focus-visible,
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Validate only after interaction via :user-invalid */
+.oc-input:user-invalid,
+.oc-input[aria-invalid="true"] {
+  border-color: var(--danger-text);
+  background-color: var(--danger-bg);
+}
+
+/* Native <dialog> scroll containment per modern-web-guidance */
+dialog:modal {
+  overscroll-behavior: contain;
+  background-color: var(--canvas);
+  color: var(--ink);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-none);
+  padding: 24px;
+  max-width: min(92vw, 480px);
+  margin: auto;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background-color: rgba(15, 0, 0, 0.52);
+}
+
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
