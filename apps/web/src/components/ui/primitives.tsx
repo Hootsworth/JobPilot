@@ -81,7 +81,7 @@ export function Button({
   ...rest
 }: ButtonProps) {
   const base =
-    'inline-flex items-center justify-center gap-2 font-medium rounded-[4px] border transition-colors cursor-pointer disabled:cursor-not-allowed disabled:bg-[var(--surface-card)] disabled:text-[var(--ash)] disabled:border-[var(--hairline)]';
+    'inline-flex items-center justify-center gap-2 font-medium rounded-[4px] border transition-colors cursor-pointer active:translate-y-[1px] disabled:cursor-not-allowed disabled:bg-[var(--surface-card)] disabled:text-[var(--ash)] disabled:border-[var(--hairline)]';
 
   const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
     primary:
@@ -362,7 +362,7 @@ export function AlertBanner({
     <div
       role={tone === 'error' ? 'alert' : 'status'}
       className={cn(
-        'flex flex-wrap items-start justify-between gap-3 border px-4 py-3 text-sm rounded-[4px]',
+        'mo-pop flex flex-wrap items-start justify-between gap-3 border px-4 py-3 text-sm rounded-[4px]',
         styles[tone].box
       )}
     >
@@ -382,7 +382,7 @@ export function SkeletonBlock({ className }: { className?: string }) {
   return (
     <div
       aria-hidden="true"
-      className={cn('animate-pulse bg-[var(--surface-card)] rounded-none', className)}
+      className={cn('mo-skel rounded-none', className)}
     />
   );
 }

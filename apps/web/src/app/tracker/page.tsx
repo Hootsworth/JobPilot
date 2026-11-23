@@ -9,6 +9,7 @@ import type {
   ResumeVersionRecord
 } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
+import { MoCount, MoDecode, moToast } from '@/components/ui/mo';
 import {
   AlertBanner,
   Badge,
@@ -269,6 +270,7 @@ export default function TrackerPage() {
       setNewSalaryOffered('');
       setNewNotes('');
       setNotice(`[+] Application logged: ${created.job.companyName} — ${created.job.title}`);
+      moToast(`[ok] Logged ${created.job.companyName}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create application.');
     } finally {
@@ -297,6 +299,7 @@ export default function TrackerPage() {
       const detail = await api.getApplicationDetail(updated.id);
       setEvents(detail.events);
       setNotice(`[+] Updated ${updated.job.companyName} (${updated.status.toUpperCase()})`);
+      moToast(`[ok] Saved ${updated.job.companyName} (${updated.status.toUpperCase()})`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update application.');
     } finally {
@@ -412,7 +415,9 @@ export default function TrackerPage() {
           }`}
         >
           <div className="text-[11px] uppercase tracking-wider opacity-80">[*] ALL</div>
-          <div className="text-xl font-bold tabular-nums mt-0.5">{countsByStatus['all'] ?? 0}</div>
+          <div className="text-xl font-bold tabular-nums mt-0.5">
+            <MoCount to={countsByStatus['all'] ?? 0} />
+          </div>
         </button>
         {STATUS_OPTIONS.map((opt) => {
           const active = statusFilter === opt.value;
@@ -433,7 +438,7 @@ export default function TrackerPage() {
                 {opt.marker} {opt.label}
               </div>
               <div className="text-xl font-bold tabular-nums mt-0.5">
-                {countsByStatus[opt.value] ?? 0}
+                <MoCount to={countsByStatus[opt.value] ?? 0} />
               </div>
             </button>
           );
@@ -650,7 +655,9 @@ export default function TrackerPage() {
                         {app.job.title}
                       </h2>
                     </div>
-                    <Badge tone={statusTone(app.status)}>{app.status.toUpperCase()}</Badge>
+                    <Badge tone={statusTone(app.status)}>
+                      <MoDecode text={app.status.toUpperCase()} frames={5} />
+                    </Badge>
                   </div>
 
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs">

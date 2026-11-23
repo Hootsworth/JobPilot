@@ -122,14 +122,10 @@ function sanitizeForGemini(node: unknown): JsonRecord | undefined {
     }
     if (Object.keys(cleanProps).length > 0) {
       out['properties'] = cleanProps;
-      if (Array.isArray(node['required'])) {
-        const filteredReq = node['required'].filter(
-          (r): r is string => typeof r === 'string' && r in cleanProps
-        );
-        if (filteredReq.length > 0) {
-          out['required'] = filteredReq;
-        }
-      }
+      // Enforce all object properties in `required` for Gemini responseSchema so
+      // fields with Zod `.default([])` (such as selectedWork, selectedProjects, education, skills)
+      // are never skipped by constrained decoding.
+      out['required'] = Object.keys(cleanProps);
     } else if (out['type'] === 'OBJECT') {
       // Gemini rejects OBJECT schemas without properties unless omitted or string-encoded
       out['type'] = 'OBJECT';

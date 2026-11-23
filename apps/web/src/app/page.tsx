@@ -4,6 +4,15 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ThemeQuickToggle } from '@/components/theme-toggle';
 import {
+  MoBar,
+  MoCount,
+  MoDecode,
+  MoSpinner,
+  MoTicker,
+  MoTypeLoop,
+  moBurst
+} from '@/components/ui/mo';
+import {
   AsciiWordmark,
   Badge,
   Button,
@@ -34,7 +43,7 @@ const CAPABILITIES = [
     code: '[04]',
     title: 'Grounded Tailoring & Dual Verifier',
     description:
-      'Selects and rephrases bullets strictly from your Master Profile. A deterministic + LLM verifier audits every claim and blocks unsupported metrics before compiling single-column ATS PDFs.'
+      'Retains your Work Experience and Projects, reorders and rephrases bullets strictly from your Master Profile, and runs a dual deterministic + LLM verifier before compiling ATS PDFs.'
   },
   {
     code: '[05]',
@@ -50,8 +59,20 @@ const CAPABILITIES = [
   }
 ];
 
+const TICKER_ITEMS = [
+  '[+] 0% HALLUCINATED CLAIMS',
+  '[+] LOCAL BGE-SMALL 384D VECTORS',
+  '[+] AES-256-GCM ENCRYPTED BYOK',
+  '[+] GREENHOUSE · LEVER · ASHBY · WORKDAY',
+  '[+] NAUKRI · INTERNSHALA · LINKEDIN · FOUNDIT · INSTAHYRE · WELLFOUND',
+  '[+] OPENAI · GOOGLE GEMINI · META LLAMA API',
+  '[+] TYPST & ATS-SAFE SINGLE-COLUMN PDF'
+];
+
 export default function LandingPage() {
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+  const [replayKey, setReplayKey] = useState(0);
+  const [pipelineStep, setPipelineStep] = useState(4);
 
   useEffect(() => {
     const supabase = getSupabaseClient();
@@ -60,6 +81,18 @@ export default function LandingPage() {
       setSignedInEmail(data.session?.user?.email ?? null);
     });
   }, []);
+
+  useEffect(() => {
+    setPipelineStep(1);
+    const t1 = setTimeout(() => setPipelineStep(2), 420);
+    const t2 = setTimeout(() => setPipelineStep(3), 860);
+    const t3 = setTimeout(() => setPipelineStep(4), 1300);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [replayKey]);
 
   return (
     <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex flex-col">
@@ -70,7 +103,10 @@ export default function LandingPage() {
             <Link href="/" className="no-underline">
               <AsciiWordmark />
             </Link>
-            <nav aria-label="Landing sections" className="hidden md:flex items-center gap-5 text-xs text-[var(--mute)]">
+            <nav
+              aria-label="Landing sections"
+              className="hidden md:flex items-center gap-5 text-xs text-[var(--mute)]"
+            >
               <a href="#workflow" className="no-underline hover:text-[var(--ink)]">
                 Workflow
               </a>
@@ -86,13 +122,11 @@ export default function LandingPage() {
           <div className="flex items-center gap-2.5">
             <ThemeQuickToggle />
             {signedInEmail ? (
-              <>
-                <Link href="/jobs">
-                  <Button variant="primary" size="sm">
-                    Open Workspace -&gt;
-                  </Button>
-                </Link>
-              </>
+              <Link href="/jobs">
+                <Button variant="primary" size="sm">
+                  Open Workspace -&gt;
+                </Button>
+              </Link>
             ) : (
               <>
                 <Link href="/login?mode=signin">
@@ -111,19 +145,35 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-[1200px] w-full mx-auto px-4 sm:px-8 py-12 sm:py-20 space-y-20">
+      {/* Stepped Terminal Ticker from mo-gallery.html */}
+      <MoTicker items={TICKER_ITEMS} />
+
+      <main className="flex-1 max-w-[1200px] w-full mx-auto px-4 sm:px-8 py-12 sm:py-16 space-y-20">
         {/* Hero Section */}
         <section className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
           <div className="lg:col-span-7 space-y-6">
             <div className="inline-flex items-center gap-2.5 px-3 py-1.5 border border-[var(--hairline)] bg-[var(--surface-soft)]">
+              <span className="mo-ping" aria-hidden="true" />
               <JobPilotLogo size={18} />
-              <span className="text-xs font-bold tracking-wider uppercase text-[var(--ink)]">
-                JOBPILOT // INDIA &amp; GLOBAL AI JOB ASSISTANT
-              </span>
+              <MoDecode
+                key={`badge-${replayKey}`}
+                text="JOBPILOT // INDIA & GLOBAL AI JOB ASSISTANT"
+                className="text-xs font-bold tracking-wider uppercase text-[var(--ink)]"
+              />
             </div>
 
             <h1 className="text-3xl sm:text-[40px] font-bold leading-[1.3] tracking-tight text-[var(--ink)]">
-              Tailor grounded ATS resumes, autofill applications, and never hallucinate a metric.
+              Ship applications with{' '}
+              <span className="underline decoration-[var(--hairline-strong)] underline-offset-8">
+                <MoTypeLoop
+                  words={[
+                    'grounded ATS resumes.',
+                    'India CTC & CGPA autofill.',
+                    'zero hallucinated metrics.',
+                    'confidence-gated MV3 fill.'
+                  ]}
+                />
+              </span>
             </h1>
 
             <p className="text-sm sm:text-base text-[var(--body)] leading-[1.65] max-w-2xl">
@@ -137,7 +187,9 @@ export default function LandingPage() {
               {signedInEmail ? (
                 <>
                   <Link href="/jobs">
-                    <Button variant="primary">Go to Job Feed -&gt;</Button>
+                    <Button variant="primary" className="mo-arrow">
+                      Go to Job Feed
+                    </Button>
                   </Link>
                   <Link href="/tailor">
                     <Button variant="secondary">Tailor Resume &amp; PDF</Button>
@@ -152,7 +204,9 @@ export default function LandingPage() {
               ) : (
                 <>
                   <Link href="/login?mode=signup">
-                    <Button variant="primary">Create Free Account -&gt;</Button>
+                    <Button variant="primary" className="mo-arrow">
+                      Create Free Account
+                    </Button>
                   </Link>
                   <Link href="/login?mode=signin">
                     <Button variant="secondary">Log in to Workspace</Button>
@@ -168,7 +222,7 @@ export default function LandingPage() {
             </div>
           </div>
 
-          {/* Terminal Brand & Live Pipeline Card */}
+          {/* Interactive Terminal Pipeline Card with mo-gallery replay + MoBar + MoDecode */}
           <div
             id="workflow"
             className="lg:col-span-5 bg-[var(--surface-dark)] text-[var(--on-dark)] border border-[var(--hairline-strong)] p-6 space-y-5"
@@ -185,44 +239,82 @@ export default function LandingPage() {
                   </p>
                 </div>
               </div>
-              <Badge tone="dark">v0.1.0</Badge>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    setReplayKey((k) => k + 1);
+                    moBurst(e.currentTarget, 12);
+                  }}
+                  className="px-2 py-1 text-[11px] border border-white/25 text-white hover:bg-white/10 rounded-[4px] cursor-pointer"
+                >
+                  [replay]
+                </button>
+                <Badge tone="dark">v0.1.0</Badge>
+              </div>
             </div>
 
-            <div className="space-y-3 text-xs font-mono">
-              <div className="p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
+            <div key={replayKey} className="space-y-3 text-xs font-mono">
+              <div className="mo-pop p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
                 <div className="flex items-center justify-between">
                   <span className="text-[#60a5fa] font-bold">&gt; 01. parse resume.pdf</span>
-                  <span className="text-[#30d158]">[OK]</span>
+                  <span className="text-[#30d158]">
+                    {pipelineStep >= 1 ? <MoDecode text="[OK]" frames={6} /> : <MoSpinner />}
+                  </span>
                 </div>
                 <p className="text-[var(--on-dark-mute)]">
                   Extracted Education, Projects, Work, Skills + CGPA &amp; LPA expectations
                 </p>
               </div>
 
-              <div className="p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
+              <div
+                className="mo-pop p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1.5"
+                style={{ animationDelay: '90ms' }}
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-[#60a5fa] font-bold">&gt; 02. match --stages=3</span>
-                  <span className="text-[#30d158]">[94/100]</span>
+                  <span className="text-[#30d158]">
+                    [<MoCount to={pipelineStep >= 2 ? 94 : 0} ms={700} />
+                    /100]
+                  </span>
                 </div>
-                <p className="text-[var(--on-dark-mute)]">
-                  Hard India filters -&gt; bge-small pgvector -&gt; LLM re-rank &amp; skill gaps
-                </p>
+                <div className="text-[11px] text-[#30d158]">
+                  <MoBar value={pipelineStep >= 2 ? 94 : 15} width={18} />
+                </div>
               </div>
 
-              <div className="p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
+              <div
+                className="mo-pop p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1"
+                style={{ animationDelay: '180ms' }}
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-[#60a5fa] font-bold">&gt; 03. tailor --verify</span>
-                  <span className="text-[#30d158]">[0 UNSUPPORTED]</span>
+                  <span className="text-[#30d158]">
+                    {pipelineStep >= 3 ? (
+                      <MoDecode text="[0 UNSUPPORTED]" frames={8} />
+                    ) : (
+                      <MoSpinner name="braille" />
+                    )}
+                  </span>
                 </div>
                 <p className="text-[var(--on-dark-mute)]">
-                  Dual faithfulness audit passed -&gt; compiled single-column ATS PDF
+                  Retained all Work &amp; Projects -&gt; compiled single-column ATS PDF
                 </p>
               </div>
 
-              <div className="p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
+              <div
+                className="mo-pop p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1"
+                style={{ animationDelay: '270ms' }}
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-[#60a5fa] font-bold">&gt; 04. autofill --review</span>
-                  <span className="text-[#ff9f0a]">[PAUSED FOR USER]</span>
+                  <span className="text-[#ff9f0a]">
+                    {pipelineStep >= 4 ? (
+                      <MoDecode text="[PAUSED FOR USER]" frames={8} />
+                    ) : (
+                      <MoSpinner name="bounce" />
+                    )}
+                  </span>
                 </div>
                 <p className="text-[var(--on-dark-mute)]">
                   Greenhouse / Lever / Ashby / Workday / Naukri — awaiting your click
@@ -232,7 +324,7 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* Core Capabilities Grid */}
+        {/* Core Capabilities Grid with mo-pop stagger */}
         <section id="features" className="space-y-6 border-t border-[var(--hairline)] pt-14">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div className="space-y-1">
@@ -245,18 +337,19 @@ export default function LandingPage() {
             </div>
             {!signedInEmail ? (
               <Link href="/login?mode=signup">
-                <Button variant="secondary" size="sm">
-                  Get Started Free -&gt;
+                <Button variant="secondary" size="sm" className="mo-arrow">
+                  Get Started Free
                 </Button>
               </Link>
             ) : null}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 border border-[var(--hairline)] bg-[var(--surface-card)]">
-            {CAPABILITIES.map((item) => (
+            {CAPABILITIES.map((item, idx) => (
               <div
                 key={item.code}
-                className="p-6 border-b border-r border-[var(--hairline)] space-y-2.5 bg-[var(--canvas)] hover:bg-[var(--surface-soft)] transition-colors"
+                style={{ animationDelay: `${idx * 65}ms` }}
+                className="mo-pop p-6 border-b border-r border-[var(--hairline)] space-y-2.5 bg-[var(--canvas)] hover:bg-[var(--surface-soft)] transition-colors"
               >
                 <div className="text-xs font-bold text-[var(--accent-text)]">{item.code}</div>
                 <h3 className="text-base font-bold text-[var(--ink)]">{item.title}</h3>
@@ -267,16 +360,23 @@ export default function LandingPage() {
         </section>
 
         {/* Supported Platforms & Providers Strip */}
-        <section id="platforms" className="grid grid-cols-1 lg:grid-cols-2 gap-6 border-t border-[var(--hairline)] pt-14">
+        <section
+          id="platforms"
+          className="grid grid-cols-1 lg:grid-cols-2 gap-6 border-t border-[var(--hairline)] pt-14"
+        >
           <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-6 space-y-3">
             <p className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]">
               [+] Official Feeds &amp; ATS Form Autofill
             </p>
             <p className="text-xs text-[var(--body)] leading-relaxed">
-              Server-side discovery crawls official public JSON endpoints only (**Greenhouse,
-              Lever, Ashby, Workable, Adzuna India, Jooble, Remotive, Arbeitnow, RemoteOK**).
-              Non-API portals (**Naukri, Internshala, LinkedIn, Foundit, Instahyre, Wellfound**)
-              are never scraped server-side—they run strictly opt-in inside your logged-in Chrome
+              Server-side discovery crawls official public JSON endpoints only (
+              <strong>
+                Greenhouse, Lever, Ashby, Workable, Adzuna India, Jooble, Remotive, Arbeitnow,
+                RemoteOK
+              </strong>
+              ). Non-API portals (
+              <strong>Naukri, Internshala, LinkedIn, Foundit, Instahyre, Wellfound</strong>) are
+              never scraped server-side—they run strictly opt-in inside your logged-in Chrome
               extension session.
             </p>
           </div>
@@ -286,10 +386,10 @@ export default function LandingPage() {
               [+] Provider-Agnostic AI (OpenAI · Gemini · Meta Llama)
             </p>
             <p className="text-xs text-[var(--body)] leading-relaxed">
-              Switch between **OpenAI**, **Google Gemini**, and **Meta Llama API**
-              (`https://api.llama.com/compat/v1/`) with zero code changes. Bring your own API key
-              in Settings, test live model lists with one click, and inspect token/latency/cost
-              telemetry for every call.
+              Switch between <strong>OpenAI</strong>, <strong>Google Gemini</strong>, and{' '}
+              <strong>Meta Llama API</strong> (<code>https://api.llama.com/compat/v1/</code>) with
+              zero code changes. Bring your own API key in Settings, test live model lists with one
+              click, and inspect token/latency/cost telemetry for every call.
             </p>
           </div>
         </section>
@@ -311,7 +411,9 @@ export default function LandingPage() {
           <div className="flex flex-wrap items-center gap-3">
             {signedInEmail ? (
               <Link href="/jobs">
-                <Button variant="primary">Open Job Feed -&gt;</Button>
+                <Button variant="primary" className="mo-arrow">
+                  Open Job Feed
+                </Button>
               </Link>
             ) : (
               <>
@@ -319,7 +421,9 @@ export default function LandingPage() {
                   <Button variant="secondary">Log in</Button>
                 </Link>
                 <Link href="/login?mode=signup">
-                  <Button variant="primary">Sign up -&gt;</Button>
+                  <Button variant="primary" className="mo-arrow">
+                    Sign up
+                  </Button>
                 </Link>
               </>
             )}

@@ -235,4 +235,59 @@ describe('@jobpilot/tailoring pipeline & typst escaping', () => {
     expect(result.diffSummary.skillsReordered).toBe(true);
     expect(result.pdfBuffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   });
+
+  it('retains master work experiences and projects when the LLM omits selectedWork or selectedProjects', async () => {
+    const profile = makeMasterProfile();
+    const generateStructured = vi.fn(async () => ({
+      data: {
+        summary: 'Backend engineer skilled in Node.js and PostgreSQL.',
+        selectedWork: [],
+        selectedProjects: [],
+        selectedEducation: [],
+        reorderedSkills: [],
+        tailoringRationale: 'Minimal response'
+      },
+      provider: 'gemini' as const,
+      model: 'gemini-live',
+      inputTokens: 50,
+      outputTokens: 20,
+      latencyMs: 30,
+      estimatedCostUsd: 0.0001,
+      retryCount: 0,
+      usedRepair: false
+    }));
+
+    const mockLlm = {
+      providerId: 'gemini',
+      generateStructured
+    } as unknown as LlmProvider;
+
+    const result = await tailorResumePipeline({
+      profile,
+      targetJob: {
+        title: 'Backend Engineer',
+        companyName: 'Razorpay',
+        description: 'Build reliable Node.js and PostgreSQL services.'
+      },
+      cachedJdRequirements: {
+        roleTitle: 'Backend Engineer',
+        companyName: 'Razorpay',
+        mustHaveSkills: ['Node.js', 'PostgreSQL'],
+        niceToHaveSkills: [],
+        keyResponsibilities: [],
+        keywords: ['PostgreSQL'],
+        senioritySignals: [],
+        domainTerms: []
+      },
+      llmProvider: mockLlm,
+      autoRepairFlagged: false
+    });
+
+    expect(result.tailoredJsonResume.work).toHaveLength(1);
+    expect(result.tailoredJsonResume.work[0]?.name).toBe('Acme Cloud');
+    expect(result.tailoredJsonResume.projects).toHaveLength(1);
+    expect(result.tailoredJsonResume.projects[0]?.name).toBe('DocSearch');
+    expect(result.typstSource).toContain('Acme Cloud');
+    expect(result.typstSource).toContain('DocSearch');
+  });
 });

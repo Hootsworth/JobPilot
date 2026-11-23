@@ -11,6 +11,7 @@ import type {
 } from '@jobpilot/shared';
 import type { z } from 'zod';
 import { AppShell } from '@/components/layout/app-shell';
+import { MoDecode, MoScan, MoSpinner, moToast } from '@/components/ui/mo';
 import {
   AlertBanner,
   Badge,
@@ -273,11 +274,11 @@ function TailorStudioInner() {
       setSelectedVersionId(created.id);
       setLabelOverride('');
       setActiveTab(created.verifierPassed ? 'diff' : 'verifier');
-      setStatusMsg(
-        created.verifierPassed
-          ? `Created verified resume v${created.versionNumber} (${created.label}) via ${created.pdfEngine}.`
-          : `Created resume v${created.versionNumber} with ${created.verifierReport.unsupportedClaimCount} flagged claim(s) — inspect Verifier Audit.`
-      );
+      const msg = created.verifierPassed
+        ? `Created verified resume v${created.versionNumber} (${created.label}) via ${created.pdfEngine}.`
+        : `Created resume v${created.versionNumber} with ${created.verifierReport.unsupportedClaimCount} flagged claim(s) — inspect Verifier Audit.`;
+      setStatusMsg(msg);
+      moToast(`[ok] v${created.versionNumber} tailored & verified`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Resume tailoring failed.');
     } finally {
@@ -575,7 +576,15 @@ function TailorStudioInner() {
                 </label>
 
                 <Button type="submit" variant="primary" className="w-full" disabled={tailoring}>
-                  {tailoring ? 'Tailoring, Verifying & Rendering PDF...' : '[+] Tailor & Verify Resume'}
+                  {tailoring ? (
+                    <span className="inline-flex items-center gap-2">
+                      <MoSpinner name="braille" />
+                      <span>Tailoring &amp; Verifying</span>
+                      <MoScan width={12} />
+                    </span>
+                  ) : (
+                    '[+] Tailor & Verify Resume'
+                  )}
                 </Button>
               </form>
             </SectionBlock>
@@ -608,7 +617,10 @@ function TailorStudioInner() {
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-xs font-bold tabular-nums">v{ver.versionNumber}</span>
                             <Badge tone={ver.verifierPassed ? 'success' : 'danger'}>
-                              {ver.verifierPassed ? 'VERIFIED' : 'FLAGGED'}
+                              <MoDecode
+                                text={ver.verifierPassed ? 'VERIFIED' : 'FLAGGED'}
+                                frames={6}
+                              />
                             </Badge>
                           </div>
                           <p className="text-xs font-medium mt-1 truncate">{ver.label}</p>
