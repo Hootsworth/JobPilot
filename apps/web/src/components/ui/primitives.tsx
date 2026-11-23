@@ -181,7 +181,7 @@ export const Textarea = React.forwardRef<
   return (
     <textarea
       ref={ref}
-      className={cn('oc-input min-h-[96px] py-3 resize-y', className)}
+      className={cn('oc-input min-h-[96px] py-3 resize-none', className)}
       {...props}
     />
   );

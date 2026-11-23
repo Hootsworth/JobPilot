@@ -79,12 +79,18 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
 
   const allowedOrigins = config.corsOrigin
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/\/+$/, ''))
     .filter(Boolean);
 
   await app.register(cors, {
     origin: (origin, cb) => {
-      if (!origin || origin.startsWith('chrome-extension://') || allowedOrigins.includes(origin)) {
+      const normalizedOrigin = origin?.replace(/\/+$/, '');
+      if (
+        !normalizedOrigin ||
+        normalizedOrigin.startsWith('chrome-extension://') ||
+        allowedOrigins.includes('*') ||
+        allowedOrigins.includes(normalizedOrigin)
+      ) {
         cb(null, true);
         return;
       }

@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type {
   LlmProviderId,
@@ -18,7 +19,6 @@ import {
   ConfirmDialog,
   Field,
   Input,
-  SectionBlock,
   Select,
   SkeletonBlock
 } from '@/components/ui/primitives';
@@ -27,28 +27,47 @@ import { getSupabaseClient } from '@/lib/supabase';
 
 const PROVIDER_META: Record<
   LlmProviderId,
-  { name: string; docsNote: string; defaultEndpoint: string }
+  {
+    shortName: string;
+    name: string;
+    tagline: string;
+    docsNote: string;
+    defaultEndpoint: string;
+    suggestedModelPlaceholder: string;
+  }
 > = {
-  openai: {
-    name: 'OpenAI (Official SDK)',
-    docsNote: 'Uses official openai SDK with strict json_schema structured outputs.',
-    defaultEndpoint: 'https://api.openai.com/v1'
-  },
   gemini: {
-    name: 'Google Gemini (Official SDK)',
-    docsNote: 'Uses @google/genai with responseMimeType application/json and responseSchema.',
-    defaultEndpoint: 'https://generativelanguage.googleapis.com'
+    shortName: 'Google Gemini',
+    name: 'Google Gemini (@google/genai)',
+    tagline: 'Structured responseSchema + fast Flash/Pro inference',
+    docsNote: 'Uses official @google/genai SDK with responseMimeType application/json and responseSchema.',
+    defaultEndpoint: 'https://generativelanguage.googleapis.com',
+    suggestedModelPlaceholder: 'e.g. gemini-2.5-flash'
+  },
+  openai: {
+    shortName: 'OpenAI',
+    name: 'OpenAI (Official SDK)',
+    tagline: 'Strict json_schema structured outputs',
+    docsNote: 'Uses official openai SDK with strict json_schema validation and automatic repair.',
+    defaultEndpoint: 'https://api.openai.com/v1',
+    suggestedModelPlaceholder: 'e.g. gpt-4o-mini'
   },
   meta: {
+    shortName: 'Meta Llama API',
     name: 'Meta Llama API (OpenAI Compat)',
+    tagline: 'OpenAI-compatible /compat/v1/ wire with live capability probing',
     docsNote:
-      'Uses OpenAI SDK pointed at META_BASE_URL (/compat/v1/, NOT native /v1) with runtime capability detection.',
-    defaultEndpoint: 'https://api.llama.com/compat/v1/'
+      'Connects via OpenAI SDK pointed at META_BASE_URL (/compat/v1/) with runtime capability detection.',
+    defaultEndpoint: 'https://api.llama.com/compat/v1/',
+    suggestedModelPlaceholder: 'e.g. Llama-4-Maverick-17B-128E-Instruct-FP8'
   }
 };
 
+const PROVIDER_ORDER: LlmProviderId[] = ['gemini', 'openai', 'meta'];
+
 interface CardDraftState {
   apiKey: string;
+  showKey: boolean;
   selectedModel: string;
   baseUrlOverride: string;
   models: ModelInfo[];
@@ -62,6 +81,7 @@ interface CardDraftState {
 
 const INITIAL_DRAFT: CardDraftState = {
   apiKey: '',
+  showKey: false,
   selectedModel: '',
   baseUrlOverride: '',
   models: [],
@@ -78,6 +98,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<LlmSettingsItem[]>([]);
   const [defaultEnvProvider, setDefaultEnvProvider] = useState<LlmProviderId>('gemini');
+  const [focusedProvider, setFocusedProvider] = useState<LlmProviderId>('gemini');
   const [drafts, setDrafts] = useState<Record<LlmProviderId, CardDraftState>>({
     openai: { ...INITIAL_DRAFT },
     gemini: { ...INITIAL_DRAFT },
@@ -86,6 +107,7 @@ export default function SettingsPage() {
   const [profile, setProfile] = useState<MasterProfile | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
+  const [copiedExt, setCopiedExt] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   const loadAll = async () => {
@@ -95,6 +117,10 @@ export default function SettingsPage() {
       setItems(llmRes.items);
       setDefaultEnvProvider(llmRes.defaultEnvProvider);
       setProfile(prof);
+      const activeItem = llmRes.items.find((i) => i.isActive);
+      if (activeItem) {
+        setFocusedProvider(activeItem.provider);
+      }
       setDrafts((prev) => {
         const next = { ...prev };
         for (const item of llmRes.items) {
@@ -129,6 +155,16 @@ export default function SettingsPage() {
     setItems(res.items);
   };
 
+  const activeItem = useMemo(
+    () => items.find((i) => i.isActive) ?? items.find((i) => i.provider === defaultEnvProvider) ?? items[0],
+    [items, defaultEnvProvider]
+  );
+
+  const currentItem = useMemo(
+    () => items.find((i) => i.provider === focusedProvider) ?? items[0],
+    [items, focusedProvider]
+  );
+
   const handleSaveProvider = async (provider: LlmProviderId, activate: boolean = false) => {
     const d = drafts[provider];
     updateDraft(provider, { saving: true, error: null, info: null });
@@ -142,8 +178,8 @@ export default function SettingsPage() {
       updateDraft(provider, {
         apiKey: '',
         info: activate
-          ? `Saved & activated ${PROVIDER_META[provider].name}.`
-          : 'Configuration saved.'
+          ? `Saved & set ${PROVIDER_META[provider].shortName} as your active AI engine.`
+          : `Saved ${PROVIDER_META[provider].shortName} configuration.`
       });
       await refreshItemsOnly();
     } catch (err) {
@@ -168,7 +204,7 @@ export default function SettingsPage() {
       updateDraft(provider, {
         models: res.models,
         selectedModel: d.selectedModel || firstId,
-        info: `Fetched ${res.models.length} live model(s) from ${provider}.`
+        info: `Loaded ${res.models.length} live model(s) from ${PROVIDER_META[provider].shortName}.`
       });
     } catch (err) {
       updateDraft(provider, {
@@ -219,7 +255,7 @@ export default function SettingsPage() {
     try {
       const updated = await api.updateProfile({ telemetryOptIn: checked });
       setProfile(updated);
-      setGlobalSuccess(`Telemetry opt-in ${checked ? 'enabled' : 'disabled'}.`);
+      setGlobalSuccess(`Diagnostic telemetry ${checked ? 'enabled' : 'disabled'}.`);
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : 'Failed to update privacy setting.');
     }
@@ -236,7 +272,7 @@ export default function SettingsPage() {
       a.download = `jobpilot-export-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      setGlobalSuccess('Exported account archive.');
+      setGlobalSuccess('Exported full account archive (.json).');
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : 'Export failed.');
     }
@@ -264,8 +300,10 @@ export default function SettingsPage() {
         email: session.user?.email ?? ''
       };
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setCopiedExt(true);
+      setTimeout(() => setCopiedExt(false), 3000);
       setGlobalSuccess(
-        'Copied Extension Session JSON to clipboard — paste inside the JobPilot Side Panel Connect tab.'
+        'Copied Extension Session JSON to clipboard — paste inside the JobPilot Chrome Side Panel.'
       );
     } catch (err) {
       setGlobalError(
@@ -280,272 +318,498 @@ export default function SettingsPage() {
       await api.deleteAccount();
       const supabase = getSupabaseClient();
       await supabase?.auth.signOut();
-      router.replace('/login');
+      router.replace('/');
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : 'Failed to delete account.');
     }
   };
 
+  const focusedMeta = PROVIDER_META[focusedProvider];
+  const focusedDraft = drafts[focusedProvider];
+
   return (
     <AppShell
-      title="AI Providers, Theme & Privacy"
-      subtitle={`Switch seamlessly between OpenAI, Gemini, and Meta Llama API (default server provider: ${defaultEnvProvider}). Models are always fetched live — never hardcoded.`}
+      title="Settings // AI Engine, Extension & Privacy"
+      subtitle="Configure your active LLM provider (BYOK encrypted AES-256-GCM), pair the Chrome MV3 extension, and manage your data."
+      actions={
+        <Link href="/usage">
+          <Button variant="secondary" size="sm">
+            View Token &amp; Cost Logs -&gt;
+          </Button>
+        </Link>
+      }
     >
       {globalError ? <AlertBanner tone="error" message={globalError} /> : null}
       {globalSuccess ? <AlertBanner tone="success" message={globalSuccess} /> : null}
 
       {loading ? (
-        <div className="space-y-4">
-          <SkeletonBlock className="h-44 w-full" />
-          <SkeletonBlock className="h-44 w-full" />
+        <div className="space-y-6">
+          <SkeletonBlock className="h-24 w-full" />
+          <SkeletonBlock className="h-80 w-full" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <SkeletonBlock className="h-56 w-full" />
+            <SkeletonBlock className="h-56 w-full" />
+          </div>
         </div>
       ) : (
         <div className="space-y-8">
-          <div className="space-y-5">
-            {items.map((item) => {
-              const meta = PROVIDER_META[item.provider];
-              const d = drafts[item.provider];
-              return (
-                <SectionBlock
-                  key={item.provider}
-                  title={meta.name}
-                  marker={item.isActive ? '[x]' : '[ ]'}
-                  description={meta.docsNote}
-                  action={
+          {/* 1. Active Engine Summary Bar */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 border border-[var(--hairline)] bg-[var(--surface-card)]">
+            <div className="p-4 border-b lg:border-b-0 border-r border-[var(--hairline)]">
+              <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                Active AI Provider
+              </div>
+              <div className="text-base font-bold text-[var(--ink)] mt-1">
+                {activeItem ? PROVIDER_META[activeItem.provider].shortName : defaultEnvProvider}
+              </div>
+            </div>
+
+            <div className="p-4 border-b lg:border-b-0 lg:border-r border-[var(--hairline)]">
+              <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                Selected Model
+              </div>
+              <div className="text-base font-bold text-[var(--ink)] truncate mt-1">
+                {activeItem?.selectedModel || 'Auto (Live Default)'}
+              </div>
+            </div>
+
+            <div className="p-4 border-r border-[var(--hairline)]">
+              <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                Credential Source
+              </div>
+              <div className="text-base font-bold text-[var(--ink)] mt-1">
+                {activeItem?.hasKey
+                  ? `BYOK (${activeItem.keyHint})`
+                  : activeItem?.usingEnvFallback
+                    ? 'Server Default Key'
+                    : 'No Key Configured'}
+              </div>
+            </div>
+
+            <div className="p-4">
+              <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                Key Storage &amp; Wire
+              </div>
+              <div className="text-base font-bold text-[var(--ink)] mt-1">
+                AES-256-GCM · RLS
+              </div>
+            </div>
+          </div>
+
+          {/* 2. AI Provider Console: 3-Column Selector + Focused Inspector */}
+          <section className="border border-[var(--hairline)] bg-[var(--canvas)]">
+            {/* Top 3-Column Provider Selector Tabs */}
+            <div
+              role="tablist"
+              aria-label="Select AI Provider to configure"
+              className="grid grid-cols-1 md:grid-cols-3 border-b border-[var(--hairline)] bg-[var(--surface-soft)]"
+            >
+              {PROVIDER_ORDER.map((provId) => {
+                const item = items.find((i) => i.provider === provId);
+                const meta = PROVIDER_META[provId];
+                const isFocused = focusedProvider === provId;
+                const isActive = item?.isActive ?? false;
+
+                return (
+                  <button
+                    key={provId}
+                    type="button"
+                    role="tab"
+                    aria-selected={isFocused}
+                    onClick={() => setFocusedProvider(provId)}
+                    className={`p-4 text-left border-b md:border-b-0 md:border-r last:border-r-0 border-[var(--hairline)] transition-colors cursor-pointer ${
+                      isFocused
+                        ? 'bg-[var(--canvas)] border-t-2 border-t-[var(--ink)]'
+                        : 'hover:bg-[var(--surface-card)] opacity-85'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-bold text-[var(--ink)]">
+                        {isFocused ? '> ' : ''}
+                        {meta.shortName}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {isActive ? <Badge tone="dark">ACTIVE</Badge> : null}
+                        {item?.hasKey ? (
+                          <Badge tone="success">BYOK {item.keyHint}</Badge>
+                        ) : item?.usingEnvFallback ? (
+                          <Badge tone="accent">ENV</Badge>
+                        ) : (
+                          <Badge tone="neutral">NO KEY</Badge>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-xs text-[var(--mute)] mt-1.5 truncate">
+                      {item?.selectedModel
+                        ? `Model: ${item.selectedModel}`
+                        : meta.tagline}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Focused Provider Inspector Body */}
+            {currentItem ? (
+              <div className="p-5 sm:p-6 space-y-6">
+                <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-[var(--hairline)]">
+                  <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      {item.isActive ? (
-                        <Badge tone="dark">ACTIVE PROVIDER</Badge>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => handleSaveProvider(item.provider, true)}
-                          disabled={d.saving}
-                        >
-                          Set Active
-                        </Button>
-                      )}
-                      {item.hasKey ? (
-                        <Badge tone="success">BYOK {item.keyHint}</Badge>
-                      ) : item.usingEnvFallback ? (
-                        <Badge tone="accent">ENV FALLBACK</Badge>
-                      ) : (
-                        <Badge tone="neutral">NO KEY</Badge>
-                      )}
+                      <h2 className="text-lg font-bold text-[var(--ink)]">{focusedMeta.name}</h2>
+                      {currentItem.isActive ? (
+                        <Badge tone="dark">[*] CURRENTLY ACTIVE</Badge>
+                      ) : null}
                     </div>
-                  }
-                >
-                  <div className="space-y-4">
-                    {d.error ? <AlertBanner tone="error" message={d.error} /> : null}
-                    {d.info ? <AlertBanner tone="success" message={d.info} /> : null}
-                    {d.testResult ? (
-                      <AlertBanner
-                        tone={d.testResult.ok ? 'success' : 'error'}
-                        title={
-                          d.testResult.ok
-                            ? `Verified (${d.testResult.modelTested ?? 'model'}) in ${d.testResult.latencyMs} ms`
-                            : 'Verification Failed'
-                        }
-                        message={
-                          d.testResult.detectedCapabilities
-                            ? `${d.testResult.message} · Detected mode: ${d.testResult.detectedCapabilities.structuredOutputMode}, token param: ${d.testResult.detectedCapabilities.tokenLimitParam}`
-                            : d.testResult.message
-                        }
-                      />
-                    ) : null}
+                    <p className="text-xs text-[var(--body)]">{focusedMeta.docsNote}</p>
+                  </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <Field
-                        label="BYOK API Key"
-                        htmlFor={`key-${item.provider}`}
-                        hint={
-                          item.hasKey
-                            ? `Stored encrypted (${item.keyHint}). Enter a new key only to replace it.`
-                            : 'Encrypted server-side with AES-256-GCM. Never logged.'
-                        }
-                      >
-                        {(props) => (
-                          <Input
-                            {...props}
-                            type="password"
-                            autoComplete="off"
-                            autoCorrect="off"
-                            autoCapitalize="none"
-                            spellCheck={false}
-                            value={d.apiKey}
-                            onChange={(e) =>
-                              updateDraft(item.provider, { apiKey: e.target.value })
-                            }
-                            placeholder={item.hasKey ? '•••••••••••• (leave blank to keep)' : 'Paste API key...'}
-                          />
-                        )}
-                      </Field>
-
-                      <Field
-                        label="Selected Model (Live list)"
-                        htmlFor={`model-${item.provider}`}
-                        hint="Click 'Fetch Live Models' to populate available IDs from the provider."
-                      >
-                        {(props) =>
-                          d.models.length > 0 ? (
-                            <Select
-                              {...props}
-                              value={d.selectedModel}
-                              onChange={(e) =>
-                                updateDraft(item.provider, { selectedModel: e.target.value })
-                              }
-                            >
-                              <option value="">-- Select live model --</option>
-                              {d.models.map((m) => (
-                                <option key={m.id} value={m.id}>
-                                  {m.displayName !== m.id ? `${m.displayName} (${m.id})` : m.id}
-                                </option>
-                              ))}
-                            </Select>
-                          ) : (
-                            <Input
-                              {...props}
-                              autoCorrect="off"
-                              autoCapitalize="none"
-                              spellCheck={false}
-                              value={d.selectedModel}
-                              onChange={(e) =>
-                                updateDraft(item.provider, { selectedModel: e.target.value })
-                              }
-                              placeholder="Click Fetch Live Models ->"
-                            />
-                          )
-                        }
-                      </Field>
-                    </div>
-
-                    {item.provider === 'meta' ? (
-                      <Field
-                        label="META_BASE_URL Override"
-                        htmlFor="meta-base-url"
-                        hint={`Defaults to ${meta.defaultEndpoint}. Must point to OpenAI-compatible /compat/v1/, not native /v1.`}
-                      >
-                        {(props) => (
-                          <Input
-                            {...props}
-                            type="url"
-                            autoCorrect="off"
-                            autoCapitalize="none"
-                            spellCheck={false}
-                            value={d.baseUrlOverride}
-                            onChange={(e) =>
-                              updateDraft('meta', { baseUrlOverride: e.target.value })
-                            }
-                            placeholder="https://api.llama.com/compat/v1/"
-                          />
-                        )}
-                      </Field>
-                    ) : null}
-
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!currentItem.isActive ? (
                       <Button
                         size="sm"
                         variant="primary"
-                        onClick={() => handleSaveProvider(item.provider, false)}
-                        disabled={d.saving}
+                        onClick={() => void handleSaveProvider(focusedProvider, true)}
+                        disabled={focusedDraft.saving}
                       >
-                        {d.saving ? 'Saving...' : 'Save Settings'}
+                        Set as Active Engine
                       </Button>
+                    ) : null}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void handleTestKey(focusedProvider)}
+                      disabled={focusedDraft.testing}
+                    >
+                      {focusedDraft.testing ? 'Testing Connection...' : 'Test Connection'}
+                    </Button>
+                  </div>
+                </div>
+
+                {focusedDraft.error ? (
+                  <AlertBanner tone="error" message={focusedDraft.error} />
+                ) : null}
+                {focusedDraft.info ? (
+                  <AlertBanner tone="success" message={focusedDraft.info} />
+                ) : null}
+                {focusedDraft.testResult ? (
+                  <AlertBanner
+                    tone={focusedDraft.testResult.ok ? 'success' : 'error'}
+                    title={
+                      focusedDraft.testResult.ok
+                        ? `Connection Verified (${focusedDraft.testResult.modelTested ?? 'default'}) · ${focusedDraft.testResult.latencyMs} ms`
+                        : 'Connection Test Failed'
+                    }
+                    message={
+                      focusedDraft.testResult.detectedCapabilities
+                        ? `${focusedDraft.testResult.message} · Mode: ${focusedDraft.testResult.detectedCapabilities.structuredOutputMode}`
+                        : focusedDraft.testResult.message
+                    }
+                  />
+                ) : null}
+
+                {/* 2-Column Credentials & Model Form */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Left: API Key */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label
+                        htmlFor={`key-${focusedProvider}`}
+                        className="text-sm font-medium text-[var(--ink)]"
+                      >
+                        BYOK API Key
+                      </label>
+                      <span className="text-xs text-[var(--mute)]">
+                        {currentItem.hasKey
+                          ? `Stored: ${currentItem.keyHint}`
+                          : currentItem.usingEnvFallback
+                            ? 'Using server env key'
+                            : 'No key stored'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[var(--mute)]">
+                      Encrypted server-side with AES-256-GCM before storage. Never logged or exposed.
+                    </p>
+                    <div className="flex gap-2">
+                      <Input
+                        id={`key-${focusedProvider}`}
+                        type={focusedDraft.showKey ? 'text' : 'password'}
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        value={focusedDraft.apiKey}
+                        onChange={(e) =>
+                          updateDraft(focusedProvider, { apiKey: e.target.value })
+                        }
+                        placeholder={
+                          currentItem.hasKey
+                            ? '•••••••••••• (leave blank to keep existing key)'
+                            : `Paste ${focusedMeta.shortName} API key...`
+                        }
+                      />
                       <Button
-                        size="sm"
+                        type="button"
                         variant="secondary"
-                        onClick={() => handleFetchModels(item.provider)}
-                        disabled={d.loadingModels}
-                      >
-                        {d.loadingModels ? 'Fetching...' : 'Fetch Live Models'}
-                      </Button>
-                      <Button
                         size="sm"
-                        variant="secondary"
-                        onClick={() => handleTestKey(item.provider)}
-                        disabled={d.testing}
+                        onClick={() =>
+                          updateDraft(focusedProvider, { showKey: !focusedDraft.showKey })
+                        }
                       >
-                        {d.testing ? 'Testing...' : 'Test Key'}
+                        {focusedDraft.showKey ? 'Hide' : 'Show'}
                       </Button>
-                      {item.hasKey ? (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleClearKey(item.provider)}
-                          disabled={d.saving}
-                        >
-                          Clear Stored Key
-                        </Button>
-                      ) : null}
-                      {item.lastTestedAt ? (
-                        <span className="text-xs text-[var(--mute)] ml-auto">
-                          Last tested: {new Date(item.lastTestedAt).toLocaleString()} (
-                          {item.lastTestStatus})
-                        </span>
-                      ) : null}
                     </div>
                   </div>
-                </SectionBlock>
-              );
-            })}
+
+                  {/* Right: Live Model Picker */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label
+                        htmlFor={`model-${focusedProvider}`}
+                        className="text-sm font-medium text-[var(--ink)]"
+                      >
+                        Model ID
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => void handleFetchModels(focusedProvider)}
+                        disabled={focusedDraft.loadingModels}
+                        className="text-xs font-bold text-[var(--accent-text)] hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        {focusedDraft.loadingModels
+                          ? '[Fetching live models...]'
+                          : focusedDraft.models.length > 0
+                            ? `[Refresh live list (${focusedDraft.models.length})]`
+                            : '[Fetch live models from API ->]'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-[var(--mute)]">
+                      Pick from the provider&apos;s live <code>/models</code> list or enter a model ID.
+                    </p>
+                    {focusedDraft.models.length > 0 ? (
+                      <Select
+                        id={`model-${focusedProvider}`}
+                        value={focusedDraft.selectedModel}
+                        onChange={(e) =>
+                          updateDraft(focusedProvider, { selectedModel: e.target.value })
+                        }
+                      >
+                        <option value="">-- Use provider default model --</option>
+                        {focusedDraft.models.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.displayName && m.displayName !== m.id
+                              ? `${m.displayName} (${m.id})`
+                              : m.id}
+                          </option>
+                        ))}
+                      </Select>
+                    ) : (
+                      <Input
+                        id={`model-${focusedProvider}`}
+                        autoCorrect="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        value={focusedDraft.selectedModel}
+                        onChange={(e) =>
+                          updateDraft(focusedProvider, { selectedModel: e.target.value })
+                        }
+                        placeholder={focusedMeta.suggestedModelPlaceholder}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* Meta Base URL Override */}
+                {focusedProvider === 'meta' ? (
+                  <div className="pt-2 border-t border-[var(--hairline)]">
+                    <Field
+                      label="META_BASE_URL Endpoint Override"
+                      htmlFor="meta-base-url"
+                      hint={`Defaults to ${focusedMeta.defaultEndpoint} (OpenAI-compatible wire).`}
+                    >
+                      {(props) => (
+                        <Input
+                          {...props}
+                          type="url"
+                          autoCorrect="off"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                          value={focusedDraft.baseUrlOverride}
+                          onChange={(e) =>
+                            updateDraft('meta', { baseUrlOverride: e.target.value })
+                          }
+                          placeholder="https://api.llama.com/compat/v1/"
+                        />
+                      )}
+                    </Field>
+                  </div>
+                ) : null}
+
+                {/* Footer Action Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-[var(--hairline)]">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => void handleSaveProvider(focusedProvider, true)}
+                      disabled={focusedDraft.saving}
+                    >
+                      {focusedDraft.saving
+                        ? 'Saving...'
+                        : currentItem.isActive
+                          ? 'Save Configuration'
+                          : 'Save & Set Active'}
+                    </Button>
+                    {!currentItem.isActive ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void handleSaveProvider(focusedProvider, false)}
+                        disabled={focusedDraft.saving}
+                      >
+                        Save Without Activating
+                      </Button>
+                    ) : null}
+                    {currentItem.hasKey ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void handleClearKey(focusedProvider)}
+                        disabled={focusedDraft.saving}
+                      >
+                        Remove Stored Key
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <span className="text-xs text-[var(--mute)]">
+                    {currentItem.lastTestedAt
+                      ? `Last verified: ${new Date(currentItem.lastTestedAt).toLocaleString()} (${currentItem.lastTestStatus?.toUpperCase()})`
+                      : `Default endpoint: ${focusedMeta.defaultEndpoint}`}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+          </section>
+
+          {/* 3. Lower 2-Column Workspace Grid: Extension + Appearance vs Privacy + Danger Zone */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+            {/* Left Column: Chrome Extension & Theme */}
+            <div className="border border-[var(--hairline)] bg-[var(--canvas)] divide-y divide-[var(--hairline)]">
+              <div className="p-5 sm:p-6 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-bold text-[var(--ink)]">
+                      [ext] Chrome MV3 Extension Pairing
+                    </h2>
+                    <p className="text-xs text-[var(--mute)] mt-0.5">
+                      Connect the JobPilot Side Panel in one click to autofill ATS &amp; Indian job portals.
+                    </p>
+                  </div>
+                  <Badge tone="neutral">MV3 Side Panel</Badge>
+                </div>
+
+                <div className="p-3 bg-[var(--surface-soft)] border border-[var(--hairline)] text-xs space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[var(--mute)]">API Endpoint</span>
+                    <code className="font-bold text-[var(--ink)]">{getApiBaseUrl()}</code>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[var(--mute)]">Session Scope</span>
+                    <span className="text-[var(--body)]">chrome.storage.local (auto-expires)</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    variant={copiedExt ? 'primary' : 'secondary'}
+                    size="sm"
+                    onClick={() => void handleCopyExtensionSession()}
+                  >
+                    {copiedExt
+                      ? '[x] Copied Session JSON!'
+                      : 'Copy Extension Session JSON'}
+                  </Button>
+                  <span className="text-xs text-[var(--mute)]">
+                    Paste into the extension&apos;s <strong>Connect</strong> tab.
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-5 sm:p-6 space-y-3">
+                <div>
+                  <h2 className="text-base font-bold text-[var(--ink)]">
+                    [*] Appearance &amp; Color Scheme
+                  </h2>
+                  <p className="text-xs text-[var(--mute)] mt-0.5">
+                    Follows your OS preference by default, or lock Light / Dark mode.
+                  </p>
+                </div>
+                <ThemeSettingsControl />
+              </div>
+            </div>
+
+            {/* Right Column: Privacy, Data Portability & Danger Zone */}
+            <div className="border border-[var(--hairline)] bg-[var(--canvas)] divide-y divide-[var(--hairline)]">
+              <div className="p-5 sm:p-6 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-bold text-[var(--ink)]">
+                      [+] Privacy &amp; Data Portability
+                    </h2>
+                    <p className="text-xs text-[var(--mute)] mt-0.5">
+                      Protected by Supabase Postgres Row-Level Security. Export your full archive anytime.
+                    </p>
+                  </div>
+                  <Badge tone="success">RLS ACTIVE</Badge>
+                </div>
+
+                <label className="flex items-start gap-3 p-3 bg-[var(--surface-soft)] border border-[var(--hairline)] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={profile?.telemetryOptIn ?? false}
+                    onChange={(e) => void handleToggleTelemetry(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 shrink-0"
+                  />
+                  <span className="text-xs text-[var(--body)] leading-relaxed">
+                    <strong className="text-[var(--ink)] block">
+                      Allow anonymous diagnostic telemetry
+                    </strong>
+                    Off by default. Your personal token &amp; cost usage dashboard works regardless of this toggle.
+                  </span>
+                </label>
+
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <div className="text-xs text-[var(--mute)]">
+                    Includes Master Profile, Stories, Answers, Tailored Resumes &amp; Tracker history.
+                  </div>
+                  <Button variant="secondary" size="sm" onClick={() => void handleExportData()}>
+                    Export JSON
+                  </Button>
+                </div>
+              </div>
+
+              {/* Danger Zone */}
+              <div className="p-5 sm:p-6 bg-[var(--danger-bg)]/40 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-bold text-[var(--danger-text)] uppercase tracking-wider">
+                      [!] Danger Zone — Delete Account
+                    </h2>
+                    <p className="text-xs text-[var(--body)] mt-0.5">
+                      Permanently erases your profile, resumes, encrypted BYOK keys, and applications.
+                    </p>
+                  </div>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => setConfirmDeleteOpen(true)}
+                  >
+                    Delete Account
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
-
-          <SectionBlock
-            title="Chrome Extension Connection"
-            marker="[ext]"
-            description="Connect the JobPilot MV3 Side Panel without re-entering credentials."
-          >
-            <div className="space-y-3 text-sm text-[var(--body)]">
-              <p>
-                API endpoint: <code className="text-[var(--ink)]">{getApiBaseUrl()}</code>
-              </p>
-              <p className="text-xs text-[var(--mute)]">
-                The copied session JSON stays strictly inside local browser storage (
-                <code>chrome.storage.local</code>) and expires automatically with your Supabase JWT.
-              </p>
-              <div className="pt-1">
-                <Button variant="secondary" onClick={handleCopyExtensionSession}>
-                  Copy Extension Session JSON
-                </Button>
-              </div>
-            </div>
-          </SectionBlock>
-
-          <SectionBlock
-            title="Appearance & Color Scheme"
-            description="Follows system preference by default, or pin Light / Dark explicitly."
-          >
-            <ThemeSettingsControl />
-          </SectionBlock>
-
-          <SectionBlock
-            title="Privacy, Export & Account Deletion"
-            description="Your profile, resumes, and LLM logs remain private under Postgres RLS."
-          >
-            <div className="space-y-5">
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={profile?.telemetryOptIn ?? false}
-                  onChange={(e) => handleToggleTelemetry(e.target.checked)}
-                  className="mt-1 w-4 h-4"
-                />
-                <span className="text-sm text-[var(--body)]">
-                  <strong className="text-[var(--ink)]">Opt in to anonymous diagnostic telemetry</strong>{' '}
-                  (off by default). Your own LLM token &amp; cost dashboard remains active either way.
-                </span>
-              </label>
-
-              <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[var(--hairline)]">
-                <Button variant="secondary" onClick={handleExportData}>
-                  Export All Data (.json)
-                </Button>
-                <Button variant="danger" onClick={() => setConfirmDeleteOpen(true)}>
-                  Delete Account &amp; Data
-                </Button>
-              </div>
-            </div>
-          </SectionBlock>
         </div>
       )}
 

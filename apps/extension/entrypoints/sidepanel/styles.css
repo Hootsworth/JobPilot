@@ -253,6 +253,10 @@ textarea {
   font-size: 11px;
 }
 
+.jp-textarea {
+  resize: none;
+}
+
 .jp-select {
   appearance: none;
   -webkit-appearance: none;

@@ -176,6 +176,10 @@ kbd {
 }
 
 /* OpenCode flat input focus + accessible keyboard focus ring */
+textarea {
+  resize: none;
+}
+
 .oc-input {
   width: 100%;
   min-height: 44px;
