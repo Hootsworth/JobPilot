@@ -239,7 +239,7 @@ export function AppShell({
             <AlertBanner
               tone="warning"
               title="Supabase client env vars missing"
-              message="Set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, and NEXT_PUBLIC_API_URL in apps/web/.env.local to authenticate and persist data."
+              message="Set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (sb_publishable_...), and NEXT_PUBLIC_API_URL in apps/web/.env.local to authenticate and persist data."
             />
           ) : null}
 

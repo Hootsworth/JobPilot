@@ -43,12 +43,14 @@ function parseVector(raw: unknown): number[] | null {
 async function main() {
   loadEnvIfPresent();
   const supabaseUrl = process.env['SUPABASE_URL']?.trim();
-  const serviceKey = process.env['SUPABASE_SERVICE_ROLE_KEY']?.trim();
-  if (!supabaseUrl || !serviceKey) {
-    throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+  const secretKey = (
+    process.env['SUPABASE_SECRET_KEY'] ?? process.env['SUPABASE_SERVICE_ROLE_KEY']
+  )?.trim();
+  if (!supabaseUrl || !secretKey) {
+    throw new Error('Missing SUPABASE_URL or SUPABASE_SECRET_KEY (sb_secret_...)');
   }
 
-  const supabase = createClient(supabaseUrl, serviceKey, {
+  const supabase = createClient(supabaseUrl, secretKey, {
     auth: { persistSession: false, autoRefreshToken: false }
   });
 

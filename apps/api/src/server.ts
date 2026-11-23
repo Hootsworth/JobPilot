@@ -22,14 +22,14 @@ async function main() {
   loadEnvIfPresent();
   const config = loadConfig();
 
-  if (!config.supabaseUrl || !config.supabaseAnonKey || !config.supabaseServiceRoleKey) {
+  if (!config.supabaseUrl || !config.supabasePublishableKey || !config.supabaseSecretKey) {
     throw new Error(
-      'Missing SUPABASE_URL, SUPABASE_ANON_KEY, or SUPABASE_SERVICE_ROLE_KEY environment variables.'
+      'Missing SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY (sb_publishable_...), or SUPABASE_SECRET_KEY (sb_secret_...) environment variables.'
     );
   }
 
-  const store = new SupabaseDataStore(config.supabaseUrl, config.supabaseServiceRoleKey);
-  const authVerifier = createSupabaseAuthVerifier(config.supabaseUrl, config.supabaseAnonKey);
+  const store = new SupabaseDataStore(config.supabaseUrl, config.supabaseSecretKey);
+  const authVerifier = createSupabaseAuthVerifier(config.supabaseUrl, config.supabasePublishableKey);
 
   const app = await buildApp({
     config,

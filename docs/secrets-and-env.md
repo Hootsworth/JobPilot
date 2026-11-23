@@ -6,15 +6,16 @@
 
 1. **GitHub Actions Secrets** (configured in GitHub Repo -> *Settings -> Secrets and variables -> Actions*):
    - Used ONLY inside GitHub Actions workflows (e.g., `crawl-and-embed.yml`, `llm-provider-eval.yml`).
-   - Required for crawl/embed/score: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
+   - Required for crawl/embed/score: `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (`sb_secret_...`, replaces legacy `SUPABASE_SERVICE_ROLE_KEY`).
    - Optional official job aggregator secrets: `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `JOOBLE_API_KEY`, `JSEARCH_RAPIDAPI_KEY`.
    - Optional LLM secrets for batch scoring or multi-provider evals: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `META_API_KEY`.
    - Never visible to Vercel (Next.js) or Render (Fastify API).
 
 2. **Deployed App Env Vars** (configured in **Render** for `apps/api` and **Vercel** for `apps/web`):
-   - `apps/api` requires `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `APP_ENCRYPTION_KEY`, and optionally server fallback LLM keys (`LLM_PROVIDER`, `LLM_MODEL`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `META_API_KEY`, `META_BASE_URL`).
+   - `apps/api` requires `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_...`), `SUPABASE_SECRET_KEY` (`sb_secret_...`), `APP_ENCRYPTION_KEY`, and optionally server fallback LLM keys (`LLM_PROVIDER`, `LLM_MODEL`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `META_API_KEY`, `META_BASE_URL`).
    - If you use **BYOK mode** only, the API server does NOT need default `OPENAI_API_KEY` / `GEMINI_API_KEY` / `META_API_KEY` env vars — each user supplies and tests their own key in Settings.
-   - `apps/web` only receives `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `NEXT_PUBLIC_API_URL`. Never put private keys or `APP_ENCRYPTION_KEY` in `NEXT_PUBLIC_*` variables.
+   - `apps/web` only receives `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_...`), and `NEXT_PUBLIC_API_URL`. Never put `SUPABASE_SECRET_KEY` (`sb_secret_...`) or `APP_ENCRYPTION_KEY` in `NEXT_PUBLIC_*` variables.
+   - *Note on Supabase Legacy Keys*: Legacy JWT-based `anon` and `service_role` keys are retiring in early 2027. JobPilot uses `SUPABASE_PUBLISHABLE_KEY` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_...`) and `SUPABASE_SECRET_KEY` (`sb_secret_...`), while retaining automatic fallback if legacy env var names are present during transition.
 
 ## Meta Llama API Configuration
 

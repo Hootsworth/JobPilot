@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
@@ -24,8 +24,46 @@ export default function LoginPage() {
   const [fullName, setFullName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) {
+        router.replace('/profile');
+      }
+    });
+  }, [router]);
+
+  const handleGoogleSignIn = async () => {
+    setErrorMsg(null);
+    setInfoMsg(null);
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setErrorMsg(
+        'Supabase env vars are missing. Configure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY first.'
+      );
+      return;
+    }
+
+    setOauthLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`
+        }
+      });
+      if (error) throw error;
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Google sign-in failed.');
+      setOauthLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,7 +72,9 @@ export default function LoginPage() {
 
     const supabase = getSupabaseClient();
     if (!supabase) {
-      setErrorMsg('Supabase env vars are missing. Configure apps/web/.env.local first.');
+      setErrorMsg(
+        'Supabase env vars are missing. Configure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY first.'
+      );
       return;
     }
 
@@ -44,7 +84,7 @@ export default function LoginPage() {
         const { error } = await supabase.auth.signInWithOtp({
           email: email.trim(),
           options: {
-            emailRedirectTo: `${window.location.origin}/onboarding`
+            emailRedirectTo: `${window.location.origin}/auth/callback`
           }
         });
         if (error) throw error;
@@ -54,6 +94,7 @@ export default function LoginPage() {
           email: email.trim(),
           password,
           options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
             data: { full_name: fullName.trim() }
           }
         });
@@ -93,7 +134,7 @@ export default function LoginPage() {
             <AlertBanner
               tone="warning"
               title="Supabase env vars required"
-              message="Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to apps/web/.env.local."
+              message="Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (sb_publishable_...) to apps/web/.env.local."
             />
           ) : null}
 
@@ -107,6 +148,24 @@ export default function LoginPage() {
             }
             description="Your profile, resumes, and encrypted BYOK keys are protected by Postgres RLS."
           >
+            <div className="space-y-4 mb-5">
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full justify-center font-bold border-[var(--hairline-strong)]"
+                disabled={oauthLoading || loading}
+                onClick={() => void handleGoogleSignIn()}
+              >
+                {oauthLoading ? '[G] Redirecting to Google...' : '[G] Continue with Google'}
+              </Button>
+
+              <div className="flex items-center gap-3 text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                <span className="flex-1 border-t border-[var(--hairline)]" />
+                <span>or continue with email</span>
+                <span className="flex-1 border-t border-[var(--hairline)]" />
+              </div>
+            </div>
+
             <div className="flex border-b border-[var(--hairline)] mb-5 -mt-1">
               {(
                 [
@@ -218,7 +277,12 @@ export default function LoginPage() {
                 </Field>
               ) : null}
 
-              <Button type="submit" variant="primary" className="w-full" disabled={loading}>
+              <Button
+                type="submit"
+                variant="primary"
+                className="w-full"
+                disabled={loading || oauthLoading}
+              >
                 {loading
                   ? 'Working...'
                   : mode === 'signin'

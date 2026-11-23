@@ -6,7 +6,13 @@ export interface ApiConfig {
   corsOrigin: string;
   logLevel: string;
   supabaseUrl: string;
+  /** Modern Supabase publishable key (`sb_publishable_...`), with fallback to legacy `SUPABASE_ANON_KEY` */
+  supabasePublishableKey: string;
+  /** Modern Supabase secret key (`sb_secret_...`), with fallback to legacy `SUPABASE_SERVICE_ROLE_KEY` */
+  supabaseSecretKey: string;
+  /** @deprecated Alias of `supabasePublishableKey` kept for compatibility */
   supabaseAnonKey: string;
+  /** @deprecated Alias of `supabaseSecretKey` kept for compatibility */
   supabaseServiceRoleKey: string;
   appEncryptionKey: string;
   llmProvider: LlmProviderId;
@@ -25,14 +31,26 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const portStr = env['PORT'] ?? env['API_PORT'] ?? '4000';
   const port = Number.parseInt(portStr, 10);
 
+  const supabasePublishableKey =
+    env['SUPABASE_PUBLISHABLE_KEY']?.trim() ||
+    env['SUPABASE_ANON_KEY']?.trim() ||
+    '';
+
+  const supabaseSecretKey =
+    env['SUPABASE_SECRET_KEY']?.trim() ||
+    env['SUPABASE_SERVICE_ROLE_KEY']?.trim() ||
+    '';
+
   return {
     port: Number.isFinite(port) && port > 0 ? port : 4000,
     host: env['API_HOST'] ?? '0.0.0.0',
     corsOrigin: env['CORS_ORIGIN'] ?? 'http://localhost:3000',
     logLevel: env['LOG_LEVEL'] ?? 'info',
     supabaseUrl: env['SUPABASE_URL']?.trim() ?? '',
-    supabaseAnonKey: env['SUPABASE_ANON_KEY']?.trim() ?? '',
-    supabaseServiceRoleKey: env['SUPABASE_SERVICE_ROLE_KEY']?.trim() ?? '',
+    supabasePublishableKey,
+    supabaseSecretKey,
+    supabaseAnonKey: supabasePublishableKey,
+    supabaseServiceRoleKey: supabaseSecretKey,
     appEncryptionKey: env['APP_ENCRYPTION_KEY']?.trim() ?? '',
     llmProvider,
     llmModel: env['LLM_MODEL']?.trim() || undefined,

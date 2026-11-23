@@ -17,25 +17,36 @@ JobPilot is architected to run 100% on free/open-source tools and free-tier clou
    - `supabase/migrations/0002_rls_and_storage.sql` (enables Row-Level Security on every user table and provisions private `resumes-raw` and `resumes-rendered` Storage buckets).
    - `supabase/migrations/0003_matching_rpc.sql` (adds the `match_jobs_by_embedding` pgvector cosine similarity RPC).
    - `supabase/migrations/0004_resume_pdf_engine.sql` (adds `pdf_engine` metadata column to `resume_versions`).
-3. Copy your project credentials from **Project Settings -> API**:
-   - `SUPABASE_URL`
-   - `SUPABASE_ANON_KEY`
-   - `SUPABASE_SERVICE_ROLE_KEY` (server-only; never expose in `NEXT_PUBLIC_*`)
+3. Copy your project URL and **Publishable / Secret API Keys** (replaces legacy `anon` and `service_role` JWT keys retiring in early 2027):
+   - Project URL: **Project Settings -> Data API** (`SUPABASE_URL`)
+   - **Project Settings -> API Keys** (click **Create new API keys** if on an older project):
+     - **Publishable key** (`sb_publishable_...`) -> `SUPABASE_PUBLISHABLE_KEY` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+     - **Secret key** (`sb_secret_...`) -> `SUPABASE_SECRET_KEY` (server-only; never expose in `NEXT_PUBLIC_*`)
+4. Configure **Google OAuth & Email Auth**:
+   - In **Authentication -> URL Configuration**:
+     - Set **Site URL** to your production web URL (or `http://localhost:3000` locally).
+     - Add **Redirect URLs**:
+       - `http://localhost:3000/auth/callback`
+       - `https://<your-vercel-domain>.vercel.app/auth/callback`
+   - In **Authentication -> Sign In / Providers -> Google**:
+     - Toggle **Enable Sign in with Google** on.
+     - Copy the **Callback URL (for OAuth)** shown by Supabase (e.g., `https://<project-ref>.supabase.co/auth/v1/callback`).
+     - In [Google Cloud Console -> APIs & Services -> Credentials](https://console.cloud.google.com/apis/credentials), create an **OAuth 2.0 Client ID** (Web application), add your Supabase callback URL (`https://<project-ref>.supabase.co/auth/v1/callback`) under **Authorized redirect URIs**, and paste the resulting **Client ID** and **Client Secret** into Supabase.
 
 ---
 
 ## 2. Important: GitHub Actions Secrets vs Deployed Host Environment Variables
 
 > **Critical Security & Operations Note**:
-> GitHub Actions Secrets (`Settings -> Secrets and variables -> Actions` in `https://github.com/Hootsworth/JobPilot.git`) are **ONLY** injected into GitHub Actions runner containers during CI and scheduled cron jobs (`crawl-and-score.yml` and `ci-and-evals.yml`).
+> GitHub Actions Secrets (`Settings -> Secrets and variables -> Actions` in `https://github.com/Hootsworth/JobPilot.git`) are **ONLY** injected into GitHub Actions runner containers during CI and scheduled cron jobs (`crawl-and-embed.yml` and `llm-provider-eval.yml`).
 >
 > **GitHub Actions Secrets are NOT automatically available to your deployed Render API or Vercel web app.** You must set the required environment variables directly in Render and Vercel (or let users supply their own provider keys via encrypted BYOK in `/settings`).
 
 | Variable | GitHub Actions Secrets | Render API (`apps/api`) | Vercel Web (`apps/web`) |
 | :--- | :---: | :---: | :---: |
 | `SUPABASE_URL` | Yes | Yes | No (use `NEXT_PUBLIC_SUPABASE_URL`) |
-| `SUPABASE_ANON_KEY` | No | Yes | No (use `NEXT_PUBLIC_SUPABASE_ANON_KEY`) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Yes | **NEVER** |
+| `SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_...`) | No | Yes | No (use `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`) |
+| `SUPABASE_SECRET_KEY` (`sb_secret_...`) | Yes | Yes | **NEVER** |
 | `APP_ENCRYPTION_KEY` | No | Yes (64 hex chars / 32 bytes) | **NEVER** |
 | `LLM_PROVIDER` | Yes (`gemini`/`openai`/`meta`) | Yes | No |
 | `LLM_MODEL` | Optional | Optional | No |
@@ -59,9 +70,9 @@ JobPilot is architected to run 100% on free/open-source tools and free-tier clou
    - **Instance Type**: `Free`
 4. Add Environment Variables in Render:
    - `PORT=4000`
-   - `HOST=0.0.0.0`
-   - `CORS_ORIGIN=https://your-vercel-domain.vercel.app` (or `*` if using the Chrome extension across ATS origins)
-   - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+   - `API_HOST=0.0.0.0`
+   - `CORS_ORIGIN=https://your-vercel-domain.vercel.app`
+   - `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_...`), `SUPABASE_SECRET_KEY` (`sb_secret_...`)
    - `APP_ENCRYPTION_KEY` (generate with `openssl rand -hex 32`)
    - `LLM_PROVIDER=gemini` (or `openai` / `meta`)
 5. Note on Render Free Tier spin-down: Render Free instances sleep after 15 minutes of inactivity. The JobPilot web header (`AppShell`) automatically pings `/health` on load and displays an `API: OFFLINE/WAKING` status badge while the container wakes up.
@@ -78,7 +89,7 @@ JobPilot is architected to run 100% on free/open-source tools and free-tier clou
    - **Build Command**: `cd ../.. && npm run build -w @jobpilot/shared && npm run build -w @jobpilot/web`
 3. Add Environment Variables in Vercel:
    - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_...`)
    - `NEXT_PUBLIC_API_URL=https://your-render-api.onrender.com`
 
 ---
