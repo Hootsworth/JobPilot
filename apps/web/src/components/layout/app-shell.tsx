@@ -101,7 +101,7 @@ export function AppShell({
   const handleSignOut = async () => {
     const supabase = getSupabaseClient();
     await supabase?.auth.signOut();
-    router.replace('/login');
+    router.replace('/');
   };
 
   return (

@@ -8,18 +8,59 @@ export function cn(...inputs: Array<string | undefined | null | false>): string 
   return twMerge(clsx(inputs));
 }
 
+export function JobPilotLogo({
+  size = 28,
+  className
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 100 94"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      className={cn('shrink-0', className)}
+    >
+      <rect
+        x="2"
+        y="2"
+        width="96"
+        height="90"
+        rx="22"
+        fill="#121214"
+        stroke="rgba(255,255,255,0.14)"
+        strokeWidth="2"
+      />
+      <rect x="17" y="15" width="9.5" height="9.5" rx="2.2" fill="#FFFFFF" />
+      <rect x="32.5" y="15" width="9.5" height="9.5" rx="2.2" fill="#FFFFFF" />
+      <rect x="48" y="15" width="9.5" height="9.5" rx="2.2" fill="#FFFFFF" />
+      <rect x="9" y="33" width="82" height="5.5" rx="2" fill="#FFFFFF" />
+      <path
+        d="M25 51L43 63.5L25 76"
+        stroke="#FFFFFF"
+        strokeWidth="8.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <rect x="54" y="47" width="9.5" height="33" rx="1.5" fill="#0055FF" />
+    </svg>
+  );
+}
+
 export function AsciiWordmark({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-2 font-bold tracking-tight text-[var(--ink)] select-none',
+        'inline-flex items-center gap-2.5 font-bold tracking-tight text-[var(--ink)] select-none',
         className
       )}
       aria-label="JobPilot"
     >
-      <span className="inline-block bg-[var(--ink)] text-[var(--on-primary)] px-1.5 py-0.5 text-xs leading-none rounded-[4px]">
-        JP
-      </span>
+      <JobPilotLogo size={28} />
       <span className="text-base font-bold tracking-wide">JOBPILOT</span>
     </span>
   );

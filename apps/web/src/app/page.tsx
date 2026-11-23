@@ -2,365 +2,337 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import type {
-  ApplicationRecord,
-  MasterProfile,
-  ResumeVersionRecord
-} from '@jobpilot/shared';
-import { AppShell } from '@/components/layout/app-shell';
 import { ThemeQuickToggle } from '@/components/theme-toggle';
 import {
   AsciiWordmark,
   Badge,
   Button,
-  SectionBlock,
-  SkeletonBlock
+  JobPilotLogo
 } from '@/components/ui/primitives';
-import { api } from '@/lib/api';
 import { getSupabaseClient } from '@/lib/supabase';
 
-export default function HomePage() {
-  const [authState, setAuthState] = useState<'checking' | 'signed_in' | 'signed_out'>('checking');
-  const [profile, setProfile] = useState<MasterProfile | null>(null);
-  const [applications, setApplications] = useState<ApplicationRecord[]>([]);
-  const [resumeVersions, setResumeVersions] = useState<ResumeVersionRecord[]>([]);
-  const [jobsTotal, setJobsTotal] = useState<number>(0);
-  const [loadingData, setLoadingData] = useState(false);
+const CAPABILITIES = [
+  {
+    code: '[01]',
+    title: 'Master Profile & India Signals',
+    description:
+      'Upload your PDF resume once. Extracts Education, Projects, Work, Technical Skills, and India-specific fields: Current/Expected CTC (LPA), notice period, CGPA, 10th/12th marks, and preferred hubs.'
+  },
+  {
+    code: '[02]',
+    title: 'Official ATS & India Job Discovery',
+    description:
+      'Ingests Greenhouse, Lever, Ashby, Workable, Adzuna India, Jooble, Remotive, Arbeitnow, and RemoteOK with cross-source deduplication and local 384-d BAAI/bge-small embeddings.'
+  },
+  {
+    code: '[03]',
+    title: '3-Stage Explainable Matching',
+    description:
+      'Stage 1 hard filters (LPA, experience years, work mode, city), Stage 2 pgvector cosine retrieval, and Stage 3 LLM re-ranking with match score, one-line rationale, and skill gaps.'
+  },
+  {
+    code: '[04]',
+    title: 'Grounded Tailoring & Dual Verifier',
+    description:
+      'Selects and rephrases bullets strictly from your Master Profile. A deterministic + LLM verifier audits every claim and blocks unsupported metrics before compiling single-column ATS PDFs.'
+  },
+  {
+    code: '[05]',
+    title: 'Chrome MV3 Autofill with Review Gate',
+    description:
+      'Fills Greenhouse, Lever, Ashby, Workday, and opt-in Indian portals (Naukri, Internshala, LinkedIn, Foundit, Instahyre, Wellfound) with per-field confidence badges. Never auto-submits.'
+  },
+  {
+    code: '[06]',
+    title: 'Zero-Lock-In BYOK & Pipeline Tracker',
+    description:
+      'First-class OpenAI, Gemini, and Meta Llama compat (/compat/v1/) adapters with AES-256-GCM encrypted BYOK keys, plus an application tracker linking the exact PDF version used.'
+  }
+];
+
+export default function LandingPage() {
+  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
 
   useEffect(() => {
     const supabase = getSupabaseClient();
-    if (!supabase) {
-      setAuthState('signed_out');
-      return;
-    }
+    if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
-        setAuthState('signed_in');
-      } else {
-        setAuthState('signed_out');
-      }
+      setSignedInEmail(data.session?.user?.email ?? null);
     });
   }, []);
 
-  useEffect(() => {
-    if (authState !== 'signed_in') return;
-    let active = true;
-    setLoadingData(true);
-    Promise.allSettled([
-      api.getProfile(),
-      api.listApplications(),
-      api.listResumeVersions(),
-      api.listJobs({ limit: 5 })
-    ])
-      .then(([profRes, appsRes, verRes, jobsRes]) => {
-        if (!active) return;
-        if (profRes.status === 'fulfilled') setProfile(profRes.value);
-        if (appsRes.status === 'fulfilled') setApplications(appsRes.value.items);
-        if (verRes.status === 'fulfilled') setResumeVersions(verRes.value);
-        if (jobsRes.status === 'fulfilled') setJobsTotal(jobsRes.value.total);
-      })
-      .finally(() => {
-        if (active) setLoadingData(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [authState]);
-
-  if (authState === 'checking') {
-    return (
-      <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex items-center justify-center p-8 text-xs text-[var(--mute)]">
-        Loading JobPilot...
-      </div>
-    );
-  }
-
-  // Signed-in workspace command center (no Onboarding clutter)
-  if (authState === 'signed_in') {
-    const workCount = profile?.jsonResume.work.length ?? 0;
-    const eduCount = profile?.jsonResume.education.length ?? 0;
-    const projCount = profile?.jsonResume.projects.length ?? 0;
-    const skillCount =
-      profile?.jsonResume.skills.reduce((sum, g) => sum + g.keywords.length, 0) ?? 0;
-
-    const appliedCount = applications.filter((a) => a.status === 'applied').length;
-    const interviewCount = applications.filter((a) => a.status === 'interview').length;
-    const offerCount = applications.filter((a) => a.status === 'offer').length;
-
-    return (
-      <AppShell
-        title={
-          profile?.fullName
-            ? `Workspace // ${profile.fullName}`
-            : 'Workspace Overview'
-        }
-        subtitle="Search matched jobs, generate grounded ATS-safe PDF resumes, and track applications."
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <Link href="/jobs">
-              <Button variant="primary">Open Job Feed -&gt;</Button>
-            </Link>
-            <Link href="/tailor">
-              <Button variant="secondary">Tailor Resume</Button>
-            </Link>
-            <Link href="/tracker">
-              <Button variant="secondary">Tracker</Button>
-            </Link>
-          </div>
-        }
-      >
-        {loadingData ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <SkeletonBlock className="h-28 w-full" />
-            <SkeletonBlock className="h-28 w-full" />
-            <SkeletonBlock className="h-28 w-full" />
-            <SkeletonBlock className="h-28 w-full" />
-          </div>
-        ) : (
-          <>
-            {/* Top KPI Strip */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 border border-[var(--hairline)] bg-[var(--surface-card)]">
-              <Link
-                href="/jobs"
-                className="p-4 border-b lg:border-b-0 border-r border-[var(--hairline)] no-underline hover:bg-[var(--surface-soft)] transition-colors"
-              >
-                <div className="text-xs text-[var(--mute)] uppercase tracking-wider">
-                  [1] Matched Job Feed
-                </div>
-                <div className="text-2xl font-bold text-[var(--ink)] tabular-nums mt-1">
-                  {jobsTotal}
-                </div>
-                <div className="text-xs text-[var(--body)] mt-1">
-                  Active roles indexed -&gt;
-                </div>
-              </Link>
-
-              <Link
-                href="/tracker"
-                className="p-4 border-b lg:border-b-0 lg:border-r border-[var(--hairline)] no-underline hover:bg-[var(--surface-soft)] transition-colors"
-              >
-                <div className="text-xs text-[var(--mute)] uppercase tracking-wider">
-                  [2] Application Pipeline
-                </div>
-                <div className="text-2xl font-bold text-[var(--ink)] tabular-nums mt-1">
-                  {applications.length}
-                </div>
-                <div className="text-xs text-[var(--body)] mt-1">
-                  {appliedCount} applied · {interviewCount} interview · {offerCount} offer
-                </div>
-              </Link>
-
-              <Link
-                href="/tailor"
-                className="p-4 border-r border-[var(--hairline)] no-underline hover:bg-[var(--surface-soft)] transition-colors"
-              >
-                <div className="text-xs text-[var(--mute)] uppercase tracking-wider">
-                  [3] Tailored PDFs
-                </div>
-                <div className="text-2xl font-bold text-[var(--ink)] tabular-nums mt-1">
-                  {resumeVersions.length}
-                </div>
-                <div className="text-xs text-[var(--body)] mt-1">
-                  Verified ATS versions -&gt;
-                </div>
-              </Link>
-
-              <Link
-                href="/profile"
-                className="p-4 no-underline hover:bg-[var(--surface-soft)] transition-colors"
-              >
-                <div className="text-xs text-[var(--mute)] uppercase tracking-wider">
-                  [4] Master Profile (v{profile?.activeProfileVersion ?? 1})
-                </div>
-                <div className="text-2xl font-bold text-[var(--ink)] tabular-nums mt-1">
-                  {workCount + projCount + eduCount}
-                </div>
-                <div className="text-xs text-[var(--body)] mt-1">
-                  {workCount} work · {projCount} proj · {eduCount} edu · {skillCount} skills
-                </div>
-              </Link>
-            </div>
-
-            {/* Two-column workspace summary */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <SectionBlock
-                title="Recent Tracked Applications"
-                description="Roles saved from the Job Feed, captured via the Chrome extension, or logged manually."
-                action={
-                  <Link href="/tracker">
-                    <Button variant="secondary" size="sm">
-                      Open Tracker -&gt;
-                    </Button>
-                  </Link>
-                }
-              >
-                {applications.length === 0 ? (
-                  <div className="text-xs text-[var(--mute)] space-y-3">
-                    <p>No applications tracked yet.</p>
-                    <div className="flex flex-wrap gap-2">
-                      <Link href="/jobs">
-                        <Button variant="secondary" size="sm">
-                          Browse Jobs
-                        </Button>
-                      </Link>
-                      <Link href="/tracker">
-                        <Button variant="secondary" size="sm">
-                          Log Application
-                        </Button>
-                      </Link>
-                    </div>
-                  </div>
-                ) : (
-                  <ul className="divide-y divide-[var(--hairline)] text-xs">
-                    {applications.slice(0, 5).map((app) => (
-                      <li
-                        key={app.id}
-                        className="py-2.5 flex items-center justify-between gap-3"
-                      >
-                        <div className="min-w-0">
-                          <p className="font-bold text-[var(--ink)] truncate">
-                            {app.job.companyName} — {app.job.title}
-                          </p>
-                          <p className="text-[var(--mute)] truncate">
-                            {app.resumeVersion
-                              ? `Resume v${app.resumeVersion.versionNumber} · ${app.resumeVersion.label}`
-                              : 'No tailored resume linked'}
-                          </p>
-                        </div>
-                        <Badge tone="neutral">{app.status.toUpperCase()}</Badge>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </SectionBlock>
-
-              <SectionBlock
-                title="Recent Tailored Resumes"
-                description="Grounded strictly in your Master Profile with dual faithfulness verification."
-                action={
-                  <Link href="/tailor">
-                    <Button variant="secondary" size="sm">
-                      Tailor New Resume -&gt;
-                    </Button>
-                  </Link>
-                }
-              >
-                {resumeVersions.length === 0 ? (
-                  <div className="text-xs text-[var(--mute)] space-y-3">
-                    <p>No tailored resume versions generated yet.</p>
-                    <Link href="/tailor">
-                      <Button variant="secondary" size="sm">
-                        Create First Tailored PDF
-                      </Button>
-                    </Link>
-                  </div>
-                ) : (
-                  <ul className="divide-y divide-[var(--hairline)] text-xs">
-                    {resumeVersions.slice(0, 5).map((ver) => (
-                      <li
-                        key={ver.id}
-                        className="py-2.5 flex items-center justify-between gap-3"
-                      >
-                        <div className="min-w-0">
-                          <p className="font-bold text-[var(--ink)] truncate">
-                            v{ver.versionNumber} · {ver.label}
-                          </p>
-                          <p className="text-[var(--mute)]">
-                            Template: {ver.templateId} ·{' '}
-                            {new Date(ver.createdAt).toLocaleDateString('en-IN')}
-                          </p>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => void api.downloadResumePdf(ver.id)}
-                        >
-                          Download PDF
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </SectionBlock>
-            </div>
-          </>
-        )}
-      </AppShell>
-    );
-  }
-
-  // Signed-out minimal landing view
   return (
     <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex flex-col">
-      <header className="h-14 border-b border-[var(--hairline)] px-4 sm:px-8 flex items-center justify-between max-w-[1100px] w-full mx-auto">
-        <AsciiWordmark />
-        <div className="flex items-center gap-3">
-          <ThemeQuickToggle />
-          <Link href="/login">
-            <Button variant="primary" size="sm">
-              Sign in -&gt;
-            </Button>
-          </Link>
+      {/* Top Landing Header */}
+      <header className="sticky top-0 z-20 border-b border-[var(--hairline)] bg-[var(--canvas)]">
+        <div className="max-w-[1200px] w-full mx-auto h-16 px-4 sm:px-8 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-6">
+            <Link href="/" className="no-underline">
+              <AsciiWordmark />
+            </Link>
+            <nav aria-label="Landing sections" className="hidden md:flex items-center gap-5 text-xs text-[var(--mute)]">
+              <a href="#workflow" className="no-underline hover:text-[var(--ink)]">
+                Workflow
+              </a>
+              <a href="#features" className="no-underline hover:text-[var(--ink)]">
+                Features
+              </a>
+              <a href="#platforms" className="no-underline hover:text-[var(--ink)]">
+                Supported Platforms
+              </a>
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <ThemeQuickToggle />
+            {signedInEmail ? (
+              <>
+                <Link href="/jobs">
+                  <Button variant="primary" size="sm">
+                    Open Workspace -&gt;
+                  </Button>
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link href="/login?mode=signin">
+                  <Button variant="secondary" size="sm">
+                    Log in
+                  </Button>
+                </Link>
+                <Link href="/login?mode=signup">
+                  <Button variant="primary" size="sm">
+                    Sign up -&gt;
+                  </Button>
+                </Link>
+              </>
+            )}
+          </div>
         </div>
       </header>
 
-      <main className="flex-1 max-w-[1100px] w-full mx-auto px-4 sm:px-8 py-12 sm:py-20 space-y-14">
-        <section className="space-y-5 max-w-3xl">
-          <div className="flex items-center gap-2">
-            <Badge tone="dark">v0.1.0</Badge>
-            <span className="text-xs text-[var(--mute)]">
-              AI job search, grounded resume tailoring &amp; autofill for India + global roles
-            </span>
+      <main className="flex-1 max-w-[1200px] w-full mx-auto px-4 sm:px-8 py-12 sm:py-20 space-y-20">
+        {/* Hero Section */}
+        <section className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
+          <div className="lg:col-span-7 space-y-6">
+            <div className="inline-flex items-center gap-2.5 px-3 py-1.5 border border-[var(--hairline)] bg-[var(--surface-soft)]">
+              <JobPilotLogo size={18} />
+              <span className="text-xs font-bold tracking-wider uppercase text-[var(--ink)]">
+                JOBPILOT // INDIA &amp; GLOBAL AI JOB ASSISTANT
+              </span>
+            </div>
+
+            <h1 className="text-3xl sm:text-[40px] font-bold leading-[1.3] tracking-tight text-[var(--ink)]">
+              Tailor grounded ATS resumes, autofill applications, and never hallucinate a metric.
+            </h1>
+
+            <p className="text-sm sm:text-base text-[var(--body)] leading-[1.65] max-w-2xl">
+              Built for CS students and software engineers applying across India and globally.
+              Parse your PDF resume into an editable JSON Resume + India CTC/CGPA profile, rank
+              jobs with local embeddings, verify every tailored bullet against your profile, and
+              autofill forms with mandatory human review.
+            </p>
+
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              {signedInEmail ? (
+                <>
+                  <Link href="/jobs">
+                    <Button variant="primary">Go to Job Feed -&gt;</Button>
+                  </Link>
+                  <Link href="/tailor">
+                    <Button variant="secondary">Tailor Resume &amp; PDF</Button>
+                  </Link>
+                  <Link href="/tracker">
+                    <Button variant="secondary">Application Tracker</Button>
+                  </Link>
+                  <Link href="/profile">
+                    <Button variant="secondary">Master Profile</Button>
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <Link href="/login?mode=signup">
+                    <Button variant="primary">Create Free Account -&gt;</Button>
+                  </Link>
+                  <Link href="/login?mode=signin">
+                    <Button variant="secondary">Log in to Workspace</Button>
+                  </Link>
+                </>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 pt-2 text-xs text-[var(--mute)]">
+              <span>[+] OpenAI · Gemini · Meta Llama API</span>
+              <span>[+] AES-256-GCM Encrypted BYOK</span>
+              <span>[+] 100% Free-Tier Stack</span>
+            </div>
           </div>
-          <h1 className="text-3xl sm:text-[36px] font-bold leading-[1.4] text-[var(--ink)]">
-            Grounded resume tailoring, India CTC/CGPA autofill, and zero-lock-in AI.
-          </h1>
-          <p className="text-sm sm:text-base text-[var(--body)] leading-[1.6] max-w-2xl">
-            Parse your PDF resume into a structured JSON Resume + India profile, rank jobs with
-            local bge-small embeddings, generate verified single-column ATS PDFs, and autofill
-            Greenhouse, Lever, Ashby, Workday &amp; Indian portals.
-          </p>
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            <Link href="/login">
-              <Button variant="primary">Sign in to Workspace -&gt;</Button>
-            </Link>
+
+          {/* Terminal Brand & Live Pipeline Card */}
+          <div
+            id="workflow"
+            className="lg:col-span-5 bg-[var(--surface-dark)] text-[var(--on-dark)] border border-[var(--hairline-strong)] p-6 space-y-5"
+          >
+            <div className="flex items-center justify-between border-b border-white/15 pb-4">
+              <div className="flex items-center gap-3">
+                <JobPilotLogo size={34} />
+                <div>
+                  <p className="text-xs font-bold tracking-wider uppercase text-white">
+                    jobpilot-cli // pipeline
+                  </p>
+                  <p className="text-[11px] text-[var(--on-dark-mute)]">
+                    strict-grounding: enabled · auto-submit: false
+                  </p>
+                </div>
+              </div>
+              <Badge tone="dark">v0.1.0</Badge>
+            </div>
+
+            <div className="space-y-3 text-xs font-mono">
+              <div className="p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[#60a5fa] font-bold">&gt; 01. parse resume.pdf</span>
+                  <span className="text-[#30d158]">[OK]</span>
+                </div>
+                <p className="text-[var(--on-dark-mute)]">
+                  Extracted Education, Projects, Work, Skills + CGPA &amp; LPA expectations
+                </p>
+              </div>
+
+              <div className="p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[#60a5fa] font-bold">&gt; 02. match --stages=3</span>
+                  <span className="text-[#30d158]">[94/100]</span>
+                </div>
+                <p className="text-[var(--on-dark-mute)]">
+                  Hard India filters -&gt; bge-small pgvector -&gt; LLM re-rank &amp; skill gaps
+                </p>
+              </div>
+
+              <div className="p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[#60a5fa] font-bold">&gt; 03. tailor --verify</span>
+                  <span className="text-[#30d158]">[0 UNSUPPORTED]</span>
+                </div>
+                <p className="text-[var(--on-dark-mute)]">
+                  Dual faithfulness audit passed -&gt; compiled single-column ATS PDF
+                </p>
+              </div>
+
+              <div className="p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[#60a5fa] font-bold">&gt; 04. autofill --review</span>
+                  <span className="text-[#ff9f0a]">[PAUSED FOR USER]</span>
+                </div>
+                <p className="text-[var(--on-dark-mute)]">
+                  Greenhouse / Lever / Ashby / Workday / Naukri — awaiting your click
+                </p>
+              </div>
+            </div>
           </div>
         </section>
 
-        <section className="grid grid-cols-1 sm:grid-cols-3 border border-[var(--hairline)] bg-[var(--surface-card)]">
-          <div className="p-5 border-b sm:border-b-0 sm:border-r border-[var(--hairline)] space-y-1.5">
+        {/* Core Capabilities Grid */}
+        <section id="features" className="space-y-6 border-t border-[var(--hairline)] pt-14">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="space-y-1">
+              <p className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
+                // ARCHITECTURE &amp; CAPABILITIES
+              </p>
+              <h2 className="text-2xl font-bold text-[var(--ink)]">
+                Everything you need from discovery to offer letter
+              </h2>
+            </div>
+            {!signedInEmail ? (
+              <Link href="/login?mode=signup">
+                <Button variant="secondary" size="sm">
+                  Get Started Free -&gt;
+                </Button>
+              </Link>
+            ) : null}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 border border-[var(--hairline)] bg-[var(--surface-card)]">
+            {CAPABILITIES.map((item) => (
+              <div
+                key={item.code}
+                className="p-6 border-b border-r border-[var(--hairline)] space-y-2.5 bg-[var(--canvas)] hover:bg-[var(--surface-soft)] transition-colors"
+              >
+                <div className="text-xs font-bold text-[var(--accent-text)]">{item.code}</div>
+                <h3 className="text-base font-bold text-[var(--ink)]">{item.title}</h3>
+                <p className="text-xs text-[var(--body)] leading-relaxed">{item.description}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Supported Platforms & Providers Strip */}
+        <section id="platforms" className="grid grid-cols-1 lg:grid-cols-2 gap-6 border-t border-[var(--hairline)] pt-14">
+          <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-6 space-y-3">
             <p className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]">
-              [1] Grounded Profile &amp; PDF Tailor
+              [+] Official Feeds &amp; ATS Form Autofill
             </p>
-            <p className="text-xs text-[var(--body)]">
-              Extracts Education, Projects, Work, Skills &amp; India CTC/CGPA signals. Dual
-              verifier blocks unsupported claims before compiling ATS PDFs.
+            <p className="text-xs text-[var(--body)] leading-relaxed">
+              Server-side discovery crawls official public JSON endpoints only (**Greenhouse,
+              Lever, Ashby, Workable, Adzuna India, Jooble, Remotive, Arbeitnow, RemoteOK**).
+              Non-API portals (**Naukri, Internshala, LinkedIn, Foundit, Instahyre, Wellfound**)
+              are never scraped server-side—they run strictly opt-in inside your logged-in Chrome
+              extension session.
             </p>
           </div>
-          <div className="p-5 border-b sm:border-b-0 sm:border-r border-[var(--hairline)] space-y-1.5">
+
+          <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-6 space-y-3">
             <p className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]">
-              [2] 3-Stage Job Matching
+              [+] Provider-Agnostic AI (OpenAI · Gemini · Meta Llama)
             </p>
-            <p className="text-xs text-[var(--body)]">
-              Hard India/global filters, local 384-d BGE vector similarity, and provider-agnostic
-              LLM re-ranking across OpenAI, Gemini, and Meta Llama.
+            <p className="text-xs text-[var(--body)] leading-relaxed">
+              Switch between **OpenAI**, **Google Gemini**, and **Meta Llama API**
+              (`https://api.llama.com/compat/v1/`) with zero code changes. Bring your own API key
+              in Settings, test live model lists with one click, and inspect token/latency/cost
+              telemetry for every call.
             </p>
           </div>
-          <div className="p-5 space-y-1.5">
-            <p className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]">
-              [3] MV3 Autofill &amp; Tracker
-            </p>
-            <p className="text-xs text-[var(--body)]">
-              Per-field confidence review gate in Chrome with zero auto-submit, plus pipeline
-              stage tracking and follow-up reminders.
-            </p>
+        </section>
+
+        {/* Bottom CTA Banner */}
+        <section className="border border-[var(--hairline-strong)] bg-[var(--surface-card)] p-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+          <div className="flex items-center gap-4">
+            <JobPilotLogo size={42} />
+            <div className="space-y-1">
+              <h2 className="text-lg font-bold text-[var(--ink)]">
+                Ready to launch your JobPilot workspace?
+              </h2>
+              <p className="text-xs text-[var(--body)]">
+                Sign in with Google, email/password, or passwordless magic link.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {signedInEmail ? (
+              <Link href="/jobs">
+                <Button variant="primary">Open Job Feed -&gt;</Button>
+              </Link>
+            ) : (
+              <>
+                <Link href="/login?mode=signin">
+                  <Button variant="secondary">Log in</Button>
+                </Link>
+                <Link href="/login?mode=signup">
+                  <Button variant="primary">Sign up -&gt;</Button>
+                </Link>
+              </>
+            )}
           </div>
         </section>
       </main>
 
-      <footer className="border-t border-[var(--hairline)] py-5 px-4 sm:px-8 max-w-[1100px] w-full mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--mute)]">
-        <span>JobPilot // Free &amp; Open-Source</span>
-        <span>OpenAI · Gemini · Meta Llama API</span>
+      <footer className="border-t border-[var(--hairline)] py-6 px-4 sm:px-8 max-w-[1200px] w-full mx-auto flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--mute)]">
+        <div className="flex items-center gap-2">
+          <JobPilotLogo size={18} />
+          <span>JobPilot // Open-Source AI Job Search &amp; Application Assistant</span>
+        </div>
+        <span>Built with Next.js · Fastify · Supabase pgvector · WXT MV3</span>
       </footer>
     </div>
   );

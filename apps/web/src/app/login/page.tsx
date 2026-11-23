@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 import { ThemeQuickToggle } from '@/components/theme-toggle';
 import {
@@ -14,11 +14,20 @@ import {
   SectionBlock
 } from '@/components/ui/primitives';
 
-export default function LoginPage() {
+function LoginInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabaseReady = isSupabaseConfigured();
 
-  const [mode, setMode] = useState<'signin' | 'signup' | 'magic'>('signin');
+  const initialModeParam = searchParams.get('mode');
+  const initialMode: 'signin' | 'signup' | 'magic' =
+    initialModeParam === 'signup'
+      ? 'signup'
+      : initialModeParam === 'magic'
+        ? 'magic'
+        : 'signin';
+
+  const [mode, setMode] = useState<'signin' | 'signup' | 'magic'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
@@ -29,11 +38,17 @@ export default function LoginPage() {
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
   useEffect(() => {
+    if (initialModeParam === 'signup' || initialModeParam === 'signin' || initialModeParam === 'magic') {
+      setMode(initialModeParam);
+    }
+  }, [initialModeParam]);
+
+  useEffect(() => {
     const supabase = getSupabaseClient();
     if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) {
-        router.replace('/profile');
+        router.replace('/jobs');
       }
     });
   }, [router]);
@@ -100,7 +115,7 @@ export default function LoginPage() {
         });
         if (error) throw error;
         if (data.session) {
-          router.replace('/onboarding');
+          router.replace('/profile');
         } else {
           setInfoMsg('Account created. Verify your email, then sign in.');
         }
@@ -110,7 +125,7 @@ export default function LoginPage() {
           password
         });
         if (error) throw error;
-        router.replace('/profile');
+        router.replace('/jobs');
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Authentication failed.');
@@ -121,11 +136,16 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex flex-col">
-      <header className="h-14 border-b border-[var(--hairline)] px-4 sm:px-8 flex items-center justify-between">
+      <header className="h-14 border-b border-[var(--hairline)] px-4 sm:px-8 flex items-center justify-between max-w-[1200px] w-full mx-auto">
         <Link href="/" className="no-underline">
           <AsciiWordmark />
         </Link>
-        <ThemeQuickToggle />
+        <div className="flex items-center gap-3">
+          <Link href="/" className="text-xs text-[var(--mute)] hover:text-[var(--ink)] no-underline">
+            &lt;- Landing page
+          </Link>
+          <ThemeQuickToggle />
+        </div>
       </header>
 
       <main className="flex-1 flex items-center justify-center p-4 sm:p-8">
@@ -141,7 +161,7 @@ export default function LoginPage() {
           <SectionBlock
             title={
               mode === 'signin'
-                ? 'Sign in to JobPilot'
+                ? 'Log in to JobPilot'
                 : mode === 'signup'
                   ? 'Create JobPilot account'
                   : 'Passwordless Magic Link'
@@ -169,7 +189,7 @@ export default function LoginPage() {
             <div className="flex border-b border-[var(--hairline)] mb-5 -mt-1">
               {(
                 [
-                  { id: 'signin', label: 'Sign in' },
+                  { id: 'signin', label: 'Log in' },
                   { id: 'signup', label: 'Sign up' },
                   { id: 'magic', label: 'Magic link' }
                 ] as const
@@ -286,7 +306,7 @@ export default function LoginPage() {
                 {loading
                   ? 'Working...'
                   : mode === 'signin'
-                    ? 'Sign in'
+                    ? 'Log in'
                     : mode === 'signup'
                       ? 'Create account'
                       : 'Send magic link'}
@@ -296,5 +316,19 @@ export default function LoginPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex items-center justify-center p-8 text-xs text-[var(--mute)]">
+          Loading authentication...
+        </div>
+      }
+    >
+      <LoginInner />
+    </Suspense>
   );
 }
