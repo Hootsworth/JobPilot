@@ -5,6 +5,7 @@ import type { LlmProviderId } from '@jobpilot/shared';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import type { AuthVerifier } from '../plugins/auth.js';
+import { supplementParsedResumeFromText } from '../services/resume-parser.js';
 import { MemoryDataStore } from '../store/memory-store.js';
 
 function createMinimalValidPdfBuffer(textContent: string): Buffer {
@@ -423,5 +424,65 @@ describe('JobPilot Fastify API integration', () => {
       headers
     });
     expect(afterDeleteStories.json()).toEqual([]);
+  });
+
+  it('supplements education, projects, skills, and India signals when LLM returns empty arrays', () => {
+    const rawResumeText = [
+      'Aarav Sharma',
+      'aarav@iitb.ac.in | +91 98765 43210',
+      'EDUCATION',
+      'Indian Institute of Technology Bombay 2022 - 2026',
+      'B.Tech in Computer Science and Engineering | CGPA: 8.92/10',
+      'PROJECTS',
+      'JobPilot AI | TypeScript, Next.js, Fastify, PostgreSQL',
+      '• Built grounded resume tailoring and Chrome MV3 autofill engine.',
+      '• Integrated local BGE embeddings and pgvector search.',
+      'TECHNICAL SKILLS',
+      'Languages: TypeScript, Python, C++, SQL',
+      'Frameworks: Next.js, Fastify, React, Tailwind CSS'
+    ].join('\n');
+
+    const supplemented = supplementParsedResumeFromText(
+      {
+        fullName: 'Aarav Sharma',
+        email: '',
+        phone: '',
+        jsonResume: {
+          basics: {
+            name: 'Aarav Sharma',
+            label: '',
+            email: '',
+            phone: '',
+            url: '',
+            summary: '',
+            location: { address: '', postalCode: '', city: '', countryCode: '', region: '' },
+            profiles: []
+          },
+          work: [],
+          education: [],
+          projects: [],
+          skills: [],
+          certificates: [],
+          awards: [],
+          publications: [],
+          languages: []
+        },
+        extractedIndiaSignals: {},
+        extractionNotes: []
+      },
+      rawResumeText
+    );
+
+    expect(supplemented.email).toBe('aarav@iitb.ac.in');
+    expect(supplemented.phone).toBe('+91 98765 43210');
+    expect(supplemented.jsonResume.education.length).toBeGreaterThanOrEqual(1);
+    expect(supplemented.jsonResume.education[0]?.institution).toContain(
+      'Indian Institute of Technology Bombay'
+    );
+    expect(supplemented.jsonResume.projects.length).toBe(1);
+    expect(supplemented.jsonResume.projects[0]?.name).toBe('JobPilot AI');
+    expect(supplemented.jsonResume.projects[0]?.highlights).toHaveLength(2);
+    expect(supplemented.jsonResume.skills.length).toBe(2);
+    expect(supplemented.extractedIndiaSignals.cgpa).toBe(8.92);
   });
 });

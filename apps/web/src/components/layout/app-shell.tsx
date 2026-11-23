@@ -3,29 +3,24 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { checkApiHealth } from '@/lib/api';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 import { ThemeQuickToggle } from '../theme-toggle';
-import { AlertBanner, AsciiWordmark, Badge, Button, cn } from '../ui/primitives';
+import { AlertBanner, AsciiWordmark, Button, cn } from '../ui/primitives';
 
 interface NavItem {
   href: string;
   label: string;
-  marker: string;
-  ready: boolean;
-  phaseNote?: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { href: '/onboarding', label: 'Onboarding', marker: '[1]', ready: true },
-  { href: '/profile', label: 'Master Profile', marker: '[2]', ready: true },
-  { href: '/stories', label: 'Story Bank', marker: '[3]', ready: true },
-  { href: '/answers', label: 'Saved Answers', marker: '[4]', ready: true },
-  { href: '/settings', label: 'AI & Privacy', marker: '[5]', ready: true },
-  { href: '/usage', label: 'LLM Usage', marker: '[6]', ready: true },
-  { href: '/jobs', label: 'Job Feed', marker: '[7]', ready: true },
-  { href: '/tailor', label: 'Tailor & PDF', marker: '[8]', ready: true },
-  { href: '/tracker', label: 'Tracker', marker: '[9]', ready: true }
+  { href: '/jobs', label: 'Jobs' },
+  { href: '/tailor', label: 'Tailor & PDF' },
+  { href: '/tracker', label: 'Tracker' },
+  { href: '/profile', label: 'Profile' },
+  { href: '/stories', label: 'Stories' },
+  { href: '/answers', label: 'Answers' },
+  { href: '/usage', label: 'Usage' },
+  { href: '/settings', label: 'Settings' }
 ];
 
 export function AppShell({
@@ -44,7 +39,6 @@ export function AppShell({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [apiStatus, setApiStatus] = useState<'checking' | 'online' | 'waking'>('checking');
   const [authChecked, setAuthChecked] = useState(false);
 
   const supabaseReady = isSupabaseConfigured();
@@ -104,16 +98,6 @@ export function AppShell({
     };
   }, [router]);
 
-  useEffect(() => {
-    let active = true;
-    checkApiHealth().then((res) => {
-      if (active) setApiStatus(res.ok ? 'online' : 'waking');
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
   const handleSignOut = async () => {
     const supabase = getSupabaseClient();
     await supabase?.auth.signOut();
@@ -128,146 +112,127 @@ export function AppShell({
       >
         Skip to main content
       </a>
-      {/* Top Primary Nav adhering to DESIGN.md */}
-      <header className="sticky top-0 z-20 h-14 border-b border-[var(--hairline)] bg-[var(--canvas)] px-4 sm:px-6 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            className="lg:hidden min-h-[36px] px-2.5 border border-[var(--hairline)] rounded-[4px] text-xs font-medium cursor-pointer"
-            onClick={() => setMobileMenuOpen((v) => !v)}
-            aria-expanded={mobileMenuOpen}
-            aria-label="Toggle navigation menu"
-          >
-            {mobileMenuOpen ? '[x]' : '[=]'}
-          </button>
-          <Link href="/profile" className="no-underline">
-            <AsciiWordmark />
-          </Link>
+
+      {/* Compact single-bar top navigation without bulky sidebar */}
+      <header className="sticky top-0 z-20 border-b border-[var(--hairline)] bg-[var(--canvas)]">
+        <div className="max-w-[1320px] w-full mx-auto h-14 px-4 sm:px-6 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-5 min-w-0">
+            <button
+              type="button"
+              className="md:hidden min-h-[34px] px-2.5 border border-[var(--hairline)] rounded-[4px] text-xs font-medium cursor-pointer"
+              onClick={() => setMobileMenuOpen((v) => !v)}
+              aria-expanded={mobileMenuOpen}
+              aria-label="Toggle navigation menu"
+            >
+              {mobileMenuOpen ? '[x]' : '[=]'}
+            </button>
+            <Link href="/" className="no-underline shrink-0">
+              <AsciiWordmark />
+            </Link>
+
+            <nav aria-label="Workspace navigation" className="hidden md:flex items-center gap-1">
+              {NAV_ITEMS.map((item) => {
+                const active = pathname === item.href;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cn(
+                      'px-2.5 py-1.5 text-xs rounded-[4px] border transition-colors no-underline whitespace-nowrap',
+                      active
+                        ? 'bg-[var(--ink)] text-[var(--on-primary)] border-[var(--ink)] font-bold'
+                        : 'bg-transparent text-[var(--body)] border-transparent hover:bg-[var(--surface-soft)] hover:text-[var(--ink)]'
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShortcutsOpen((v) => !v)}
+              aria-label="Open keyboard shortcuts guide"
+              title="Keyboard shortcuts (?)"
+              className="min-h-[32px] px-2.5 text-xs border border-[var(--hairline)] rounded-[4px] bg-[var(--surface-soft)] hover:border-[var(--hairline-strong)] cursor-pointer"
+            >
+              [?]
+            </button>
+            <ThemeQuickToggle />
+            {userEmail ? (
+              <span className="hidden xl:inline text-xs text-[var(--mute)] truncate max-w-[180px]">
+                {userEmail}
+              </span>
+            ) : null}
+            {supabaseReady && userEmail ? (
+              <Button variant="secondary" size="sm" onClick={handleSignOut}>
+                Sign out
+              </Button>
+            ) : null}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3">
-          <Badge
-            tone={apiStatus === 'online' ? 'success' : apiStatus === 'waking' ? 'warning' : 'neutral'}
-            className="hidden sm:inline-flex"
+        {/* Mobile navigation drawer */}
+        {mobileMenuOpen ? (
+          <nav
+            aria-label="Mobile workspace navigation"
+            className="md:hidden border-t border-[var(--hairline)] bg-[var(--canvas)] px-4 py-3 grid grid-cols-2 gap-1.5"
           >
-            {apiStatus === 'online'
-              ? 'API: ONLINE'
-              : apiStatus === 'waking'
-                ? 'API: OFFLINE/WAKING'
-                : 'API: CHECKING'}
-          </Badge>
-          <button
-            type="button"
-            onClick={() => setShortcutsOpen((v) => !v)}
-            aria-label="Open keyboard shortcuts guide"
-            title="Keyboard shortcuts (?)"
-            className="min-h-[32px] px-2.5 text-xs border border-[var(--hairline)] rounded-[4px] bg-[var(--surface-soft)] hover:border-[var(--hairline-strong)] cursor-pointer"
-          >
-            [?]
-          </button>
-          <ThemeQuickToggle />
-          {userEmail ? (
-            <span className="hidden md:inline text-xs text-[var(--mute)] truncate max-w-[200px]">
-              {userEmail}
-            </span>
-          ) : null}
-          {supabaseReady && userEmail ? (
-            <Button variant="secondary" size="sm" onClick={handleSignOut}>
-              Sign out
-            </Button>
-          ) : null}
-        </div>
-      </header>
-
-      <div className="flex-1 flex flex-col lg:flex-row max-w-[1360px] w-full mx-auto">
-        {/* Sidebar Navigation */}
-        <aside
-          className={cn(
-            'lg:w-64 lg:shrink-0 border-b lg:border-b-0 lg:border-r border-[var(--hairline)] bg-[var(--canvas)]',
-            mobileMenuOpen ? 'block' : 'hidden lg:block'
-          )}
-        >
-          <nav aria-label="Workspace navigation" className="p-3 space-y-1">
             {NAV_ITEMS.map((item) => {
               const active = pathname === item.href;
-              if (!item.ready) {
-                return (
-                  <div
-                    key={item.label}
-                    aria-disabled="true"
-                    className="flex items-center justify-between px-3 py-2 text-sm text-[var(--ash)] select-none"
-                  >
-                    <span>
-                      <span className="mr-2">{item.marker}</span>
-                      {item.label}
-                    </span>
-                    <span className="text-[11px]">{item.phaseNote}</span>
-                  </div>
-                );
-              }
               return (
                 <Link
                   key={item.href}
                   href={item.href}
                   onClick={() => setMobileMenuOpen(false)}
                   className={cn(
-                    'flex items-center justify-between px-3 py-2.5 text-sm rounded-[4px] border transition-colors no-underline min-h-[42px]',
+                    'px-3 py-2 text-xs rounded-[4px] border transition-colors no-underline',
                     active
-                      ? 'bg-[var(--surface-card)] text-[var(--ink)] border-[var(--hairline-strong)] font-medium'
-                      : 'bg-transparent text-[var(--body)] border-transparent hover:bg-[var(--surface-soft)] hover:text-[var(--ink)]'
+                      ? 'bg-[var(--ink)] text-[var(--on-primary)] border-[var(--ink)] font-bold'
+                      : 'bg-[var(--surface-soft)] text-[var(--body)] border-[var(--hairline)]'
                   )}
                 >
-                  <span>
-                    <span className="text-[var(--mute)] mr-2">{item.marker}</span>
-                    {item.label}
-                  </span>
-                  {active ? <span className="text-xs text-[var(--ink)]">&gt;</span> : null}
+                  {item.label}
                 </Link>
               );
             })}
           </nav>
+        ) : null}
+      </header>
 
-          <div className="px-4 py-3 border-t border-[var(--hairline)] text-xs text-[var(--mute)] space-y-1">
-            <p className="font-bold text-[var(--ink)]">[+] Privacy-first</p>
-            <p>BYOK keys encrypted AES-256-GCM. Telemetry off by default.</p>
+      {/* Main Content */}
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex-1 max-w-[1320px] w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6 min-w-0"
+      >
+        {!supabaseReady ? (
+          <AlertBanner
+            tone="warning"
+            title="Supabase client env vars missing"
+            message="Set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (sb_publishable_...), and NEXT_PUBLIC_API_URL in apps/web/.env.local to authenticate and persist data."
+          />
+        ) : null}
+
+        <div className="flex flex-wrap items-start justify-between gap-4 pb-5 border-b border-[var(--hairline)]">
+          <div className="space-y-1">
+            <h1 className="text-2xl sm:text-[28px] font-bold tracking-tight text-[var(--ink)]">
+              {title}
+            </h1>
+            {subtitle ? <p className="text-sm text-[var(--body)] max-w-2xl">{subtitle}</p> : null}
           </div>
-        </aside>
+          {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+        </div>
 
-        {/* Main Content */}
-        <main id="main-content" tabIndex={-1} className="flex-1 p-4 sm:p-8 space-y-6 min-w-0">
-          {!supabaseReady ? (
-            <AlertBanner
-              tone="warning"
-              title="Supabase client env vars missing"
-              message="Set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (sb_publishable_...), and NEXT_PUBLIC_API_URL in apps/web/.env.local to authenticate and persist data."
-            />
-          ) : null}
-
-          {apiStatus === 'waking' ? (
-            <AlertBanner
-              tone="warning"
-              title="API server unreachable"
-              message="Start apps/api (`npm run dev:api`) locally or wait ~30s if waking up Render Free tier."
-            />
-          ) : null}
-
-          <div className="flex flex-wrap items-start justify-between gap-4 pb-5 border-b border-[var(--hairline)]">
-            <div className="space-y-1">
-              <h1 className="text-2xl sm:text-[28px] font-bold tracking-tight text-[var(--ink)]">
-                {title}
-              </h1>
-              {subtitle ? <p className="text-sm text-[var(--body)] max-w-2xl">{subtitle}</p> : null}
-            </div>
-            {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
-          </div>
-
-          {!authChecked ? (
-            <div className="py-12 text-sm text-[var(--mute)]">Checking session...</div>
-          ) : (
-            children
-          )}
-        </main>
-      </div>
+        {!authChecked ? (
+          <div className="py-12 text-sm text-[var(--mute)]">Loading workspace...</div>
+        ) : (
+          children
+        )}
+      </main>
 
       {shortcutsOpen ? (
         <div

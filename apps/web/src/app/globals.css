@@ -189,6 +189,14 @@ kbd {
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 
+select.oc-input,
+.oc-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 38px;
+}
+
 .oc-input:focus {
   background-color: var(--canvas);
   border-color: var(--ink);

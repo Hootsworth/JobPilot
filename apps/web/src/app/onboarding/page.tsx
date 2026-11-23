@@ -138,12 +138,15 @@ export default function OnboardingPage() {
     setStatusMsg(null);
     try {
       const res = await api.parseResumePdf(selectedFile, {
-        apply: false,
+        apply: true,
         provider: selectedProvider,
         model: selectedModel || undefined
       });
       setParsedPreview(res.parsed);
       setStoragePath(res.storagePath);
+      if (res.appliedProfile) {
+        setProfile(res.appliedProfile);
+      }
       if (res.parsed.fullName) setFullName(res.parsed.fullName);
       if (res.parsed.email) setEmail(res.parsed.email);
       if (res.parsed.phone) setPhone(res.parsed.phone);

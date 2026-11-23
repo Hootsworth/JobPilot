@@ -151,9 +151,35 @@ export const Select = React.forwardRef<
   React.SelectHTMLAttributes<HTMLSelectElement>
 >(function Select({ className, children, ...props }, ref) {
   return (
-    <select ref={ref} className={cn('oc-input cursor-pointer', className)} {...props}>
-      {children}
-    </select>
+    <div className="relative w-full">
+      <select
+        ref={ref}
+        className={cn('oc-input oc-select appearance-none pr-10 cursor-pointer', className)}
+        {...props}
+      >
+        {children}
+      </select>
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 right-3 flex items-center justify-center text-[var(--mute)]"
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          className="block shrink-0"
+        >
+          <path
+            d="M4 6L8 10L12 6"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="square"
+          />
+        </svg>
+      </span>
+    </div>
   );
 });
 

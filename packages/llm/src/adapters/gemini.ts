@@ -112,6 +112,17 @@ export class GeminiAdapter implements LlmProvider {
     if (requested?.trim()) return stripModelsPrefix(requested);
     if (this.config.defaultModel?.trim()) return stripModelsPrefix(this.config.defaultModel);
     const models = await this.listModels();
+    const preferredOrder = [
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-2.5-pro',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro'
+    ];
+    for (const pref of preferredOrder) {
+      const match = models.find((m) => m.id === pref || m.id.startsWith(`${pref}-`));
+      if (match) return match.id;
+    }
     const first = models[0]?.id;
     if (!first) {
       throw new LlmProviderError(

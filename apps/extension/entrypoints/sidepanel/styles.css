@@ -253,6 +253,29 @@ textarea {
   font-size: 11px;
 }
 
+.jp-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+}
+
+.jp-select-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.jp-select-chevron {
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mute);
+}
+
 .jp-input:focus-visible,
 .jp-select:focus-visible,
 .jp-textarea:focus-visible,

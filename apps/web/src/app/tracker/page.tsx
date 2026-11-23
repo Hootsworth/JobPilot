@@ -690,20 +690,35 @@ export default function TrackerPage() {
                       <label htmlFor={`quick-status-${app.id}`} className="sr-only">
                         Quick status for {app.job.companyName}
                       </label>
-                      <select
-                        id={`quick-status-${app.id}`}
-                        value={app.status}
-                        onChange={(e) =>
-                          void handleQuickStatusChange(app.id, e.target.value as ApplicationStatus)
-                        }
-                        className="px-1.5 py-0.5 text-[11px] bg-[var(--surface-card)] border border-[var(--hairline)] rounded-[4px] text-[var(--ink)]"
-                      >
-                        {STATUS_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative inline-flex items-center">
+                        <select
+                          id={`quick-status-${app.id}`}
+                          value={app.status}
+                          onChange={(e) =>
+                            void handleQuickStatusChange(app.id, e.target.value as ApplicationStatus)
+                          }
+                          className="appearance-none pl-2 pr-6 py-1 text-[11px] leading-tight bg-[var(--surface-card)] border border-[var(--hairline)] rounded-[4px] text-[var(--ink)] cursor-pointer"
+                        >
+                          {STATUS_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center justify-center text-[var(--mute)]"
+                        >
+                          <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
+                            <path
+                              d="M4 6L8 10L12 6"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="square"
+                            />
+                          </svg>
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>

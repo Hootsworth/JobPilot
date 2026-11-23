@@ -797,20 +797,32 @@ export function App() {
                     <span className="jp-meta">{scan.fields.length} field(s) detected</span>
                   </div>
 
-                  <select
-                    className="jp-select"
-                    aria-label="Tailored resume version"
-                    value={selectedResumeId}
-                    onChange={(e) => handleResumeChange(e.target.value)}
-                  >
-                    <option value="">Profile details only (no PDF file upload)</option>
-                    {cachedData.resumeVersions.map((ver) => (
-                      <option key={ver.id} value={ver.id}>
-                        v{ver.versionNumber} · {ver.label} (
-                        {ver.verifierPassed ? 'VERIFIED' : 'FLAGGED'})
-                      </option>
-                    ))}
-                  </select>
+                  <div className="jp-select-wrap">
+                    <select
+                      className="jp-select"
+                      aria-label="Tailored resume version"
+                      value={selectedResumeId}
+                      onChange={(e) => handleResumeChange(e.target.value)}
+                    >
+                      <option value="">Profile details only (no PDF file upload)</option>
+                      {cachedData.resumeVersions.map((ver) => (
+                        <option key={ver.id} value={ver.id}>
+                          v{ver.versionNumber} · {ver.label} (
+                          {ver.verifierPassed ? 'VERIFIED' : 'FLAGGED'})
+                        </option>
+                      ))}
+                    </select>
+                    <span className="jp-select-chevron" aria-hidden="true">
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                        <path
+                          d="M4 6L8 10L12 6"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="square"
+                        />
+                      </svg>
+                    </span>
+                  </div>
 
                   <div className="jp-row">
                     <button
