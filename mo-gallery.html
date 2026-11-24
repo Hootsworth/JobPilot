@@ -27,7 +27,6 @@
 .mo-btn[data-state=error]{background:var(--mo-err);border-color:var(--mo-err);color:#fdfcfc}
 /* cursor + status */
 .mo-cursor::after{content:"█";margin-left:2px;animation:mo-blink 1s steps(1) infinite}
-.mo-live::before{content:"●";color:var(--mo-ok);margin-right:8px;animation:mo-blink 1.4s steps(1) infinite}
 /* skeleton + stepped pulse */
 .mo-skel{display:block;height:1em;margin:8px 0;background:var(--mo-card);animation:mo-pulse 1.2s steps(6) infinite}
 /* progress (text-rendered by Mo.bar / Mo.scan) */
@@ -65,14 +64,11 @@
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;transition-delay:0s!important}}
 
 /* ---- v2 additions ---- */
-@keyframes mo-ping{to{transform:scale(3);opacity:0}}
 @keyframes mo-wipe{from{clip-path:inset(0 100% 0 0)}}
 @keyframes mo-bump{40%{transform:translateY(-4px)}}
 @keyframes mo-tick{to{transform:translateX(-50%)}}
 .mo-skel--c{width:40px;height:40px;border-radius:9999px;margin:0}
 .mo-typing{display:inline-flex;gap:4px;font-size:20px}.mo-typing i{font-style:normal;animation:mo-blink 1s steps(1) infinite}.mo-typing i:nth-child(2){animation-delay:.2s}.mo-typing i:nth-child(3){animation-delay:.4s}
-.mo-ping{position:relative;display:inline-block;width:8px;height:8px;background:var(--mo-ok)}
-.mo-ping::after{content:"";position:absolute;inset:0;border:1px solid var(--mo-ok);animation:mo-ping 1.2s steps(4) infinite}
 .mo-wipe{animation:mo-wipe .7s steps(16) both}
 .mo-bump{display:inline-block;animation:mo-bump 200ms steps(2)}
 .mo-ticker{overflow:hidden;white-space:nowrap;border-block:1px solid var(--mo-hair);width:100%}
@@ -122,7 +118,7 @@ p{margin:0 0 8px;color:var(--mo-mute)}
 <div class="mo-tabs" id="tabs"><button aria-selected="true" data-c="all">all</button><button data-c="loaders">loaders</button><button data-c="buttons">buttons</button><button data-c="text">text</button><button data-c="inputs">inputs</button><button data-c="layout">layout</button><button data-c="feedback">feedback</button></div>
 <div style="display:flex;gap:8px;align-items:center"><input class="mo-input" id="q" placeholder="search…" autocomplete="off"><button class="mo-btn mo-btn--ghost" id="th">[theme]</button></div>
 </div>
-<p class="mo-live" id="n"></p>
+<p id="n"></p>
 <div class="grid" id="g"></div>
 </main>
 <script>/* mo.js — tiny helpers. window.Mo */
@@ -192,7 +188,7 @@ const btn=(label,cls='mo-btn')=>h('button',cls,label);
 add('loaders','bar','Mo.bar(el,{value:60})',el=>{const p=h('pre','mo-bar');el.append(p);let v=0;Mo.bar(p,{value:0});const t=setInterval(()=>{v=v>=100?0:v+20;Mo.bar(p,{value:v})},900);return()=>clearInterval(t)});
 add('loaders','scan','Mo.scan(el)',el=>{const p=h('pre','mo-bar');el.append(p);return Mo.scan(p)});
 add('loaders','skeleton','<span class="mo-skel">',el=>{['60%','100%','80%'].forEach(w=>{const s=h('span','mo-skel');s.style.width=w;s.style.alignSelf='flex-start';el.append(s)});el.style.alignItems='stretch'});
-add('loaders','live dot','<p class="mo-live">',el=>el.append(h('span','mo-live','online')));
+
 add('buttons','press','<button class="mo-btn">',el=>el.append(btn('Press me')));
 add('buttons','secondary','mo-btn mo-btn--ghost',el=>el.append(btn('Secondary','mo-btn mo-btn--ghost')));
 add('buttons','disabled','<button disabled>',el=>{const b=btn('Disabled');b.disabled=true;el.append(b)});
@@ -220,7 +216,7 @@ add('loaders','stepper','[x]──[•]──[ ]',el=>{const p=h('pre','mo-bar')
 add('loaders','skeleton card','.mo-skel--c',el=>{el.style.flexDirection='row';el.style.alignItems='center';const w=h('div');w.style.flex=1;['70%','45%'].forEach(x=>{const s=h('span','mo-skel');s.style.width=x;w.append(s)});el.append(h('span','mo-skel mo-skel--c'),w)});
 add('loaders','skeleton → content','Mo.decode(el,text)',el=>{const s=h('span','mo-skel'),t=h('span');s.style.width='80%';el.append(s,t);const x=setTimeout(()=>{s.remove();Mo.decode(t,'Loaded: 3 results found.',{frames:12})},1500);return()=>clearTimeout(x)});
 add('loaders','typing','.mo-typing',el=>{const t=h('span','mo-typing');t.innerHTML='<i>●</i><i>●</i><i>●</i>';el.append(t)});
-add('loaders','ping','.mo-ping',el=>{const p=h('span','mo-ping');p.style.margin='8px';el.append(p)});
+
 add('buttons','hold to confirm','Mo.hold(btn, fn)',el=>{const b=btn('','mo-btn'),s=h('span',null,'Hold to delete');b.append(s);el.append(b);Mo.hold(b,()=>Mo.decode(s,'[x] deleted',{frames:6}),900)});
 add('buttons','switch','Mo.sw(btn)',el=>{const b=h('button','mo-check');el.append(b);Mo.sw(b);const t=setTimeout(()=>b.click(),500);return()=>clearTimeout(t)});
 add('buttons','radio','( ) → (•)',el=>{const bs=['small','medium','large'].map((x,i)=>{const b=h('button','mo-check');b.append(h('span',null,i?'( )':'(•)'),' '+x);return b});el.append(...bs);const pick=b=>bs.forEach(x=>{const on=x===b,m=x.firstChild;if((m.textContent==='(•)')!==on)Mo.decode(m,on?'(•)':'( )',{frames:3})});bs.forEach(b=>b.onclick=()=>pick(b));let i=0;const t=setInterval(()=>pick(bs[++i%3]),1300);return()=>clearInterval(t)});

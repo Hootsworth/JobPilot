@@ -311,12 +311,6 @@ dialog::backdrop {
     transform: translateY(4px);
   }
 }
-@keyframes mo-ping {
-  to {
-    transform: scale(2.8);
-    opacity: 0;
-  }
-}
 @keyframes mo-wipe {
   from {
     clip-path: inset(0 100% 0 0);
@@ -337,29 +331,6 @@ dialog::backdrop {
   content: "█";
   margin-left: 2px;
   animation: mo-blink 1s steps(1) infinite;
-}
-
-.mo-live::before {
-  content: "●";
-  color: var(--success);
-  margin-right: 8px;
-  animation: mo-blink 1.4s steps(1) infinite;
-}
-
-.mo-ping {
-  position: relative;
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  background: var(--success);
-  flex-shrink: 0;
-}
-.mo-ping::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border: 1px solid var(--success);
-  animation: mo-ping 1.2s steps(4) infinite;
 }
 
 .mo-skel {

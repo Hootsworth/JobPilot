@@ -3,76 +3,135 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ThemeQuickToggle } from '@/components/theme-toggle';
-import {
-  MoBar,
-  MoCount,
-  MoDecode,
-  MoSpinner,
-  MoTicker,
-  MoTypeLoop,
-  moBurst
-} from '@/components/ui/mo';
+import { MoBar, MoDecode } from '@/components/ui/mo';
 import {
   AsciiWordmark,
-  Badge,
   Button,
   JobPilotLogo
 } from '@/components/ui/primitives';
 import { getSupabaseClient } from '@/lib/supabase';
 
-const CAPABILITIES = [
+type TuiStageId = 'parse' | 'match' | 'tailor' | 'autofill';
+
+const TUI_STAGES: Array<{
+  id: TuiStageId;
+  tabLabel: string;
+  command: string;
+  status: string;
+  lines: Array<{ prefix: string; text: string; tone?: 'ok' | 'accent' | 'warn' | 'mute' }>;
+  progress: number;
+}> = [
   {
-    code: '[01]',
-    title: 'Master Profile & India Signals',
-    description:
-      'Upload your PDF resume once. Extracts Education, Projects, Work, Technical Skills, and India-specific fields: Current/Expected CTC (LPA), notice period, CGPA, 10th/12th marks, and preferred hubs.'
+    id: 'parse',
+    tabLabel: '01.parse',
+    command: 'jobpilot parse resume.pdf --apply',
+    status: 'schema: json_resume + india_profile',
+    progress: 100,
+    lines: [
+      { prefix: '[ok]', text: 'extracted 48 lines across 1 page (layout-aware PDF.js Y-sort)', tone: 'ok' },
+      { prefix: ' ├─', text: 'education : B.Tech CSE · CGPA 8.92/10 · Class XII 95.4%', tone: 'mute' },
+      { prefix: ' ├─', text: 'work      : 2 entries (Backend Intern, Research Fellow)', tone: 'mute' },
+      { prefix: ' ├─', text: 'projects  : 3 entries with stack keywords & quantified bullets', tone: 'mute' },
+      { prefix: ' └─', text: 'skills    : 18 keywords across Languages, Backend, Databases', tone: 'mute' }
+    ]
   },
   {
-    code: '[02]',
-    title: 'Official ATS & India Job Discovery',
-    description:
-      'Ingests Greenhouse, Lever, Ashby, Workable, Adzuna India, Jooble, Remotive, Arbeitnow, and RemoteOK with cross-source deduplication and local 384-d BAAI/bge-small embeddings.'
+    id: 'match',
+    tabLabel: '02.match',
+    command: 'jobpilot match --city=Bengaluru --min-lpa=16',
+    status: 'model: BAAI/bge-small-en-v1.5 (384d)',
+    progress: 94,
+    lines: [
+      { prefix: '[01]', text: 'hard-filter : passed (Bengaluru / Hybrid · 0-2 YoE · 18-26 LPA)', tone: 'ok' },
+      { prefix: '[02]', text: 'pgvector    : cosine similarity 0.89 against active profile v3', tone: 'accent' },
+      { prefix: '[03]', text: 'llm-rerank  : 94/100 — Strong TypeScript, Fastify & Postgres fit', tone: 'ok' },
+      { prefix: '[!]', text: 'skill-gaps  : Kafka (optional nice-to-have in JD)', tone: 'warn' }
+    ]
   },
   {
-    code: '[03]',
-    title: '3-Stage Explainable Matching',
-    description:
-      'Stage 1 hard filters (LPA, experience years, work mode, city), Stage 2 pgvector cosine retrieval, and Stage 3 LLM re-ranking with match score, one-line rationale, and skill gaps.'
+    id: 'tailor',
+    tabLabel: '03.tailor',
+    command: 'jobpilot tailor --job=razorpay-sde1 --template=ats-classic',
+    status: 'verifier: deterministic + llm (0 unsupported)',
+    progress: 100,
+    lines: [
+      { prefix: '[ok]', text: 'retained 2/2 work entries and 3/3 project entries from master profile', tone: 'ok' },
+      { prefix: '[~]', text: 'reordered project bullets to foreground PostgreSQL & REST APIs', tone: 'accent' },
+      { prefix: '[ok]', text: 'immutable check : employers, dates, institutions & CGPA locked', tone: 'ok' },
+      { prefix: '[ok]', text: 'compiled single-column A4 PDF (jobpilot-v4.pdf · 0% hallucinated)', tone: 'ok' }
+    ]
   },
   {
-    code: '[04]',
-    title: 'Grounded Tailoring & Dual Verifier',
-    description:
-      'Retains your Work Experience and Projects, reorders and rephrases bullets strictly from your Master Profile, and runs a dual deterministic + LLM verifier before compiling ATS PDFs.'
-  },
-  {
-    code: '[05]',
-    title: 'Chrome MV3 Autofill with Review Gate',
-    description:
-      'Fills Greenhouse, Lever, Ashby, Workday, and opt-in Indian portals (Naukri, Internshala, LinkedIn, Foundit, Instahyre, Wellfound) with per-field confidence badges. Never auto-submits.'
-  },
-  {
-    code: '[06]',
-    title: 'Zero-Lock-In BYOK & Pipeline Tracker',
-    description:
-      'First-class OpenAI, Gemini, and Meta Llama compat (/compat/v1/) adapters with AES-256-GCM encrypted BYOK keys, plus an application tracker linking the exact PDF version used.'
+    id: 'autofill',
+    tabLabel: '04.autofill',
+    command: 'jobpilot extension fill --adapter=greenhouse --review',
+    status: 'auto-submit: disabled (human review required)',
+    progress: 88,
+    lines: [
+      { prefix: '[ok]', text: 'mapped 14 fields (Name, Email, Phone, LinkedIn, GitHub, Resume PDF)', tone: 'ok' },
+      { prefix: '[ok]', text: 'india fields : Current CTC 0 LPA (Fresher) · Expected 18 LPA · Notice 0d', tone: 'ok' },
+      { prefix: '[~]', text: 'drafted "Why Razorpay?" from Story Bank #2 (confidence: 0.91)', tone: 'accent' },
+      { prefix: '[||]', text: 'PAUSED — awaiting your click in Side Panel before filling DOM', tone: 'warn' }
+    ]
   }
 ];
 
-const TICKER_ITEMS = [
-  '[+] 0% HALLUCINATED CLAIMS',
-  '[+] LOCAL BGE-SMALL 384D VECTORS',
-  '[+] AES-256-GCM ENCRYPTED BYOK',
-  '[+] GREENHOUSE · LEVER · ASHBY · WORKDAY',
-  '[+] NAUKRI · INTERNSHALA · LINKEDIN · FOUNDIT · INSTAHYRE · WELLFOUND',
-  '[+] OPENAI · GOOGLE GEMINI · META LLAMA API',
-  '[+] TYPST & ATS-SAFE SINGLE-COLUMN PDF'
+const FEATURE_ROWS = [
+  {
+    marker: '[+]',
+    title: 'Grounded resume tailoring',
+    body: 'Selects, reorders, and rephrases bullets strictly from your Master Profile and Story Bank. A second deterministic + LLM verifier checks every employer, date, skill, and numeric metric before compiling a single-column ATS PDF.'
+  },
+  {
+    marker: '[+]',
+    title: 'Built for India & global applications',
+    body: 'First-class fields for Current & Expected CTC (in LPA or foreign currency), notice period, serving-notice status, preferred cities, relocation, fresher status, CGPA (10 or 4 scale), and 10th/12th board marks.'
+  },
+  {
+    marker: '[+]',
+    title: 'Official board ingestion + 3-stage matching',
+    body: 'Server crawlers hit only legal public JSON feeds (Greenhouse, Lever, Ashby, Workable, Adzuna India, Jooble, Remotive, Arbeitnow, RemoteOK). Jobs are deduplicated, embedded locally with bge-small, filtered, and re-ranked.'
+  },
+  {
+    marker: '[+]',
+    title: 'Chrome MV3 extension with review gate',
+    body: 'Handles controlled React/Angular inputs, custom comboboxes, shadow DOM, and PDF uploads on Greenhouse, Lever, Ashby, and Workday—plus isolated opt-in adapters for Naukri, Internshala, LinkedIn, Foundit, Instahyre, and Wellfound.'
+  },
+  {
+    marker: '[+]',
+    title: 'OpenAI, Gemini & Meta Llama BYOK',
+    body: 'Switch providers with zero code changes. Paste your own key in Settings (encrypted server-side with AES-256-GCM), fetch live model lists from the provider API, and track token latency and cost per call.'
+  },
+  {
+    marker: '[+]',
+    title: 'Application tracker & version history',
+    body: 'Track every role across Saved, Applied, Interview, Offer, and Rejected with the exact tailored resume PDF version used and follow-up date reminders.'
+  }
+];
+
+const FAQ_ITEMS = [
+  {
+    q: 'Does JobPilot ever invent skills or metrics to match a job description?',
+    a: 'No. The tailoring pipeline is restricted to your Master Profile and Story Bank. Immutable fields (company names, dates, college, CGPA) are locked to your profile, and the dual verifier flags any ungrounded number or skill before PDF export.'
+  },
+  {
+    q: 'How are Naukri, LinkedIn, and Internshala supported without violating ToS?',
+    a: 'JobPilot never scrapes non-API job portals on the server. Those sites are supported exclusively through isolated, disabled-by-default adapters in the Chrome extension that operate only on pages you are actively viewing in your own browser session.'
+  },
+  {
+    q: 'Will the Chrome extension ever submit an application automatically?',
+    a: 'Never. The extension scans the form, proposes values with per-field confidence scores, and pauses in the Side Panel. It never overwrites fields you already typed into and never clicks submit.'
+  },
+  {
+    q: 'How are my BYOK API keys stored?',
+    a: 'Your API keys are encrypted server-side using AES-256-GCM with a unique 12-byte IV and 16-byte auth tag per key. Plaintext keys are never logged or returned to the browser.'
+  }
 ];
 
 export default function LandingPage() {
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
-  const [replayKey, setReplayKey] = useState(0);
-  const [pipelineStep, setPipelineStep] = useState(4);
+  const [activeStageId, setActiveStageId] = useState<TuiStageId>('parse');
+  const [openFaqIdx, setOpenFaqIdx] = useState<number | null>(0);
 
   useEffect(() => {
     const supabase = getSupabaseClient();
@@ -82,53 +141,39 @@ export default function LandingPage() {
     });
   }, []);
 
-  useEffect(() => {
-    setPipelineStep(1);
-    const t1 = setTimeout(() => setPipelineStep(2), 420);
-    const t2 = setTimeout(() => setPipelineStep(3), 860);
-    const t3 = setTimeout(() => setPipelineStep(4), 1300);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-    };
-  }, [replayKey]);
+  const activeStage = TUI_STAGES.find((s) => s.id === activeStageId) ?? TUI_STAGES[0]!;
 
   return (
     <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex flex-col">
-      {/* Top Landing Header */}
-      <header className="sticky top-0 z-20 border-b border-[var(--hairline)] bg-[var(--canvas)]">
-        <div className="max-w-[1200px] w-full mx-auto h-16 px-4 sm:px-8 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-6">
-            <Link href="/" className="no-underline">
-              <AsciiWordmark />
-            </Link>
-            <nav
-              aria-label="Landing sections"
-              className="hidden md:flex items-center gap-5 text-xs text-[var(--mute)]"
-            >
-              <a href="#workflow" className="no-underline hover:text-[var(--ink)]">
-                Workflow
-              </a>
-              <a href="#features" className="no-underline hover:text-[var(--ink)]">
-                Features
-              </a>
-              <a href="#platforms" className="no-underline hover:text-[var(--ink)]">
-                Supported Platforms
-              </a>
-            </nav>
-          </div>
+      {/* Primary Nav — flat 56px bar per DESIGN.md */}
+      <header className="sticky top-0 z-20 h-14 border-b border-[var(--hairline)] bg-[var(--canvas)]">
+        <div className="max-w-[1040px] w-full mx-auto h-full px-4 sm:px-8 flex items-center justify-between gap-4">
+          <Link href="/" className="no-underline">
+            <AsciiWordmark />
+          </Link>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-4 sm:gap-6">
+            <a
+              href="#what-is-jobpilot"
+              className="hidden sm:inline text-sm text-[var(--mute)] hover:text-[var(--ink)] no-underline"
+            >
+              Overview
+            </a>
+            <a
+              href="#faq"
+              className="hidden sm:inline text-sm text-[var(--mute)] hover:text-[var(--ink)] no-underline"
+            >
+              FAQ
+            </a>
             <ThemeQuickToggle />
             {signedInEmail ? (
               <Link href="/jobs">
                 <Button variant="primary" size="sm">
-                  Open Workspace -&gt;
+                  Workspace -&gt;
                 </Button>
               </Link>
             ) : (
-              <>
+              <div className="flex items-center gap-2">
                 <Link href="/login?mode=signin">
                   <Button variant="secondary" size="sm">
                     Log in
@@ -136,307 +181,282 @@ export default function LandingPage() {
                 </Link>
                 <Link href="/login?mode=signup">
                   <Button variant="primary" size="sm">
-                    Sign up -&gt;
+                    Sign up
                   </Button>
                 </Link>
-              </>
+              </div>
             )}
           </div>
         </div>
       </header>
 
-      {/* Stepped Terminal Ticker from mo-gallery.html */}
-      <MoTicker items={TICKER_ITEMS} />
+      {/* Single-column reading rhythm with 96px section gaps per DESIGN.md */}
+      <main className="flex-1 max-w-[1040px] w-full mx-auto px-4 sm:px-8 py-14 sm:py-20 space-y-20 sm:space-y-24">
+        {/* 1. Editorial Hero Block */}
+        <section className="max-w-[780px] space-y-6">
+          <h1 className="text-3xl sm:text-[38px] font-bold leading-[1.45] tracking-normal text-[var(--ink)]">
+            The open-source AI job search and application assistant.
+          </h1>
 
-      <main className="flex-1 max-w-[1200px] w-full mx-auto px-4 sm:px-8 py-12 sm:py-16 space-y-20">
-        {/* Hero Section */}
-        <section className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
-          <div className="lg:col-span-7 space-y-6">
-            <div className="inline-flex items-center gap-2.5 px-3 py-1.5 border border-[var(--hairline)] bg-[var(--surface-soft)]">
-              <span className="mo-ping" aria-hidden="true" />
-              <JobPilotLogo size={18} />
-              <MoDecode
-                key={`badge-${replayKey}`}
-                text="JOBPILOT // INDIA & GLOBAL AI JOB ASSISTANT"
-                className="text-xs font-bold tracking-wider uppercase text-[var(--ink)]"
-              />
-            </div>
+          <p className="text-base text-[var(--body)] leading-[1.6]">
+            Upload your PDF resume once into a structured JSON Resume and India eligibility
+            profile. Discover and rank roles with local embeddings, compile verified single-column
+            ATS PDFs without hallucinated claims, and autofill applications with mandatory review.
+          </p>
 
-            <h1 className="text-3xl sm:text-[40px] font-bold leading-[1.3] tracking-tight text-[var(--ink)]">
-              Ship applications with{' '}
-              <span className="underline decoration-[var(--hairline-strong)] underline-offset-8">
-                <MoTypeLoop
-                  words={[
-                    'grounded ATS resumes.',
-                    'India CTC & CGPA autofill.',
-                    'zero hallucinated metrics.',
-                    'confidence-gated MV3 fill.'
-                  ]}
-                />
-              </span>
-            </h1>
-
-            <p className="text-sm sm:text-base text-[var(--body)] leading-[1.65] max-w-2xl">
-              Built for CS students and software engineers applying across India and globally.
-              Parse your PDF resume into an editable JSON Resume + India CTC/CGPA profile, rank
-              jobs with local embeddings, verify every tailored bullet against your profile, and
-              autofill forms with mandatory human review.
-            </p>
-
-            <div className="flex flex-wrap items-center gap-3 pt-2">
-              {signedInEmail ? (
-                <>
-                  <Link href="/jobs">
-                    <Button variant="primary" className="mo-arrow">
-                      Go to Job Feed
-                    </Button>
-                  </Link>
-                  <Link href="/tailor">
-                    <Button variant="secondary">Tailor Resume &amp; PDF</Button>
-                  </Link>
-                  <Link href="/tracker">
-                    <Button variant="secondary">Application Tracker</Button>
-                  </Link>
-                  <Link href="/profile">
-                    <Button variant="secondary">Master Profile</Button>
-                  </Link>
-                </>
-              ) : (
-                <>
-                  <Link href="/login?mode=signup">
-                    <Button variant="primary" className="mo-arrow">
-                      Create Free Account
-                    </Button>
-                  </Link>
-                  <Link href="/login?mode=signin">
-                    <Button variant="secondary">Log in to Workspace</Button>
-                  </Link>
-                </>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 pt-2 text-xs text-[var(--mute)]">
-              <span>[+] OpenAI · Gemini · Meta Llama API</span>
-              <span>[+] AES-256-GCM Encrypted BYOK</span>
-              <span>[+] 100% Free-Tier Stack</span>
-            </div>
-          </div>
-
-          {/* Interactive Terminal Pipeline Card with mo-gallery replay + MoBar + MoDecode */}
-          <div
-            id="workflow"
-            className="lg:col-span-5 bg-[var(--surface-dark)] text-[var(--on-dark)] border border-[var(--hairline-strong)] p-6 space-y-5"
-          >
-            <div className="flex items-center justify-between border-b border-white/15 pb-4">
-              <div className="flex items-center gap-3">
-                <JobPilotLogo size={34} />
-                <div>
-                  <p className="text-xs font-bold tracking-wider uppercase text-white">
-                    jobpilot-cli // pipeline
-                  </p>
-                  <p className="text-[11px] text-[var(--on-dark-mute)]">
-                    strict-grounding: enabled · auto-submit: false
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    setReplayKey((k) => k + 1);
-                    moBurst(e.currentTarget, 12);
-                  }}
-                  className="px-2 py-1 text-[11px] border border-white/25 text-white hover:bg-white/10 rounded-[4px] cursor-pointer"
-                >
-                  [replay]
-                </button>
-                <Badge tone="dark">v0.1.0</Badge>
-              </div>
-            </div>
-
-            <div key={replayKey} className="space-y-3 text-xs font-mono">
-              <div className="mo-pop p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-[#60a5fa] font-bold">&gt; 01. parse resume.pdf</span>
-                  <span className="text-[#30d158]">
-                    {pipelineStep >= 1 ? <MoDecode text="[OK]" frames={6} /> : <MoSpinner />}
-                  </span>
-                </div>
-                <p className="text-[var(--on-dark-mute)]">
-                  Extracted Education, Projects, Work, Skills + CGPA &amp; LPA expectations
-                </p>
-              </div>
-
-              <div
-                className="mo-pop p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1.5"
-                style={{ animationDelay: '90ms' }}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[#60a5fa] font-bold">&gt; 02. match --stages=3</span>
-                  <span className="text-[#30d158]">
-                    [<MoCount to={pipelineStep >= 2 ? 94 : 0} ms={700} />
-                    /100]
-                  </span>
-                </div>
-                <div className="text-[11px] text-[#30d158]">
-                  <MoBar value={pipelineStep >= 2 ? 94 : 15} width={18} />
-                </div>
-              </div>
-
-              <div
-                className="mo-pop p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1"
-                style={{ animationDelay: '180ms' }}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[#60a5fa] font-bold">&gt; 03. tailor --verify</span>
-                  <span className="text-[#30d158]">
-                    {pipelineStep >= 3 ? (
-                      <MoDecode text="[0 UNSUPPORTED]" frames={8} />
-                    ) : (
-                      <MoSpinner name="braille" />
-                    )}
-                  </span>
-                </div>
-                <p className="text-[var(--on-dark-mute)]">
-                  Retained all Work &amp; Projects -&gt; compiled single-column ATS PDF
-                </p>
-              </div>
-
-              <div
-                className="mo-pop p-3 bg-[var(--surface-dark-elevated)] border border-white/10 space-y-1"
-                style={{ animationDelay: '270ms' }}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[#60a5fa] font-bold">&gt; 04. autofill --review</span>
-                  <span className="text-[#ff9f0a]">
-                    {pipelineStep >= 4 ? (
-                      <MoDecode text="[PAUSED FOR USER]" frames={8} />
-                    ) : (
-                      <MoSpinner name="bounce" />
-                    )}
-                  </span>
-                </div>
-                <p className="text-[var(--on-dark-mute)]">
-                  Greenhouse / Lever / Ashby / Workday / Naukri — awaiting your click
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Core Capabilities Grid with mo-pop stagger */}
-        <section id="features" className="space-y-6 border-t border-[var(--hairline)] pt-14">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div className="space-y-1">
-              <p className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
-                // ARCHITECTURE &amp; CAPABILITIES
-              </p>
-              <h2 className="text-2xl font-bold text-[var(--ink)]">
-                Everything you need from discovery to offer letter
-              </h2>
-            </div>
-            {!signedInEmail ? (
-              <Link href="/login?mode=signup">
-                <Button variant="secondary" size="sm" className="mo-arrow">
-                  Get Started Free
-                </Button>
-              </Link>
-            ) : null}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 border border-[var(--hairline)] bg-[var(--surface-card)]">
-            {CAPABILITIES.map((item, idx) => (
-              <div
-                key={item.code}
-                style={{ animationDelay: `${idx * 65}ms` }}
-                className="mo-pop p-6 border-b border-r border-[var(--hairline)] space-y-2.5 bg-[var(--canvas)] hover:bg-[var(--surface-soft)] transition-colors"
-              >
-                <div className="text-xs font-bold text-[var(--accent-text)]">{item.code}</div>
-                <h3 className="text-base font-bold text-[var(--ink)]">{item.title}</h3>
-                <p className="text-xs text-[var(--body)] leading-relaxed">{item.description}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Supported Platforms & Providers Strip */}
-        <section
-          id="platforms"
-          className="grid grid-cols-1 lg:grid-cols-2 gap-6 border-t border-[var(--hairline)] pt-14"
-        >
-          <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-6 space-y-3">
-            <p className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]">
-              [+] Official Feeds &amp; ATS Form Autofill
-            </p>
-            <p className="text-xs text-[var(--body)] leading-relaxed">
-              Server-side discovery crawls official public JSON endpoints only (
-              <strong>
-                Greenhouse, Lever, Ashby, Workable, Adzuna India, Jooble, Remotive, Arbeitnow,
-                RemoteOK
-              </strong>
-              ). Non-API portals (
-              <strong>Naukri, Internshala, LinkedIn, Foundit, Instahyre, Wellfound</strong>) are
-              never scraped server-side—they run strictly opt-in inside your logged-in Chrome
-              extension session.
-            </p>
-          </div>
-
-          <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-6 space-y-3">
-            <p className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]">
-              [+] Provider-Agnostic AI (OpenAI · Gemini · Meta Llama)
-            </p>
-            <p className="text-xs text-[var(--body)] leading-relaxed">
-              Switch between <strong>OpenAI</strong>, <strong>Google Gemini</strong>, and{' '}
-              <strong>Meta Llama API</strong> (<code>https://api.llama.com/compat/v1/</code>) with
-              zero code changes. Bring your own API key in Settings, test live model lists with one
-              click, and inspect token/latency/cost telemetry for every call.
-            </p>
-          </div>
-        </section>
-
-        {/* Bottom CTA Banner */}
-        <section className="border border-[var(--hairline-strong)] bg-[var(--surface-card)] p-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <JobPilotLogo size={42} />
-            <div className="space-y-1">
-              <h2 className="text-lg font-bold text-[var(--ink)]">
-                Ready to launch your JobPilot workspace?
-              </h2>
-              <p className="text-xs text-[var(--body)]">
-                Sign in with Google, email/password, or passwordless magic link.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3 pt-1">
             {signedInEmail ? (
-              <Link href="/jobs">
-                <Button variant="primary" className="mo-arrow">
-                  Open Job Feed
-                </Button>
-              </Link>
+              <>
+                <Link href="/jobs">
+                  <Button variant="primary" className="mo-arrow">
+                    Open Job Feed
+                  </Button>
+                </Link>
+                <Link href="/tailor">
+                  <Button variant="secondary">Tailor Resume</Button>
+                </Link>
+                <Link href="/profile">
+                  <Button variant="secondary">Master Profile</Button>
+                </Link>
+              </>
             ) : (
               <>
-                <Link href="/login?mode=signin">
-                  <Button variant="secondary">Log in</Button>
-                </Link>
                 <Link href="/login?mode=signup">
                   <Button variant="primary" className="mo-arrow">
                     Sign up
                   </Button>
                 </Link>
+                <Link href="/login?mode=signin">
+                  <Button variant="secondary">Log in</Button>
+                </Link>
               </>
             )}
           </div>
         </section>
+
+        {/* 2. Single Full-Bleed Dark Hero TUI Mockup per DESIGN.md */}
+        <section
+          aria-label="JobPilot terminal workflow"
+          className="bg-[var(--surface-dark)] text-[var(--on-dark)] p-6 sm:p-10 rounded-none border border-[var(--hairline)] space-y-6"
+        >
+          {/* Top TUI Stage Switcher */}
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/15 pb-4">
+            <div className="flex items-center gap-3">
+              <JobPilotLogo size={28} />
+              <span className="text-sm font-bold tracking-wide text-[#fdfcfc]">
+                jobpilot // interactive session
+              </span>
+            </div>
+
+            <div
+              role="tablist"
+              aria-label="Workflow stages"
+              className="flex flex-wrap items-center gap-1.5"
+            >
+              {TUI_STAGES.map((stage) => {
+                const active = stage.id === activeStage.id;
+                return (
+                  <button
+                    key={stage.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setActiveStageId(stage.id)}
+                    className={`px-2.5 py-1 text-xs rounded-[4px] border cursor-pointer transition-colors ${
+                      active
+                        ? 'bg-[#fdfcfc] text-[#201d1d] border-[#fdfcfc] font-bold'
+                        : 'bg-transparent text-[#9a9898] border-white/15 hover:text-[#fdfcfc]'
+                    }`}
+                  >
+                    {stage.tabLabel}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* TUI Prompt Row (#302c2c surface-dark-elevated) */}
+          <div className="bg-[var(--surface-dark-elevated)] text-[var(--on-dark)] px-4 py-3 rounded-[4px] flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div className="min-w-0">
+              <span className="text-[#007aff] font-bold mr-2">&gt;</span>
+              <MoDecode
+                key={activeStage.command}
+                text={activeStage.command}
+                frames={8}
+                className="font-bold text-[#fdfcfc]"
+              />
+            </div>
+            <span className="text-xs text-[#9a9898]">{activeStage.status}</span>
+          </div>
+
+          {/* TUI Output Lines */}
+          <div key={activeStage.id} className="space-y-2 text-xs sm:text-sm leading-relaxed">
+            {activeStage.lines.map((line, i) => {
+              const color =
+                line.tone === 'ok'
+                  ? 'text-[#30d158]'
+                  : line.tone === 'accent'
+                    ? 'text-[#60a5fa]'
+                    : line.tone === 'warn'
+                      ? 'text-[#ff9f0a]'
+                      : 'text-[#9a9898]';
+              return (
+                <div
+                  key={i}
+                  style={{ animationDelay: `${i * 55}ms` }}
+                  className="mo-pop flex items-start gap-3"
+                >
+                  <span className={`shrink-0 font-bold ${color}`}>{line.prefix}</span>
+                  <span className="text-[#fdfcfc]/90">{line.text}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* TUI Footer status & keybindings */}
+          <div className="pt-4 border-t border-white/15 flex flex-wrap items-center justify-between gap-4 text-xs text-[#9a9898]">
+            <div className="flex items-center gap-3">
+              <span>confidence</span>
+              <span className="text-[#30d158]">
+                <MoBar value={activeStage.progress} width={16} />
+              </span>
+            </div>
+            <span>providers: openai | gemini | meta-llama · byok: aes-256-gcm</span>
+          </div>
+        </section>
+
+        {/* 3. Three Flat ASCII Architecture / Metric Tiles per DESIGN.md chart-tile */}
+        <section
+          aria-label="System guarantees"
+          className="grid grid-cols-1 md:grid-cols-3 border-y border-[var(--hairline)] divide-y md:divide-y-0 md:divide-x divide-[var(--hairline)]"
+        >
+          <div className="py-6 md:pr-6 space-y-2">
+            <pre className="text-xs text-[var(--mute)] leading-snug m-0 select-none">{`[Filter] ──> [BGE-384d] ──> [LLM]
+  LPA/YoE      pgvector     Score`}</pre>
+            <p className="text-sm font-bold text-[var(--ink)] pt-1">
+              Fig 1. Three-Stage Job Matching
+            </p>
+            <p className="text-sm text-[var(--body)]">
+              Hard India/global eligibility filters first, local 384-d vector retrieval second, and
+              explainable LLM re-ranking third.
+            </p>
+          </div>
+
+          <div className="py-6 md:px-6 space-y-2">
+            <pre className="text-xs text-[var(--mute)] leading-snug m-0 select-none">{`[Master] ──> [Tailor] ──> [Verify]
+  100%         Diff        0% Fake`}</pre>
+            <p className="text-sm font-bold text-[var(--ink)] pt-1">
+              Fig 2. Dual Faithfulness Verifier
+            </p>
+            <p className="text-sm text-[var(--body)]">
+              Every tailored bullet is cross-checked against your profile. Invented metrics,
+              altered dates, or ungrounded skills are rejected.
+            </p>
+          </div>
+
+          <div className="py-6 md:pl-6 space-y-2">
+            <pre className="text-xs text-[var(--mute)] leading-snug m-0 select-none">{`[Scan DOM] ──> [Draft] ──> [Pause]
+  ATS/India     Confidence   Human`}</pre>
+            <p className="text-sm font-bold text-[var(--ink)] pt-1">
+              Fig 3. Human-Reviewed Autofill
+            </p>
+            <p className="text-sm text-[var(--body)]">
+              Maps fields across Greenhouse, Lever, Ashby, Workday, and opt-in Indian portals,
+              always pausing for your review before submit.
+            </p>
+          </div>
+        </section>
+
+        {/* 4. Flat List Rows ("What is JobPilot?") — left-flush per DESIGN.md */}
+        <section id="what-is-jobpilot" className="max-w-[880px] space-y-4">
+          <h2 className="text-base font-bold text-[var(--ink)]">What is JobPilot?</h2>
+          <ul className="divide-y divide-[var(--hairline)] border-t border-b border-[var(--hairline)] list-none p-0 m-0">
+            {FEATURE_ROWS.map((row) => (
+              <li
+                key={row.title}
+                className="py-4 flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-8"
+              >
+                <span className="text-base font-bold text-[var(--ink)] sm:w-72 shrink-0">
+                  <span className="text-[var(--mute)] mr-2">{row.marker}</span>
+                  {row.title}
+                </span>
+                <span className="text-base text-[var(--body)] leading-[1.55]">{row.body}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        {/* 5. FAQ Accordion using mo-gallery stepped bracket toggle */}
+        <section id="faq" className="max-w-[880px] space-y-4">
+          <h2 className="text-base font-bold text-[var(--ink)]">FAQ</h2>
+          <div className="divide-y divide-[var(--hairline)] border-t border-b border-[var(--hairline)]">
+            {FAQ_ITEMS.map((item, idx) => {
+              const isOpen = openFaqIdx === idx;
+              return (
+                <div key={item.q} className="py-3">
+                  <button
+                    type="button"
+                    aria-expanded={isOpen}
+                    onClick={() => setOpenFaqIdx(isOpen ? null : idx)}
+                    className="w-full flex items-baseline gap-3 text-left text-base font-medium text-[var(--ink)] cursor-pointer py-1"
+                  >
+                    <span className="text-[var(--mute)] shrink-0 w-8">
+                      <MoDecode text={isOpen ? '[-]' : '[+]'} frames={4} />
+                    </span>
+                    <span>{item.q}</span>
+                  </button>
+                  {isOpen ? (
+                    <p className="mo-pop pl-11 pt-2 pb-1 text-base text-[var(--body)] leading-[1.55]">
+                      {item.a}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </section>
       </main>
 
-      <footer className="border-t border-[var(--hairline)] py-6 px-4 sm:px-8 max-w-[1200px] w-full mx-auto flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--mute)]">
-        <div className="flex items-center gap-2">
-          <JobPilotLogo size={18} />
-          <span>JobPilot // Open-Source AI Job Search &amp; Application Assistant</span>
+      {/* Minimal Footer per DESIGN.md */}
+      <footer className="border-t border-[var(--hairline)] py-8">
+        <div className="max-w-[1040px] w-full mx-auto px-4 sm:px-8 flex flex-wrap items-center justify-between gap-4 text-sm text-[var(--mute)]">
+          <div className="flex items-center gap-2.5">
+            <JobPilotLogo size={20} />
+            <span className="text-[var(--ink)] font-bold">JOBPILOT</span>
+            <span>· Free &amp; Open-Source</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-6">
+            {signedInEmail ? (
+              <Link href="/jobs" className="text-[var(--ink)] no-underline hover:underline">
+                Open Workspace -&gt;
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/login?mode=signin"
+                  className="text-[var(--ink)] no-underline hover:underline"
+                >
+                  Log in
+                </Link>
+                <Link
+                  href="/login?mode=signup"
+                  className="text-[var(--ink)] no-underline hover:underline"
+                >
+                  Sign up
+                </Link>
+              </>
+            )}
+            <a
+              href="https://github.com/Hootsworth/JobPilot"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--mute)] hover:text-[var(--ink)] no-underline"
+            >
+              GitHub
+            </a>
+          </div>
         </div>
-        <span>Built with Next.js · Fastify · Supabase pgvector · WXT MV3</span>
       </footer>
     </div>
   );
