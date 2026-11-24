@@ -45,7 +45,7 @@ const PROVIDER_META: Record<
     tagline: 'Fast Gemini Flash and Pro models',
     docsNote: 'Connect your Google AI Studio key or use a configured server key.',
     defaultEndpoint: 'https://generativelanguage.googleapis.com',
-    suggestedModelPlaceholder: 'e.g. gemini-2.5-flash'
+    suggestedModelPlaceholder: 'e.g. gemini-3.5-flash-lite'
   },
   openai: {
     shortName: 'OpenAI',
@@ -442,8 +442,8 @@ export default function SettingsPage() {
                           </div>
                           <p className="text-[11px] text-[var(--mute)] mt-1">
                             {mode === 'fast'
-                              ? 'Fast Gemini 2.5 Flash-Lite routing'
-                              : 'Frontier Gemini 2.5 Pro routing'}
+                              ? 'Fast Gemini 3.5 Flash-Lite routing'
+                              : 'Precision Gemini 3.8 Flash routing'}
                           </p>
                         </button>
                       );

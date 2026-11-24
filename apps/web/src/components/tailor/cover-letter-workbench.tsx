@@ -438,7 +438,7 @@ export function CoverLetterWorkbench({
                     value={aiMode}
                     onChange={(e) => setAiMode(e.target.value as AiQualityMode)}
                   >
-                    <option value="fast">Fast — Gemini Flash-Lite (2 credits)</option>
+                    <option value="fast">Fast — Gemini 3.5 Flash-Lite (2 credits)</option>
                     <option
                       value="precision"
                       disabled={
@@ -447,7 +447,7 @@ export function CoverLetterWorkbench({
                         !billing?.entitlements.allowedAiModes.includes('precision')
                       }
                     >
-                      Precision — Gemini Pro (6 credits · Plus)
+                      Precision — Gemini 3.8 Flash (6 credits · Plus)
                     </option>
                   </Select>
                 )}

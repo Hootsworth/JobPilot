@@ -22,9 +22,9 @@ describe('Managed AI tiers, unified credits, and entitlements', () => {
       BILLING_MODE: 'managed',
       ALLOW_DEMO_BILLING: 'true',
       MANAGED_FAST_PROVIDER: 'gemini',
-      MANAGED_FAST_MODEL: 'gemini-2.5-flash-lite',
+      MANAGED_FAST_MODEL: 'gemini-3.5-flash-lite',
       MANAGED_PRECISION_PROVIDER: 'gemini',
-      MANAGED_PRECISION_MODEL: 'gemini-2.5-pro',
+      MANAGED_PRECISION_MODEL: 'gemini-3.8-flash',
       GEMINI_API_KEY: 'managed-gemini-key',
       OPENAI_API_KEY: 'unused-openai-key',
       ...(opts?.razorpayWebhookSecret
@@ -283,7 +283,7 @@ describe('Managed AI tiers, unified credits, and entitlements', () => {
     expect(tailorRes.statusCode).toBe(201);
     expect(recordedCalls.some((c) => c.taskType === 'resume_verify')).toBe(false);
     expect(recordedCalls[0]?.apiKey).toBe('managed-gemini-key');
-    expect(recordedCalls[0]?.model).toBe('gemini-2.5-flash-lite');
+    expect(recordedCalls[0]?.model).toBe('gemini-3.5-flash-lite');
 
     const afterStatus = await app.inject({ method: 'GET', url: '/api/billing/status', headers });
     expect(afterStatus.json().totalCreditsRemaining).toBe(22);
@@ -428,7 +428,7 @@ describe('Managed AI tiers, unified credits, and entitlements', () => {
     expect(plusTailor.statusCode).toBe(201);
     expect(recordedCalls.some((c) => c.taskType === 'resume_verify')).toBe(true);
     expect(
-      recordedCalls.some((c) => c.apiKey === 'managed-gemini-key' && c.model === 'gemini-2.5-pro')
+      recordedCalls.some((c) => c.apiKey === 'managed-gemini-key' && c.model === 'gemini-3.8-flash')
     ).toBe(true);
     expect(recordedCalls.some((c) => c.provider === 'openai')).toBe(false);
 

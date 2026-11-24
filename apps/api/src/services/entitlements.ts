@@ -60,8 +60,8 @@ export class EntitlementError extends Error {
 }
 
 const DEFAULT_MANAGED_GEMINI_MODELS: Record<AiQualityMode, string> = {
-  fast: 'gemini-2.5-flash-lite',
-  precision: 'gemini-2.5-pro'
+  fast: 'gemini-3.5-flash-lite',
+  precision: 'gemini-3.8-flash'
 };
 
 export function hasManagedServerKeys(config: ApiConfig): boolean {

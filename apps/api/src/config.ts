@@ -125,9 +125,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     allowDemoBilling,
     managedFastProvider,
     managedFastModel:
-      env['MANAGED_FAST_MODEL']?.trim() || env['LLM_MODEL']?.trim() || 'gemini-2.5-flash-lite',
+      env['MANAGED_FAST_MODEL']?.trim() || env['LLM_MODEL']?.trim() || 'gemini-3.5-flash-lite',
     managedPrecisionProvider,
-    managedPrecisionModel: env['MANAGED_PRECISION_MODEL']?.trim() || 'gemini-2.5-pro',
+    managedPrecisionModel: env['MANAGED_PRECISION_MODEL']?.trim() || 'gemini-3.8-flash',
     stripeSecretKey,
     stripeWebhookSecret: env['STRIPE_WEBHOOK_SECRET']?.trim() || undefined,
     razorpayKeyId: env['RAZORPAY_KEY_ID']?.trim() || undefined,

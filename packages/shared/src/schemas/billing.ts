@@ -233,7 +233,7 @@ export const PLAN_CATALOG: Record<PlanId, PlanDefinition> = {
     },
     features: [
       '1,200 managed AI credits / month across Fast & Precision modes',
-      'Frontier Precision routing (Gemini 2.5 Pro) for complex tailoring & cover letters',
+      'Frontier Precision routing (Gemini 3.8 Flash) for complex tailoring & cover letters',
       'Unlimited Profile Variants for every target role',
       'Priority job catalog sync (1-hour cooldown vs 6-hour standard)',
       'Full Dual LLM Verifier + all 10 extension ATS/portal adapters'
