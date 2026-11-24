@@ -11,8 +11,10 @@ import {
   type ApplicationStatus,
   type CaptureExtensionJobRequest,
   type CaptureExtensionJobResponse,
+  type CoverLetterRecord,
   type CrawlRunSummary,
   type CreateManualApplicationRequest,
+  type CreateProfileVariantRequest,
   type JdRequirements,
   type JobFeedItem,
   type JobFeedQuery,
@@ -24,9 +26,11 @@ import {
   type LlmUsageSummary,
   type MasterProfile,
   type ProfileStory,
+  type ProfileVariantRecord,
   type ResumeVersionRecord,
   type SavedAnswer,
   type UpdateApplicationRequest,
+  type UpdateProfileVariantRequest,
   type UpsertSavedAnswerRequest,
   type UpsertStoryRequest,
   type VerifierReport
@@ -36,12 +40,27 @@ import type { LlmCallLogEntry } from '@jobpilot/llm';
 import type {
   AccountExportPayload,
   AuthUser,
+  CreateCoverLetterInput,
   CreateResumeVersionInput,
   DataStore,
   LlmSettingPatch,
   ProfilePatch,
-  StoredLlmSetting
+  StoredLlmSetting,
+  UpdateCoverLetterPatch
 } from './types.js';
+
+export function slugifyVariantName(name: string, existingSlugs: Set<string>): string {
+  const base =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'variant';
+  if (!existingSlugs.has(base)) return base;
+  let n = 2;
+  while (existingSlugs.has(`${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
+}
 
 export function buildUsageSummary(logs: LlmUsageLog[]): LlmUsageSummary {
   const totalCalls = logs.length;
@@ -115,6 +134,7 @@ export class MemoryDataStore implements DataStore {
         jobId: string;
         status: ApplicationStatus;
         resumeVersionId: string | null;
+        coverLetterId: string | null;
         appliedAt: string | null;
         nextFollowUpAt: string | null;
         followUpNote: string;
@@ -132,6 +152,8 @@ export class MemoryDataStore implements DataStore {
   private jobParsedReqs = new Map<string, JdRequirements>();
   private renderedPdfs = new Map<string, Buffer>();
   private resumeVersionsByUser = new Map<string, ResumeVersionRecord[]>();
+  private profileVariantsByUser = new Map<string, ProfileVariantRecord[]>();
+  private coverLettersByUser = new Map<string, CoverLetterRecord[]>();
 
   seedJobsForTest(items: JobForMatching[], sources: JobSourceStatus[] = []) {
     this.jobs = structuredClone(items);
@@ -200,6 +222,16 @@ export class MemoryDataStore implements DataStore {
       updatedAt: now
     };
     this.profiles.set(userId, next);
+    if (patch.jsonResume || patch.indiaProfile) {
+      const variants = this.profileVariantsByUser.get(userId);
+      const def = variants?.find((v) => v.isDefault);
+      if (def) {
+        def.jsonResume = structuredClone(next.jsonResume);
+        def.indiaProfile = structuredClone(next.indiaProfile);
+        def.version += 1;
+        def.updatedAt = now;
+      }
+    }
     return structuredClone(next);
   }
 
@@ -438,6 +470,7 @@ export class MemoryDataStore implements DataStore {
 
   async exportAccountData(user: AuthUser): Promise<AccountExportPayload> {
     const profile = await this.getOrCreateProfile(user);
+    const profileVariants = await this.listProfileVariants(user.id);
     const stories = await this.listStories(user.id);
     const savedAnswers = await this.listSavedAnswers(user.id);
     const settings = await this.listLlmSettings(user.id);
@@ -446,6 +479,7 @@ export class MemoryDataStore implements DataStore {
     return {
       exportedAt: new Date().toISOString(),
       profile,
+      profileVariants,
       stories,
       savedAnswers,
       llmSettings: settings.map(
@@ -456,12 +490,14 @@ export class MemoryDataStore implements DataStore {
       ),
       usageLogs: structuredClone(usageLogs),
       resumeVersions: await this.listResumeVersions(user.id),
+      coverLetters: await this.listCoverLetters(user.id),
       applications: await this.listApplications(user.id)
     };
   }
 
   async deleteAccount(userId: string): Promise<void> {
     this.profiles.delete(userId);
+    this.profileVariantsByUser.delete(userId);
     this.stories.delete(userId);
     this.answers.delete(userId);
     this.llmSettings.delete(userId);
@@ -476,6 +512,7 @@ export class MemoryDataStore implements DataStore {
     }
     this.applicationsByUser.delete(userId);
     this.resumeVersionsByUser.delete(userId);
+    this.coverLettersByUser.delete(userId);
     for (const key of this.rawFiles.keys()) {
       if (key.startsWith(`${userId}/`)) {
         this.rawFiles.delete(key);
@@ -691,6 +728,7 @@ export class MemoryDataStore implements DataStore {
       jobId: string;
       status: ApplicationStatus;
       resumeVersionId: string | null;
+      coverLetterId: string | null;
       appliedAt: string | null;
       nextFollowUpAt: string | null;
       followUpNote: string;
@@ -706,12 +744,17 @@ export class MemoryDataStore implements DataStore {
     const resume = raw.resumeVersionId
       ? resumeList.find((r) => r.id === raw.resumeVersionId) ?? null
       : null;
+    const coverList = this.coverLettersByUser.get(userId) ?? [];
+    const cover = raw.coverLetterId
+      ? coverList.find((c) => c.id === raw.coverLetterId) ?? null
+      : null;
 
     return {
       id: raw.id,
       userId: raw.userId,
       jobId: raw.jobId,
       resumeVersionId: raw.resumeVersionId,
+      coverLetterId: raw.coverLetterId,
       status: raw.status,
       appliedAt: raw.appliedAt,
       nextFollowUpAt: raw.nextFollowUpAt,
@@ -740,6 +783,17 @@ export class MemoryDataStore implements DataStore {
             verifierPassed: resume.verifierPassed,
             templateId: resume.templateId
           }
+        : null,
+      coverLetter: cover
+        ? {
+            id: cover.id,
+            versionNumber: cover.versionNumber,
+            label: cover.label,
+            companyName: cover.companyName,
+            roleTitle: cover.roleTitle,
+            tone: cover.tone,
+            verifierPassed: cover.verifierPassed
+          }
         : null
     };
   }
@@ -763,6 +817,7 @@ export class MemoryDataStore implements DataStore {
       jobId,
       status: 'saved' as const,
       resumeVersionId: null,
+      coverLetterId: null,
       appliedAt: null,
       nextFollowUpAt: null,
       followUpNote: '',
@@ -851,6 +906,158 @@ export class MemoryDataStore implements DataStore {
     return found ? structuredClone(found) : null;
   }
 
+  private ensureDefaultVariant(userId: string): ProfileVariantRecord[] {
+    let list = this.profileVariantsByUser.get(userId);
+    if (!list || list.length === 0) {
+      const base = this.profiles.get(userId);
+      const now = new Date().toISOString();
+      const def: ProfileVariantRecord = {
+        id: randomUUID(),
+        userId,
+        name: 'Default',
+        slug: 'default',
+        targetRole: base?.jsonResume.basics.label ?? '',
+        isDefault: true,
+        jsonResume: structuredClone(base?.jsonResume ?? createEmptyJsonResume()),
+        indiaProfile: structuredClone(base?.indiaProfile ?? createEmptyIndiaProfile()),
+        version: base?.activeProfileVersion ?? 1,
+        createdAt: now,
+        updatedAt: now
+      };
+      list = [def];
+      this.profileVariantsByUser.set(userId, list);
+    }
+    return list;
+  }
+
+  async listProfileVariants(userId: string): Promise<ProfileVariantRecord[]> {
+    await this.getOrCreateProfile({ id: userId });
+    const list = this.ensureDefaultVariant(userId);
+    return structuredClone(
+      [...list].sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || b.updatedAt.localeCompare(a.updatedAt))
+    );
+  }
+
+  async getProfileVariant(userId: string, variantId: string): Promise<ProfileVariantRecord | null> {
+    await this.getOrCreateProfile({ id: userId });
+    const list = this.ensureDefaultVariant(userId);
+    const found = list.find((v) => v.id === variantId);
+    return found ? structuredClone(found) : null;
+  }
+
+  async createProfileVariant(
+    userId: string,
+    input: CreateProfileVariantRequest
+  ): Promise<ProfileVariantRecord> {
+    const profile = await this.getOrCreateProfile({ id: userId });
+    const list = this.ensureDefaultVariant(userId);
+    const now = new Date().toISOString();
+    const existingSlugs = new Set(list.map((v) => v.slug));
+    const sourceVariant = input.cloneFromVariantId
+      ? list.find((v) => v.id === input.cloneFromVariantId)
+      : list.find((v) => v.isDefault);
+
+    const shouldBeDefault = Boolean(input.isDefault);
+    if (shouldBeDefault) {
+      for (const item of list) item.isDefault = false;
+    }
+
+    const created: ProfileVariantRecord = {
+      id: randomUUID(),
+      userId,
+      name: input.name,
+      slug: slugifyVariantName(input.name, existingSlugs),
+      targetRole: input.targetRole ?? sourceVariant?.targetRole ?? '',
+      isDefault: shouldBeDefault,
+      jsonResume: structuredClone(
+        input.jsonResume ?? sourceVariant?.jsonResume ?? profile.jsonResume
+      ),
+      indiaProfile: structuredClone(
+        input.indiaProfile ?? sourceVariant?.indiaProfile ?? profile.indiaProfile
+      ),
+      version: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    list.push(created);
+
+    if (shouldBeDefault) {
+      await this.updateProfile(
+        userId,
+        {
+          jsonResume: created.jsonResume,
+          indiaProfile: created.indiaProfile
+        },
+        true
+      );
+    }
+
+    return structuredClone(created);
+  }
+
+  async updateProfileVariant(
+    userId: string,
+    variantId: string,
+    patch: UpdateProfileVariantRequest
+  ): Promise<ProfileVariantRecord | null> {
+    await this.getOrCreateProfile({ id: userId });
+    const list = this.ensureDefaultVariant(userId);
+    const target = list.find((v) => v.id === variantId);
+    if (!target) return null;
+
+    const now = new Date().toISOString();
+    const existingSlugs = new Set(list.filter((v) => v.id !== variantId).map((v) => v.slug));
+    if (patch.name !== undefined) {
+      target.name = patch.name;
+      target.slug = slugifyVariantName(patch.name, existingSlugs);
+    }
+    if (patch.targetRole !== undefined) target.targetRole = patch.targetRole;
+    if (patch.jsonResume !== undefined) {
+      target.jsonResume = JsonResumeSchema.parse(patch.jsonResume);
+    }
+    if (patch.indiaProfile !== undefined) {
+      target.indiaProfile = IndiaProfileSchema.parse(patch.indiaProfile);
+    }
+    if (patch.isDefault === true) {
+      for (const item of list) item.isDefault = item.id === target.id;
+    }
+    target.version += 1;
+    target.updatedAt = now;
+
+    if (target.isDefault) {
+      const profile = this.profiles.get(userId);
+      if (profile) {
+        profile.jsonResume = structuredClone(target.jsonResume);
+        profile.indiaProfile = structuredClone(target.indiaProfile);
+        profile.activeProfileVersion += 1;
+        profile.updatedAt = now;
+      }
+    }
+
+    return structuredClone(target);
+  }
+
+  async deleteProfileVariant(userId: string, variantId: string): Promise<boolean> {
+    await this.getOrCreateProfile({ id: userId });
+    const list = this.ensureDefaultVariant(userId);
+    if (list.length <= 1) return false;
+    const idx = list.findIndex((v) => v.id === variantId);
+    if (idx === -1) return false;
+
+    const [removed] = list.splice(idx, 1);
+    if (removed?.isDefault && list.length > 0) {
+      list[0]!.isDefault = true;
+      const profile = this.profiles.get(userId);
+      if (profile) {
+        profile.jsonResume = structuredClone(list[0]!.jsonResume);
+        profile.indiaProfile = structuredClone(list[0]!.indiaProfile);
+        profile.activeProfileVersion += 1;
+        profile.updatedAt = new Date().toISOString();
+      }
+    }
+    return true;
+  }
+
   async createResumeVersion(
     userId: string,
     input: CreateResumeVersionInput
@@ -861,6 +1068,7 @@ export class MemoryDataStore implements DataStore {
       id: input.id,
       userId,
       jobId: input.jobId,
+      profileVariantId: input.profileVariantId ?? null,
       parentProfileVersion: input.parentProfileVersion,
       versionNumber: maxVersion + 1,
       label: input.label,
@@ -907,6 +1115,96 @@ export class MemoryDataStore implements DataStore {
     this.resumeVersionsByUser.set(
       userId,
       list.filter((v) => v.id !== versionId)
+    );
+    return true;
+  }
+
+  async uploadRenderedCoverLetterPdf(
+    userId: string,
+    coverLetterId: string,
+    buffer: Buffer
+  ): Promise<string> {
+    const storagePath = `${userId}/cover-letters/${coverLetterId}.pdf`;
+    this.renderedPdfs.set(storagePath, Buffer.from(buffer));
+    return storagePath;
+  }
+
+  async listCoverLetters(userId: string, jobId?: string): Promise<CoverLetterRecord[]> {
+    const list = this.coverLettersByUser.get(userId) ?? [];
+    const filtered = jobId ? list.filter((c) => c.jobId === jobId) : list;
+    return structuredClone(filtered);
+  }
+
+  async getCoverLetter(userId: string, coverLetterId: string): Promise<CoverLetterRecord | null> {
+    const list = this.coverLettersByUser.get(userId) ?? [];
+    const found = list.find((c) => c.id === coverLetterId);
+    return found ? structuredClone(found) : null;
+  }
+
+  async createCoverLetter(
+    userId: string,
+    input: CreateCoverLetterInput
+  ): Promise<CoverLetterRecord> {
+    const list = this.coverLettersByUser.get(userId) ?? [];
+    const maxVersion = list.reduce((acc, c) => Math.max(acc, c.versionNumber), 0);
+    const record: CoverLetterRecord = {
+      id: input.id,
+      userId,
+      jobId: input.jobId,
+      profileVariantId: input.profileVariantId ?? null,
+      parentProfileVersion: input.parentProfileVersion,
+      versionNumber: maxVersion + 1,
+      label: input.label,
+      companyName: input.companyName,
+      roleTitle: input.roleTitle,
+      tone: input.tone,
+      jdRequirements: structuredClone(input.jdRequirements),
+      content: structuredClone(input.content),
+      plainText: input.plainText,
+      verifierReport: structuredClone(input.verifierReport),
+      verifierPassed: input.verifierPassed,
+      typstSource: input.typstSource,
+      pdfStoragePath: input.pdfStoragePath,
+      pdfEngine: input.pdfEngine,
+      provider: input.provider,
+      model: input.model,
+      createdAt: new Date().toISOString()
+    };
+    list.unshift(record);
+    this.coverLettersByUser.set(userId, list);
+    return structuredClone(record);
+  }
+
+  async updateCoverLetter(
+    userId: string,
+    coverLetterId: string,
+    patch: UpdateCoverLetterPatch
+  ): Promise<CoverLetterRecord | null> {
+    const list = this.coverLettersByUser.get(userId) ?? [];
+    const idx = list.findIndex((c) => c.id === coverLetterId);
+    if (idx === -1) return null;
+    const prev = list[idx]!;
+    const updated: CoverLetterRecord = {
+      ...prev,
+      label: patch.label ?? prev.label,
+      content: patch.content ? structuredClone(patch.content) : prev.content,
+      plainText: patch.plainText ?? prev.plainText,
+      typstSource: patch.typstSource ?? prev.typstSource,
+      pdfStoragePath: patch.pdfStoragePath ?? prev.pdfStoragePath,
+      pdfEngine: patch.pdfEngine ?? prev.pdfEngine
+    };
+    list[idx] = updated;
+    return structuredClone(updated);
+  }
+
+  async deleteCoverLetter(userId: string, coverLetterId: string): Promise<boolean> {
+    const list = this.coverLettersByUser.get(userId) ?? [];
+    const target = list.find((c) => c.id === coverLetterId);
+    if (!target) return false;
+    if (target.pdfStoragePath) this.renderedPdfs.delete(target.pdfStoragePath);
+    this.coverLettersByUser.set(
+      userId,
+      list.filter((c) => c.id !== coverLetterId)
     );
     return true;
   }
@@ -1000,6 +1298,7 @@ export class MemoryDataStore implements DataStore {
       jobId: job.id,
       status: 'saved' as const,
       resumeVersionId: input.resumeVersionId ?? null,
+      coverLetterId: null,
       appliedAt: null,
       nextFollowUpAt: null,
       followUpNote: '',
@@ -1115,6 +1414,7 @@ export class MemoryDataStore implements DataStore {
       jobId: job.id,
       status,
       resumeVersionId: input.resumeVersionId ?? null,
+      coverLetterId: input.coverLetterId ?? null,
       appliedAt: status === 'saved' ? null : now,
       nextFollowUpAt: input.nextFollowUpAt ?? null,
       followUpNote: input.followUpNote ?? '',
@@ -1146,6 +1446,7 @@ export class MemoryDataStore implements DataStore {
     const now = new Date().toISOString();
     const prevStatus = found.status;
     const prevResumeId = found.resumeVersionId;
+    const prevCoverLetterId = found.coverLetterId;
     const prevFollowUp = found.nextFollowUpAt;
 
     if (patch.status !== undefined) {
@@ -1156,6 +1457,7 @@ export class MemoryDataStore implements DataStore {
     }
     if (patch.appliedAt !== undefined) found.appliedAt = patch.appliedAt;
     if (patch.resumeVersionId !== undefined) found.resumeVersionId = patch.resumeVersionId;
+    if (patch.coverLetterId !== undefined) found.coverLetterId = patch.coverLetterId;
     if (patch.nextFollowUpAt !== undefined) found.nextFollowUpAt = patch.nextFollowUpAt;
     if (patch.followUpNote !== undefined) found.followUpNote = patch.followUpNote;
     if (patch.salaryOffered !== undefined) found.salaryOffered = patch.salaryOffered;
@@ -1172,6 +1474,12 @@ export class MemoryDataStore implements DataStore {
       this.recordAppEvent(userId, found.id, 'resume_version_linked', {
         from: prevResumeId,
         to: patch.resumeVersionId
+      });
+    }
+    if (patch.coverLetterId !== undefined && patch.coverLetterId !== prevCoverLetterId) {
+      this.recordAppEvent(userId, found.id, 'cover_letter_linked', {
+        from: prevCoverLetterId,
+        to: patch.coverLetterId
       });
     }
     if (patch.nextFollowUpAt !== undefined && patch.nextFollowUpAt !== prevFollowUp) {

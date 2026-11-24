@@ -42,11 +42,25 @@ export const ApplicationResumeSummarySchema = z.object({
 });
 export type ApplicationResumeSummary = z.infer<typeof ApplicationResumeSummarySchema>;
 
+export const ApplicationCoverLetterSummarySchema = z.object({
+  id: z.string(),
+  versionNumber: z.number().int(),
+  label: z.string(),
+  companyName: z.string(),
+  roleTitle: z.string(),
+  tone: z.string(),
+  verifierPassed: z.boolean()
+});
+export type ApplicationCoverLetterSummary = z.infer<
+  typeof ApplicationCoverLetterSummarySchema
+>;
+
 export const ApplicationRecordSchema = z.object({
   id: z.string(),
   userId: z.string(),
   jobId: z.string(),
   resumeVersionId: z.string().nullable(),
+  coverLetterId: z.string().nullable().default(null),
   status: ApplicationStatusSchema,
   appliedAt: z.string().nullable(),
   nextFollowUpAt: z.string().nullable(),
@@ -57,7 +71,8 @@ export const ApplicationRecordSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   job: ApplicationJobSummarySchema,
-  resumeVersion: ApplicationResumeSummarySchema.nullable()
+  resumeVersion: ApplicationResumeSummarySchema.nullable(),
+  coverLetter: ApplicationCoverLetterSummarySchema.nullable().default(null)
 });
 export type ApplicationRecord = z.infer<typeof ApplicationRecordSchema>;
 
@@ -68,6 +83,7 @@ export const CreateManualApplicationRequestSchema = z.object({
   locationRaw: z.string().max(200).optional(),
   status: ApplicationStatusSchema.default('applied'),
   resumeVersionId: z.string().uuid().nullable().optional(),
+  coverLetterId: z.string().uuid().nullable().optional(),
   nextFollowUpAt: z.string().nullable().optional(),
   followUpNote: z.string().max(500).optional(),
   salaryOffered: z.string().max(120).optional(),
@@ -80,6 +96,7 @@ export type CreateManualApplicationRequest = z.infer<
 export const UpdateApplicationRequestSchema = z.object({
   status: ApplicationStatusSchema.optional(),
   resumeVersionId: z.string().uuid().nullable().optional(),
+  coverLetterId: z.string().uuid().nullable().optional(),
   appliedAt: z.string().nullable().optional(),
   nextFollowUpAt: z.string().nullable().optional(),
   followUpNote: z.string().max(500).optional(),

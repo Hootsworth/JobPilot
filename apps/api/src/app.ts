@@ -5,31 +5,52 @@ import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import {
   ApplicationStatusSchema,
+  AtsScoreRequestSchema,
   CaptureExtensionJobRequestSchema,
   CreateManualApplicationRequestSchema,
+  CreateProfileVariantRequestSchema,
   DraftAnswersRequestSchema,
   FallbackFillRequestSchema,
+  GenerateCoverLetterRequestSchema,
+  GithubImportRequestSchema,
+  JdRequirementsSchema,
   JobFeedQuerySchema,
   LlmProviderIdSchema,
   RefreshMatchesRequestSchema,
   TailorResumeRequestSchema,
   TestLlmKeyRequestSchema,
   UpdateApplicationRequestSchema,
+  UpdateCoverLetterRequestSchema,
   UpdateProfileRequestSchema,
+  UpdateProfileVariantRequestSchema,
   UpsertLlmSettingsSchema,
   UpsertSavedAnswerRequestSchema,
   UpsertStoryRequestSchema,
   type LlmProviderId,
-  type LlmSettingsItem
+  type LlmSettingsItem,
+  type MasterProfile
 } from '@jobpilot/shared';
 import { runThreeStageMatching } from '@jobpilot/ingestion';
 import { resolveMetaBaseUrl, type LlmProvider } from '@jobpilot/llm';
-import { runDualVerification, tailorResumePipeline } from '@jobpilot/tailoring';
+import {
+  formatCoverLetterPlainText,
+  generateCoverLetterPipeline,
+  generateTypstCoverLetterSource,
+  renderCoverLetterPdf,
+  runDualVerification,
+  scoreResumeAgainstJd,
+  tailorResumePipeline
+} from '@jobpilot/tailoring';
 import type { ApiConfig } from './config.js';
 import { createAuthPreHandler, type AuthVerifier } from './plugins/auth.js';
 import { encryptSecret } from './services/crypto.js';
 import { draftExtensionQuestionAnswers } from './services/extension-draft.js';
 import { runExtensionLlmFallbackFill } from './services/extension-fallback-fill.js';
+import {
+  importFromGithub,
+  ImporterError,
+  parseLinkedinPdfExport
+} from './services/importers.js';
 import {
   getEnvApiKeyForProvider,
   resolveUserLlmProvider,
@@ -40,13 +61,14 @@ import {
   parseResumePdfWithLlm,
   ResumeParseError
 } from './services/resume-parser.js';
-import type { DataStore } from './store/types.js';
+import type { AuthUser, DataStore } from './store/types.js';
 
 export interface BuildAppDeps {
   config: ApiConfig;
   store: DataStore;
   authVerifier: AuthVerifier;
   providerFactory?: LlmProviderFactory;
+  fetchImpl?: typeof fetch;
   enableLogger?: boolean;
 }
 
@@ -247,6 +269,91 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       return reply.code(422).send({ error: message });
     }
   });
+
+  // --- Profile Variants (#8) ---
+  app.get('/api/profiles/variants', { preHandler: requireAuth }, async (request) => {
+    return store.listProfileVariants(request.authUser!.id);
+  });
+
+  app.post('/api/profiles/variants', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = CreateProfileVariantRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid profile variant payload', issues: parsed.error.issues });
+    }
+    const created = await store.createProfileVariant(request.authUser!.id, parsed.data);
+    return reply.code(201).send(created);
+  });
+
+  app.put('/api/profiles/variants/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = UpdateProfileVariantRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid profile variant update', issues: parsed.error.issues });
+    }
+    const updated = await store.updateProfileVariant(request.authUser!.id, id, parsed.data);
+    if (!updated) return reply.code(404).send({ error: 'Profile variant not found.' });
+    return updated;
+  });
+
+  app.delete('/api/profiles/variants/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const variants = await store.listProfileVariants(request.authUser!.id);
+    if (variants.length <= 1) {
+      return reply.code(400).send({ error: 'Cannot delete your last remaining profile variant.' });
+    }
+    const ok = await store.deleteProfileVariant(request.authUser!.id, id);
+    if (!ok) return reply.code(404).send({ error: 'Profile variant not found.' });
+    return { ok: true };
+  });
+
+  // --- GitHub & LinkedIn PDF Profile Importers (#9) ---
+  app.post('/api/profile/import/github', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = GithubImportRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid GitHub import request', issues: parsed.error.issues });
+    }
+    try {
+      const candidate = await importFromGithub(parsed.data, deps.fetchImpl);
+      return candidate;
+    } catch (err) {
+      if (err instanceof ImporterError) {
+        return reply.code(err.statusCode).send({ error: err.message });
+      }
+      const message = err instanceof Error ? err.message : 'GitHub import failed.';
+      return reply.code(502).send({ error: message });
+    }
+  });
+
+  app.post(
+    '/api/profile/import/linkedin-pdf',
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      try {
+        const part = await request.file();
+        if (!part) {
+          return reply.code(400).send({ error: 'Please attach a LinkedIn PDF export file.' });
+        }
+        const buffer = await part.toBuffer();
+        if (buffer.byteLength > MAX_RESUME_PDF_BYTES) {
+          return reply.code(413).send({ error: 'PDF file exceeds maximum allowed size.' });
+        }
+        const candidate = await parseLinkedinPdfExport(buffer);
+        return candidate;
+      } catch (err) {
+        if (err instanceof ImporterError) {
+          return reply.code(err.statusCode).send({ error: err.message });
+        }
+        const message = err instanceof Error ? err.message : 'Failed to parse LinkedIn PDF.';
+        return reply.code(422).send({ error: message });
+      }
+    }
+  );
 
   // --- Story Bank ---
   app.get('/api/stories', { preHandler: requireAuth }, async (request) => {
@@ -628,10 +735,12 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
     }
 
     const user = request.authUser!;
-    const [profile, stories] = await Promise.all([
-      store.getOrCreateProfile(user),
-      store.listStories(user.id)
-    ]);
+    const effective = await resolveEffectiveProfile(user, parsed.data.profileVariantId);
+    if (!effective) {
+      return reply.code(404).send({ error: 'Selected profile variant not found.' });
+    }
+    const stories = await store.listStories(user.id);
+    const { profile, variantId } = effective;
 
     let targetTitle = parsed.data.customJob?.title ?? '';
     let targetCompany = parsed.data.customJob?.companyName ?? '';
@@ -686,6 +795,7 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       const version = await store.createResumeVersion(user.id, {
         id: versionId,
         jobId,
+        profileVariantId: variantId,
         parentProfileVersion: profile.activeProfileVersion,
         label,
         jdRequirements: result.jdRequirements,
@@ -733,13 +843,79 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
     if (!pdfBuf) {
       return reply.code(404).send({ error: 'Rendered PDF file missing from storage.' });
     }
+    const { disposition } = request.query as { disposition?: string };
     const safeFilename = version.label.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 60) || 'resume';
+    const contentDispositionType = disposition === 'inline' ? 'inline' : 'attachment';
     reply.header('Content-Type', 'application/pdf');
     reply.header(
       'Content-Disposition',
-      `attachment; filename="jobpilot-v${version.versionNumber}-${safeFilename}.pdf"`
+      `${contentDispositionType}; filename="jobpilot-v${version.versionNumber}-${safeFilename}.pdf"`
     );
     return reply.send(pdfBuf);
+  });
+
+  app.post('/api/resumes/ats-score', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = AtsScoreRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid ATS score request', issues: parsed.error.issues });
+    }
+
+    const user = request.authUser!;
+    let targetResume = parsed.data.jsonResume;
+    let targetIndiaProfile = undefined;
+    let versionJdRequirements = undefined;
+
+    if (parsed.data.resumeVersionId) {
+      const version = await store.getResumeVersion(user.id, parsed.data.resumeVersionId);
+      if (!version) return reply.code(404).send({ error: 'Resume version not found.' });
+      targetResume = version.tailoredJsonResume;
+      versionJdRequirements = version.jdRequirements;
+      const base = await store.getOrCreateProfile(user);
+      targetIndiaProfile = base.indiaProfile;
+    } else if (!targetResume) {
+      const effective = await resolveEffectiveProfile(user, parsed.data.profileVariantId);
+      if (!effective) {
+        return reply.code(404).send({ error: 'Profile variant not found.' });
+      }
+      targetResume = effective.profile.jsonResume;
+      targetIndiaProfile = effective.profile.indiaProfile;
+    }
+
+    let jdRequirements = versionJdRequirements;
+    let jdText = parsed.data.customJob?.description ?? '';
+    let title = parsed.data.customJob?.title ?? '';
+    let companyName = parsed.data.customJob?.companyName ?? '';
+
+    if (parsed.data.jobId) {
+      const job = await store.getJobForTailoring(user.id, parsed.data.jobId);
+      if (!job) return reply.code(404).send({ error: 'Target job not found.' });
+      title = job.title;
+      companyName = job.companyName;
+      jdText = job.descriptionClean;
+      const cached = JdRequirementsSchema.safeParse(job.parsedRequirements);
+      if (
+        cached.success &&
+        (cached.data.mustHaveSkills.length > 0 || cached.data.keywords.length > 0)
+      ) {
+        jdRequirements = cached.data;
+      } else {
+        jdRequirements = undefined;
+      }
+    } else if (parsed.data.customJob) {
+      jdRequirements = undefined;
+    }
+
+    const report = scoreResumeAgainstJd({
+      resume: targetResume,
+      indiaProfile: targetIndiaProfile,
+      jdRequirements,
+      jdText,
+      title,
+      companyName
+    });
+    return report;
   });
 
   app.get('/api/resumes/versions/:id/typst', { preHandler: requireAuth }, async (request, reply) => {
@@ -795,6 +971,238 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
     const { id } = request.params as { id: string };
     const ok = await store.deleteResumeVersion(request.authUser!.id, id);
     if (!ok) return reply.code(404).send({ error: 'Resume version not found.' });
+    return { ok: true };
+  });
+
+  // --- Grounded Cover Letters (#1) ---
+  app.post('/api/cover-letters/generate', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = GenerateCoverLetterRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid cover letter request', issues: parsed.error.issues });
+    }
+
+    const user = request.authUser!;
+    const effective = await resolveEffectiveProfile(user, parsed.data.profileVariantId);
+    if (!effective) {
+      return reply.code(404).send({ error: 'Selected profile variant not found.' });
+    }
+    const { profile, variantId } = effective;
+    const stories = await store.listStories(user.id);
+
+    let roleTitle = parsed.data.customJob?.title ?? '';
+    let companyName = parsed.data.customJob?.companyName ?? '';
+    let jdDescription = parsed.data.customJob?.description ?? '';
+    let cachedJdRequirements = undefined;
+    const jobId = parsed.data.jobId ?? null;
+
+    if (jobId) {
+      const job = await store.getJobForTailoring(user.id, jobId);
+      if (!job) return reply.code(404).send({ error: 'Target job not found.' });
+      roleTitle = job.title;
+      companyName = job.companyName;
+      jdDescription = job.descriptionClean;
+      const parsedReqs = JdRequirementsSchema.safeParse(job.parsedRequirements);
+      if (parsedReqs.success) cachedJdRequirements = parsedReqs.data;
+    }
+
+    let llmProvider: LlmProvider | null = null;
+    let providerId: LlmProviderId | null = null;
+    try {
+      const resolved = await resolveUserLlmProvider({
+        userId: user.id,
+        config,
+        store,
+        providerFactory
+      });
+      llmProvider = resolved.provider;
+      providerId = resolved.providerId;
+    } catch {
+      llmProvider = null;
+    }
+
+    const generated = await generateCoverLetterPipeline({
+      masterProfile: profile,
+      stories,
+      companyName,
+      roleTitle,
+      jdDescription,
+      cachedJdRequirements,
+      tone: parsed.data.tone,
+      customInstructions: parsed.data.customInstructions,
+      autoRepairFlagged: parsed.data.autoRepairFlagged,
+      llmProvider
+    });
+
+    if (jobId && llmProvider && !cachedJdRequirements) {
+      await store.saveJobParsedRequirements(jobId, generated.jdRequirements);
+    }
+
+    const coverLetterId = randomUUID();
+    const pdfStoragePath = await store.uploadRenderedCoverLetterPdf(
+      user.id,
+      coverLetterId,
+      generated.pdfBuffer
+    );
+    const label = parsed.data.label ?? `${companyName} — ${roleTitle} Cover Letter`.slice(0, 150);
+
+    const record = await store.createCoverLetter(user.id, {
+      id: coverLetterId,
+      jobId,
+      profileVariantId: variantId,
+      parentProfileVersion: profile.activeProfileVersion,
+      label,
+      companyName,
+      roleTitle,
+      tone: parsed.data.tone,
+      jdRequirements: generated.jdRequirements,
+      content: generated.content,
+      plainText: generated.plainText,
+      verifierReport: generated.verifierReport,
+      verifierPassed: generated.verifierReport.passed,
+      typstSource: generated.typstSource,
+      pdfStoragePath,
+      pdfEngine: generated.pdfEngine,
+      provider: generated.usedLlm ? providerId : null,
+      model: null
+    });
+
+    return reply.code(201).send(record);
+  });
+
+  app.get('/api/cover-letters', { preHandler: requireAuth }, async (request) => {
+    const query = request.query as { jobId?: string };
+    return store.listCoverLetters(request.authUser!.id, query.jobId);
+  });
+
+  app.get('/api/cover-letters/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const found = await store.getCoverLetter(request.authUser!.id, id);
+    if (!found) return reply.code(404).send({ error: 'Cover letter not found.' });
+    return found;
+  });
+
+  app.patch('/api/cover-letters/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = UpdateCoverLetterRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid cover letter update', issues: parsed.error.issues });
+    }
+    const user = request.authUser!;
+    const existing = await store.getCoverLetter(user.id, id);
+    if (!existing) return reply.code(404).send({ error: 'Cover letter not found.' });
+
+    const profile = await store.getOrCreateProfile(user);
+    let nextContent = parsed.data.content ?? existing.content;
+    if (!parsed.data.content && parsed.data.plainText) {
+      const blocks = parsed.data.plainText
+        .split(/\n{2,}/)
+        .map((b) => b.trim())
+        .filter((b) => Boolean(b) && !/^Re:/i.test(b) && !/^Sincerely,?$/i.test(b));
+      const salutation =
+        blocks.find((b) => /^Dear /i.test(b)) ?? existing.content.salutation;
+      const trimmed = blocks.filter(
+        (b) => b !== salutation && b !== existing.content.signature
+      );
+      if (trimmed.length >= 2) {
+        nextContent = {
+          ...existing.content,
+          salutation,
+          openingHook: trimmed[0]!,
+          bodyParagraphs: trimmed.slice(1, -1),
+          closing: trimmed[trimmed.length - 1]!
+        };
+      } else if (trimmed.length === 1) {
+        nextContent = {
+          ...existing.content,
+          salutation,
+          openingHook: trimmed[0]!,
+          bodyParagraphs: [],
+          closing: existing.content.closing
+        };
+      }
+    }
+
+    const nextPlainText =
+      parsed.data.plainText ??
+      formatCoverLetterPlainText(nextContent, existing.companyName, existing.roleTitle);
+
+    const typstSource = generateTypstCoverLetterSource({
+      basics: profile.jsonResume.basics,
+      companyName: existing.companyName,
+      roleTitle: existing.roleTitle,
+      content: nextContent
+    });
+    const pdf = await renderCoverLetterPdf({
+      typstSource,
+      basics: profile.jsonResume.basics,
+      companyName: existing.companyName,
+      roleTitle: existing.roleTitle,
+      content: nextContent
+    });
+    const pdfStoragePath = await store.uploadRenderedCoverLetterPdf(
+      user.id,
+      id,
+      pdf.pdfBuffer
+    );
+
+    const updated = await store.updateCoverLetter(user.id, id, {
+      label: parsed.data.label,
+      content: nextContent,
+      plainText: nextPlainText,
+      typstSource,
+      pdfStoragePath,
+      pdfEngine: pdf.engine
+    });
+    return updated ?? existing;
+  });
+
+  app.get('/api/cover-letters/:id/pdf', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { disposition } = request.query as { disposition?: string };
+    const item = await store.getCoverLetter(request.authUser!.id, id);
+    if (!item || !item.pdfStoragePath) {
+      return reply.code(404).send({ error: 'Rendered PDF not found for this cover letter.' });
+    }
+    const pdfBuf = await store.downloadRenderedResumePdf(
+      request.authUser!.id,
+      item.pdfStoragePath
+    );
+    if (!pdfBuf) {
+      return reply.code(404).send({ error: 'Rendered cover letter PDF missing from storage.' });
+    }
+    const safeFilename =
+      item.label.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 60) || 'cover-letter';
+    const contentDispositionType = disposition === 'inline' ? 'inline' : 'attachment';
+    reply.header('Content-Type', 'application/pdf');
+    reply.header(
+      'Content-Disposition',
+      `${contentDispositionType}; filename="jobpilot-cl-v${item.versionNumber}-${safeFilename}.pdf"`
+    );
+    return reply.send(pdfBuf);
+  });
+
+  app.get('/api/cover-letters/:id/typst', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const item = await store.getCoverLetter(request.authUser!.id, id);
+    if (!item || !item.typstSource) {
+      return reply.code(404).send({ error: 'Typst source not found for this cover letter.' });
+    }
+    reply.header('Content-Type', 'text/plain; charset=utf-8');
+    reply.header(
+      'Content-Disposition',
+      `attachment; filename="jobpilot-cl-v${item.versionNumber}.typ"`
+    );
+    return reply.send(item.typstSource);
+  });
+
+  app.delete('/api/cover-letters/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const ok = await store.deleteCoverLetter(request.authUser!.id, id);
+    if (!ok) return reply.code(404).send({ error: 'Cover letter not found.' });
     return { ok: true };
   });
 
@@ -860,6 +1268,27 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       llmProvider
     });
   });
+
+  async function resolveEffectiveProfile(
+    user: AuthUser,
+    profileVariantId?: string
+  ): Promise<{ profile: MasterProfile; variantId: string | null } | null> {
+    const base = await store.getOrCreateProfile(user);
+    if (!profileVariantId) {
+      return { profile: base, variantId: null };
+    }
+    const variant = await store.getProfileVariant(user.id, profileVariantId);
+    if (!variant) return null;
+    return {
+      variantId: variant.id,
+      profile: {
+        ...base,
+        activeProfileVersion: variant.version,
+        jsonResume: variant.jsonResume,
+        indiaProfile: variant.indiaProfile
+      }
+    };
+  }
 
   async function tryResolveOptionalLlm(userId: string): Promise<LlmProvider | null> {
     try {

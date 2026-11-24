@@ -4,11 +4,18 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   INDIAN_TECH_HUBS,
   JsonResumeSchema,
+  type ImportPreviewCandidate,
   type IndiaProfile,
   type JsonResume,
-  type MasterProfile
+  type MasterProfile,
+  type ProfileVariantRecord
 } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
+import {
+  ProfileImportPanel,
+  ProfileVariantBar,
+  type ImportSelectionState
+} from '@/components/profile/variant-and-import-bar';
 import { MoBar, MoSpinner, moToast } from '@/components/ui/mo';
 import {
   AlertBanner,
@@ -55,24 +62,34 @@ export default function ProfilePage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [variantBusy, setVariantBusy] = useState(false);
   const [uploadingPdf, setUploadingPdf] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [variants, setVariants] = useState<ProfileVariantRecord[]>([]);
+  const [activeVariantId, setActiveVariantId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  const hydrateFromProfile = (p: MasterProfile) => {
+  const hydrateFromProfile = (p: MasterProfile, overrideVariant?: ProfileVariantRecord | null) => {
     setProfile(p);
-    setFullName(p.fullName ?? p.jsonResume.basics.name ?? '');
-    setEmail(p.email ?? p.jsonResume.basics.email ?? '');
-    setPhone(p.phone ?? p.jsonResume.basics.phone ?? '');
-    setResume(p.jsonResume);
-    setIndia(p.indiaProfile);
-    setRawJsonText(JSON.stringify(p.jsonResume, null, 2));
+    const activeResume = overrideVariant?.jsonResume ?? p.jsonResume;
+    const activeIndia = overrideVariant?.indiaProfile ?? p.indiaProfile;
+    setFullName(p.fullName ?? activeResume.basics.name ?? '');
+    setEmail(p.email ?? activeResume.basics.email ?? '');
+    setPhone(p.phone ?? activeResume.basics.phone ?? '');
+    setResume(activeResume);
+    setIndia(activeIndia);
+    setRawJsonText(JSON.stringify(activeResume, null, 2));
   };
 
   useEffect(() => {
-    api
-      .getProfile()
-      .then(hydrateFromProfile)
+    Promise.all([api.getProfile(), api.listProfileVariants()])
+      .then(([p, vList]) => {
+        setVariants(vList);
+        const def = vList.find((v) => v.isDefault) ?? vList[0] ?? null;
+        setActiveVariantId(def?.id ?? null);
+        hydrateFromProfile(p, def);
+      })
       .catch((err) => setErrorMsg(err instanceof Error ? err.message : 'Failed to load profile.'))
       .finally(() => setLoading(false));
   }, []);
@@ -116,33 +133,179 @@ export default function ProfilePage() {
       }
     }
 
+    const activeVariant = variants.find((v) => v.id === activeVariantId) ?? null;
+    const mergedResumePayload: JsonResume = {
+      ...finalResume,
+      basics: {
+        ...finalResume.basics,
+        name: fullName.trim() || finalResume.basics.name,
+        email: email.trim() || finalResume.basics.email,
+        phone: phone.trim() || finalResume.basics.phone
+      }
+    };
+
     try {
-      const updated = await api.updateProfile({
-        fullName: fullName.trim() || undefined,
-        email: email.trim(),
-        phone: phone.trim(),
-        jsonResume: {
-          ...finalResume,
-          basics: {
-            ...finalResume.basics,
-            name: fullName.trim() || finalResume.basics.name,
-            email: email.trim() || finalResume.basics.email,
-            phone: phone.trim() || finalResume.basics.phone
-          }
-        },
-        indiaProfile: india
-      });
-      hydrateFromProfile(updated);
+      if (activeVariant && !activeVariant.isDefault) {
+        const updatedVariant = await api.updateProfileVariant(activeVariant.id, {
+          jsonResume: mergedResumePayload,
+          indiaProfile: india
+        });
+        setVariants((prev) =>
+          prev.map((v) => (v.id === updatedVariant.id ? updatedVariant : v))
+        );
+        setResume(updatedVariant.jsonResume);
+        setIndia(updatedVariant.indiaProfile);
+        setRawJsonText(JSON.stringify(updatedVariant.jsonResume, null, 2));
+        setSuccessMsg(`Saved variant "${updatedVariant.name}" (v${updatedVariant.version}).`);
+        moToast(`[ok] Saved variant "${updatedVariant.name}"`);
+      } else {
+        const updated = await api.updateProfile({
+          fullName: fullName.trim() || undefined,
+          email: email.trim(),
+          phone: phone.trim(),
+          jsonResume: mergedResumePayload,
+          indiaProfile: india
+        });
+        const refreshedVariants = await api.listProfileVariants();
+        setVariants(refreshedVariants);
+        const def = refreshedVariants.find((v) => v.id === activeVariantId) ?? refreshedVariants[0] ?? null;
+        hydrateFromProfile(updated, def);
+        setSuccessMsg(`Saved Master Profile (v${updated.activeProfileVersion}).`);
+        moToast(`[ok] Saved Master Profile v${updated.activeProfileVersion}`);
+      }
       setEditingBasics(false);
       setEditingWorkId(null);
       setEditingProjectId(null);
       setEditingEduId(null);
-      setSuccessMsg(`Saved Master Profile (v${updated.activeProfileVersion}).`);
-      moToast(`[ok] Saved Master Profile v${updated.activeProfileVersion}`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save profile.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSelectVariant = (variant: ProfileVariantRecord) => {
+    setActiveVariantId(variant.id);
+    setResume(variant.jsonResume);
+    setIndia(variant.indiaProfile);
+    setRawJsonText(JSON.stringify(variant.jsonResume, null, 2));
+    setEditingWorkId(null);
+    setEditingProjectId(null);
+    setEditingEduId(null);
+    moToast(`Switched to variant "${variant.name}"`);
+  };
+
+  const handleCreateVariant = async (input: {
+    name: string;
+    targetRole: string;
+    cloneFromVariantId?: string;
+  }) => {
+    setVariantBusy(true);
+    setErrorMsg(null);
+    try {
+      const created = await api.createProfileVariant({ ...input, isDefault: false });
+      const nextList = await api.listProfileVariants();
+      setVariants(nextList);
+      handleSelectVariant(created);
+      setSuccessMsg(`Created variant "${created.name}".`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to create variant.');
+    } finally {
+      setVariantBusy(false);
+    }
+  };
+
+  const handleSetDefaultVariant = async (variantId: string) => {
+    setVariantBusy(true);
+    setErrorMsg(null);
+    try {
+      await api.updateProfileVariant(variantId, { isDefault: true });
+      const [p, vList] = await Promise.all([api.getProfile(), api.listProfileVariants()]);
+      setVariants(vList);
+      const next = vList.find((v) => v.id === variantId) ?? vList[0] ?? null;
+      setActiveVariantId(next?.id ?? null);
+      hydrateFromProfile(p, next);
+      moToast('[ok] Updated active default variant');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to set active default.');
+    } finally {
+      setVariantBusy(false);
+    }
+  };
+
+  const handleDeleteVariant = async (variantId: string) => {
+    setVariantBusy(true);
+    setErrorMsg(null);
+    try {
+      await api.deleteProfileVariant(variantId);
+      const [p, vList] = await Promise.all([api.getProfile(), api.listProfileVariants()]);
+      setVariants(vList);
+      const next = vList.find((v) => v.isDefault) ?? vList[0] ?? null;
+      setActiveVariantId(next?.id ?? null);
+      hydrateFromProfile(p, next);
+      moToast('Variant deleted');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to delete variant.');
+    } finally {
+      setVariantBusy(false);
+    }
+  };
+
+  const handleMergeImportedCandidate = async (
+    candidate: ImportPreviewCandidate,
+    selection: ImportSelectionState
+  ) => {
+    if (!resume || !india) return;
+    const dedupeAppend = <T,>(existing: T[], incoming: T[], keyFn: (x: T) => string): T[] => {
+      const seen = new Set(existing.map((x) => keyFn(x).toLowerCase().trim()));
+      const out = [...existing];
+      for (const item of incoming) {
+        const k = keyFn(item).toLowerCase().trim();
+        if (k && !seen.has(k)) {
+          seen.add(k);
+          out.push(item);
+        }
+      }
+      return out;
+    };
+
+    const nextBasics = { ...resume.basics };
+    if (selection.includeBasics) {
+      if (candidate.headline && !nextBasics.label) nextBasics.label = candidate.headline;
+      if (candidate.summary && !nextBasics.summary) nextBasics.summary = candidate.summary;
+      if (candidate.githubUrl && !nextBasics.url) nextBasics.url = candidate.githubUrl;
+    }
+
+    const pickedWork = candidate.work.filter((w) => selection.selectedWorkIds.has(w.id));
+    const pickedProjects = candidate.projects.filter((p) => selection.selectedProjectIds.has(p.id));
+    const pickedEdu = candidate.education.filter((e) => selection.selectedEduIds.has(e.id));
+    const pickedSkills = candidate.skills.filter((s) => selection.selectedSkillNames.has(s.name));
+    const pickedCerts = candidate.certificates.filter((c) => selection.selectedCertNames.has(c.name));
+    const pickedLangs = candidate.languages.filter((l) => selection.selectedLangNames.has(l.language));
+
+    const merged: JsonResume = {
+      ...resume,
+      basics: nextBasics,
+      work: dedupeAppend(resume.work, pickedWork, (w) => `${w.name}|${w.position}`),
+      projects: dedupeAppend(resume.projects, pickedProjects, (p) => p.name),
+      education: dedupeAppend(resume.education, pickedEdu, (e) => e.institution),
+      skills: dedupeAppend(resume.skills, pickedSkills, (s) => s.name),
+      certificates: dedupeAppend(resume.certificates, pickedCerts, (c) => c.name),
+      languages: dedupeAppend(resume.languages, pickedLangs, (l) => l.language)
+    };
+
+    syncResume(merged);
+    if (activeVariantId) {
+      const updatedVariant = await api.updateProfileVariant(activeVariantId, {
+        jsonResume: merged,
+        indiaProfile: india
+      });
+      setVariants((prev) => prev.map((v) => (v.id === updatedVariant.id ? updatedVariant : v)));
+      setImportOpen(false);
+      setSuccessMsg(
+        `Merged ${pickedProjects.length} project(s), ${pickedWork.length} role(s), and ${pickedSkills.length} skill group(s) from ${candidate.sourceLabel}.`
+      );
+      moToast(`[ok] Merged ${candidate.source.toUpperCase()} items into variant`);
     }
   };
 
@@ -1486,6 +1649,14 @@ export default function ProfilePage() {
             )}
           </Button>
           <Button
+            variant={importOpen ? 'primary' : 'secondary'}
+            size="sm"
+            disabled={loading}
+            onClick={() => setImportOpen((prev) => !prev)}
+          >
+            [↓] GitHub / LinkedIn Import
+          </Button>
+          <Button
             variant="primary"
             size="sm"
             onClick={() => void handleSaveProfile()}
@@ -1507,6 +1678,27 @@ export default function ProfilePage() {
         </div>
       ) : (
         <div className="space-y-6">
+          {/* Multi-Profile Variants Switcher (#8) */}
+          {variants.length > 0 ? (
+            <ProfileVariantBar
+              variants={variants}
+              activeVariantId={activeVariantId}
+              busy={variantBusy || saving}
+              onSelectVariant={handleSelectVariant}
+              onCreateVariant={handleCreateVariant}
+              onSetDefault={handleSetDefaultVariant}
+              onDeleteVariant={handleDeleteVariant}
+            />
+          ) : null}
+
+          {/* GitHub & LinkedIn PDF Import Studio (#9) */}
+          {importOpen ? (
+            <ProfileImportPanel
+              onClose={() => setImportOpen(false)}
+              onMergeCandidate={handleMergeImportedCandidate}
+            />
+          ) : null}
+
           {/* Candidate Dossier Header Card */}
           {renderBasicsBlock()}
 

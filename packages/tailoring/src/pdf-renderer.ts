@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import type { IndiaProfile, JsonResume, ResumeTemplateId } from '@jobpilot/shared';
+import type { CoverLetterContent, IndiaProfile, JsonResume, ResumeTemplateId } from '@jobpilot/shared';
 
 interface PdfTextLine {
   text: string;
@@ -8,6 +8,101 @@ interface PdfTextLine {
   x: number;
   leading: number;
   ruleAfter?: boolean;
+}
+
+function paginateAndSerializePdf(
+  lines: PdfTextLine[],
+  options: {
+    marginX: number;
+    pageWidth?: number;
+    pageHeight?: number;
+    fontFamily?: 'sans' | 'serif';
+    showPageNumbers?: boolean;
+  }
+): { pdfBuffer: Buffer; pageCount: number } {
+  const pageWidth = options.pageWidth ?? 595.28;
+  const pageHeight = options.pageHeight ?? 841.89;
+  const marginX = options.marginX;
+  const pagesContent: string[][] = [[]];
+  let cursorY = pageHeight - 48;
+  const minY = options.showPageNumbers ? 48 : 42;
+
+  for (const item of lines) {
+    if (cursorY - item.leading < minY) {
+      pagesContent.push([]);
+      cursorY = pageHeight - 48;
+    }
+    const page = pagesContent[pagesContent.length - 1]!;
+    if (item.text) {
+      page.push(
+        `BT /${item.font} ${item.size} Tf 1 0 0 1 ${item.x.toFixed(2)} ${cursorY.toFixed(2)} Tm (${escapePdfLiteral(item.text)}) Tj ET`
+      );
+    }
+    if (item.ruleAfter) {
+      const ruleY = (cursorY - 3.5).toFixed(2);
+      page.push(
+        `0.5 w ${marginX.toFixed(2)} ${ruleY} m ${(pageWidth - marginX).toFixed(2)} ${ruleY} l S`
+      );
+      cursorY -= 5;
+    }
+    cursorY -= item.leading;
+  }
+
+  const pageCount = pagesContent.length;
+  if (options.showPageNumbers) {
+    for (let i = 0; i < pageCount; i++) {
+      pagesContent[i]!.push(
+        `BT /F1 8.5 Tf 1 0 0 1 ${(pageWidth - marginX - 42).toFixed(2)} 24.00 Tm (Page ${i + 1} / ${pageCount}) Tj ET`
+      );
+    }
+  }
+
+  const baseFontRegular = options.fontFamily === 'serif' ? '/Times-Roman' : '/Helvetica';
+  const baseFontBold = options.fontFamily === 'serif' ? '/Times-Bold' : '/Helvetica-Bold';
+  const objects: string[] = [];
+  const pageObjectIds: number[] = [];
+  const nextObjStart = 5;
+
+  for (let i = 0; i < pageCount; i++) {
+    pageObjectIds.push(nextObjStart + i * 2);
+  }
+
+  objects.push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj');
+  objects.push(
+    `2 0 obj\n<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageCount} >>\nendobj`
+  );
+  objects.push(`3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont ${baseFontRegular} >>\nendobj`);
+  objects.push(`4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont ${baseFontBold} >>\nendobj`);
+
+  for (let i = 0; i < pageCount; i++) {
+    const pageObjId = nextObjStart + i * 2;
+    const contentObjId = pageObjId + 1;
+    const streamData = pagesContent[i]!.join('\n');
+    objects.push(
+      `${pageObjId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObjId} 0 R >>\nendobj`
+    );
+    objects.push(
+      `${contentObjId} 0 obj\n<< /Length ${Buffer.byteLength(streamData, 'latin1')} >>\nstream\n${streamData}\nendstream\nendobj`
+    );
+  }
+
+  let pdfStr = '%PDF-1.4\n';
+  const offsets: number[] = [0];
+  for (const obj of objects) {
+    offsets.push(Buffer.byteLength(pdfStr, 'latin1'));
+    pdfStr += `${obj}\n`;
+  }
+  const xrefPos = Buffer.byteLength(pdfStr, 'latin1');
+  pdfStr += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i <= objects.length; i++) {
+    pdfStr += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  }
+  pdfStr += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
+
+  return {
+    pdfBuffer: Buffer.from(pdfStr, 'latin1'),
+    pageCount
+  };
 }
 
 function sanitizePdfText(input: string): string {
@@ -57,18 +152,20 @@ export function renderBuiltinAtsPdf(
   templateId: ResumeTemplateId = 'ats-classic'
 ): { pdfBuffer: Buffer; pageCount: number } {
   const isCompact = templateId === 'ats-compact';
-  const marginX = isCompact ? 38 : 46;
+  const isDetailed = templateId === 'ats-detailed';
+  const isExecutive = templateId === 'ats-executive';
+  const marginX = isCompact ? 38 : isExecutive ? 52 : isDetailed ? 42 : 46;
   const pageWidth = 595.28; // A4
   const pageHeight = 841.89;
-  const bodySize = isCompact ? 9.5 : 10;
-  const maxBodyChars = isCompact ? 94 : 88;
+  const bodySize = isCompact ? 9.5 : isExecutive ? 10.2 : 10;
+  const maxBodyChars = isCompact ? 94 : isExecutive ? 82 : 90;
 
   const lines: PdfTextLine[] = [];
 
   lines.push({
     text: resume.basics.name || 'Candidate Name',
     font: 'F2',
-    size: 16,
+    size: isExecutive ? 17 : 16,
     x: marginX,
     leading: 20
   });
@@ -113,7 +210,7 @@ export function renderBuiltinAtsPdf(
   };
 
   if (resume.basics.summary?.trim()) {
-    pushHeading('Summary');
+    pushHeading(isExecutive ? 'Executive Summary' : 'Summary');
     for (const line of wrapText(resume.basics.summary, maxBodyChars)) {
       lines.push({ text: line, font: 'F1', size: bodySize, x: marginX, leading: bodySize + 3.5 });
     }
@@ -161,7 +258,11 @@ export function renderBuiltinAtsPdf(
     pushHeading('Projects');
     for (const p of resume.projects) {
       const stack = (p.keywords ?? []).length > 0 ? ` (${p.keywords!.join(', ')})` : '';
-      const header = `${p.name}${stack}${p.url ? ` - ${p.url}` : ''}`;
+      const dates =
+        isDetailed && (p.startDate || p.endDate)
+          ? ` [${[p.startDate, p.endDate].filter(Boolean).join(' - ')}]`
+          : '';
+      const header = `${p.name}${stack}${p.url ? ` - ${p.url}` : ''}${dates}`;
       for (const line of wrapText(header, maxBodyChars - 4)) {
         lines.push({ text: line, font: 'F2', size: bodySize, x: marginX, leading: bodySize + 4 });
       }
@@ -195,6 +296,17 @@ export function renderBuiltinAtsPdf(
       for (const line of wrapText(row, maxBodyChars - 2)) {
         lines.push({ text: line, font: 'F1', size: bodySize, x: marginX, leading: bodySize + 3.5 });
       }
+      if (isDetailed && e.courses && e.courses.length > 0) {
+        for (const line of wrapText(`Coursework: ${e.courses.join(', ')}`, maxBodyChars - 4)) {
+          lines.push({
+            text: line,
+            font: 'F1',
+            size: bodySize - 0.5,
+            x: marginX + 8,
+            leading: bodySize + 3
+          });
+        }
+      }
     }
     if (indiaProfile?.tenthPercentage != null || indiaProfile?.twelfthPercentage != null) {
       const parts = [
@@ -213,79 +325,52 @@ export function renderBuiltinAtsPdf(
     }
   }
 
-  // Paginate lines across A4 pages
-  const pagesContent: string[][] = [[]];
-  let cursorY = pageHeight - 48;
-  const minY = 42;
-
-  for (const item of lines) {
-    if (cursorY - item.leading < minY) {
-      pagesContent.push([]);
-      cursorY = pageHeight - 48;
+  if (isDetailed) {
+    if (resume.certificates.length > 0) {
+      pushHeading('Certifications');
+      for (const c of resume.certificates) {
+        const text = `${c.name}${c.issuer ? ` (${c.issuer})` : ''}${c.date ? ` - ${c.date}` : ''}`;
+        for (const line of wrapText(`- ${text}`, maxBodyChars - 2)) {
+          lines.push({ text: line, font: 'F1', size: bodySize, x: marginX + 6, leading: bodySize + 3.5 });
+        }
+      }
     }
-    const page = pagesContent[pagesContent.length - 1]!;
-    if (item.text) {
-      page.push(
-        `BT /${item.font} ${item.size} Tf 1 0 0 1 ${item.x.toFixed(2)} ${cursorY.toFixed(2)} Tm (${escapePdfLiteral(item.text)}) Tj ET`
-      );
+    if (resume.awards.length > 0) {
+      pushHeading('Honors & Awards');
+      for (const a of resume.awards) {
+        const text = `${a.title}${a.awarder ? ` - ${a.awarder}` : ''}${a.date ? ` (${a.date})` : ''}${a.summary ? `: ${a.summary}` : ''}`;
+        for (const line of wrapText(`- ${text}`, maxBodyChars - 2)) {
+          lines.push({ text: line, font: 'F1', size: bodySize, x: marginX + 6, leading: bodySize + 3.5 });
+        }
+      }
     }
-    if (item.ruleAfter) {
-      const ruleY = (cursorY - 3.5).toFixed(2);
-      page.push(
-        `0.5 w ${marginX.toFixed(2)} ${ruleY} m ${(pageWidth - marginX).toFixed(2)} ${ruleY} l S`
-      );
-      cursorY -= 5;
+    if (resume.publications.length > 0) {
+      pushHeading('Publications');
+      for (const pub of resume.publications) {
+        const text = `${pub.name}${pub.publisher ? ` - ${pub.publisher}` : ''}${pub.releaseDate ? ` (${pub.releaseDate})` : ''}`;
+        for (const line of wrapText(`- ${text}`, maxBodyChars - 2)) {
+          lines.push({ text: line, font: 'F1', size: bodySize, x: marginX + 6, leading: bodySize + 3.5 });
+        }
+      }
     }
-    cursorY -= item.leading;
+    if (resume.languages.length > 0) {
+      pushHeading('Languages');
+      const langs = resume.languages
+        .map((l) => (l.fluency ? `${l.language} (${l.fluency})` : l.language))
+        .join(' | ');
+      for (const line of wrapText(langs, maxBodyChars)) {
+        lines.push({ text: line, font: 'F1', size: bodySize, x: marginX, leading: bodySize + 3.5 });
+      }
+    }
   }
 
-  // Build valid PDF 1.4 objects
-  const objects: string[] = [];
-  // 1: Catalog, 2: Pages, 3: Helvetica, 4: Helvetica-Bold
-  const pageCount = pagesContent.length;
-  const pageObjectIds: number[] = [];
-  const nextObjStart = 5;
-
-  for (let i = 0; i < pageCount; i++) {
-    pageObjectIds.push(nextObjStart + i * 2);
-  }
-
-  objects.push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj');
-  objects.push(
-    `2 0 obj\n<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageCount} >>\nendobj`
-  );
-  objects.push('3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj');
-  objects.push('4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj');
-
-  for (let i = 0; i < pageCount; i++) {
-    const pageObjId = nextObjStart + i * 2;
-    const contentObjId = pageObjId + 1;
-    const streamData = pagesContent[i]!.join('\n');
-    objects.push(
-      `${pageObjId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObjId} 0 R >>\nendobj`
-    );
-    objects.push(
-      `${contentObjId} 0 obj\n<< /Length ${Buffer.byteLength(streamData, 'latin1')} >>\nstream\n${streamData}\nendstream\nendobj`
-    );
-  }
-
-  let pdfStr = '%PDF-1.4\n';
-  const offsets: number[] = [0];
-  for (const obj of objects) {
-    offsets.push(Buffer.byteLength(pdfStr, 'latin1'));
-    pdfStr += `${obj}\n`;
-  }
-  const xrefPos = Buffer.byteLength(pdfStr, 'latin1');
-  pdfStr += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (let i = 1; i <= objects.length; i++) {
-    pdfStr += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
-  }
-  pdfStr += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
-
-  return {
-    pdfBuffer: Buffer.from(pdfStr, 'latin1'),
-    pageCount
-  };
+  return paginateAndSerializePdf(lines, {
+    marginX,
+    pageWidth,
+    pageHeight,
+    fontFamily: isExecutive ? 'serif' : 'sans',
+    showPageNumbers: isDetailed
+  });
 }
 
 async function compileWithTypstCli(
@@ -344,6 +429,126 @@ export async function renderAtsPdf(params: {
     params.indiaProfile,
     params.templateId ?? 'ats-classic'
   );
+  return {
+    pdfBuffer: builtin.pdfBuffer,
+    engine: 'builtin-ats-pdf',
+    pageCount: builtin.pageCount
+  };
+}
+
+export function renderCoverLetterBuiltinPdf(params: {
+  basics: JsonResume['basics'];
+  companyName: string;
+  roleTitle: string;
+  dateLabel?: string;
+  content: CoverLetterContent;
+}): { pdfBuffer: Buffer; pageCount: number } {
+  const { basics, companyName, roleTitle, content } = params;
+  const marginX = 54;
+  const maxBodyChars = 82;
+  const bodySize = 10.5;
+  const dateLabel =
+    params.dateLabel ||
+    new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  const lines: PdfTextLine[] = [
+    {
+      text: basics.name || 'Candidate Name',
+      font: 'F2',
+      size: 15,
+      x: marginX,
+      leading: 19
+    }
+  ];
+
+  if (basics.label) {
+    lines.push({ text: basics.label, font: 'F1', size: 10, x: marginX, leading: 14 });
+  }
+
+  const contact = [
+    basics.email,
+    basics.phone,
+    basics.location?.city
+      ? [basics.location.city, basics.location.countryCode].filter(Boolean).join(', ')
+      : '',
+    basics.url
+  ]
+    .filter((v): v is string => Boolean(v && v.trim()))
+    .join(' | ');
+
+  if (contact) {
+    for (const line of wrapText(contact, maxBodyChars + 6)) {
+      lines.push({ text: line, font: 'F1', size: 9, x: marginX, leading: 13 });
+    }
+  }
+
+  lines.push({ text: '', font: 'F1', size: 6, x: marginX, leading: 4, ruleAfter: true });
+  lines.push({ text: dateLabel, font: 'F1', size: 9.5, x: marginX, leading: 16 });
+  lines.push({
+    text: `Re: Application for ${roleTitle}${companyName ? ` - ${companyName}` : ''}`,
+    font: 'F2',
+    size: 10.5,
+    x: marginX,
+    leading: 18
+  });
+
+  lines.push({ text: content.salutation, font: 'F1', size: bodySize, x: marginX, leading: 18 });
+
+  const paragraphs = [content.openingHook, ...content.bodyParagraphs, content.closing].filter(
+    (p) => Boolean(p && p.trim())
+  );
+
+  for (const para of paragraphs) {
+    for (const line of wrapText(para, maxBodyChars)) {
+      lines.push({
+        text: line,
+        font: 'F1',
+        size: bodySize,
+        x: marginX,
+        leading: bodySize + 4.5
+      });
+    }
+    lines.push({ text: '', font: 'F1', size: 6, x: marginX, leading: 8 });
+  }
+
+  lines.push({ text: 'Sincerely,', font: 'F1', size: bodySize, x: marginX, leading: 16 });
+  lines.push({
+    text: content.signature || basics.name || 'Candidate',
+    font: 'F2',
+    size: bodySize,
+    x: marginX,
+    leading: 16
+  });
+
+  return paginateAndSerializePdf(lines, {
+    marginX,
+    fontFamily: 'sans',
+    showPageNumbers: false
+  });
+}
+
+export async function renderCoverLetterPdf(params: {
+  typstSource: string;
+  basics: JsonResume['basics'];
+  companyName: string;
+  roleTitle: string;
+  dateLabel?: string;
+  content: CoverLetterContent;
+  typstBin?: string;
+}): Promise<{ pdfBuffer: Buffer; engine: 'typst' | 'builtin-ats-pdf'; pageCount: number }> {
+  const typstBin = params.typstBin ?? process.env['TYPST_BIN'] ?? 'typst';
+  const typstBuffer = await compileWithTypstCli(params.typstSource, typstBin);
+  if (typstBuffer && typstBuffer.subarray(0, 5).toString('ascii') === '%PDF-') {
+    return { pdfBuffer: typstBuffer, engine: 'typst', pageCount: 1 };
+  }
+
+  const builtin = renderCoverLetterBuiltinPdf({
+    basics: params.basics,
+    companyName: params.companyName,
+    roleTitle: params.roleTitle,
+    dateLabel: params.dateLabel,
+    content: params.content
+  });
   return {
     pdfBuffer: builtin.pdfBuffer,
     engine: 'builtin-ats-pdf',

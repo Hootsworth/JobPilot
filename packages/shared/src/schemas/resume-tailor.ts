@@ -2,7 +2,12 @@ import { z } from 'zod';
 import { JsonResumeSchema, ResumeSkillGroupSchema } from './json-resume.js';
 import { LlmProviderIdSchema } from './llm.js';
 
-export const ResumeTemplateIdSchema = z.enum(['ats-classic', 'ats-compact']);
+export const ResumeTemplateIdSchema = z.enum([
+  'ats-classic',
+  'ats-compact',
+  'ats-detailed',
+  'ats-executive'
+]);
 export type ResumeTemplateId = z.infer<typeof ResumeTemplateIdSchema>;
 
 export const JdRequirementsSchema = z.object({
@@ -122,10 +127,68 @@ export const ResumeDiffSummarySchema = z.object({
 });
 export type ResumeDiffSummary = z.infer<typeof ResumeDiffSummarySchema>;
 
+export const AtsCheckSeveritySchema = z.enum(['pass', 'warn', 'fail']);
+export type AtsCheckSeverity = z.infer<typeof AtsCheckSeveritySchema>;
+
+export const AtsParseabilityCheckSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  status: AtsCheckSeveritySchema,
+  detail: z.string()
+});
+export type AtsParseabilityCheck = z.infer<typeof AtsParseabilityCheckSchema>;
+
+export const AtsSectionQualitySchema = z.object({
+  totalBullets: z.number().int().min(0),
+  quantifiedBullets: z.number().int().min(0),
+  strongVerbBullets: z.number().int().min(0),
+  avgBulletLength: z.number().min(0),
+  issues: z.array(z.string()).default([])
+});
+export type AtsSectionQuality = z.infer<typeof AtsSectionQualitySchema>;
+
+export const AtsScoreReportSchema = z.object({
+  overallScore: z.number().int().min(0).max(100),
+  keywordScore: z.number().int().min(0).max(100),
+  mustHaveCoverage: z.number().int().min(0).max(100),
+  parseabilityScore: z.number().int().min(0).max(100),
+  impactScore: z.number().int().min(0).max(100),
+  matchedMustHave: z.array(z.string()).default([]),
+  missingMustHave: z.array(z.string()).default([]),
+  matchedNiceToHave: z.array(z.string()).default([]),
+  missingNiceToHave: z.array(z.string()).default([]),
+  matchedKeywords: z.array(z.string()).default([]),
+  missingKeywords: z.array(z.string()).default([]),
+  parseabilityChecks: z.array(AtsParseabilityCheckSchema).default([]),
+  sectionQuality: AtsSectionQualitySchema,
+  recommendations: z.array(z.string()).default([])
+});
+export type AtsScoreReport = z.infer<typeof AtsScoreReportSchema>;
+
+export const AtsScoreRequestSchema = z
+  .object({
+    resumeVersionId: z.string().uuid().optional(),
+    profileVariantId: z.string().uuid().optional(),
+    jsonResume: JsonResumeSchema.optional(),
+    jobId: z.string().uuid().optional(),
+    customJob: z
+      .object({
+        title: z.string().min(1).max(200),
+        companyName: z.string().max(200).optional().default(''),
+        description: z.string().min(20).max(40_000)
+      })
+      .optional()
+  })
+  .refine((data) => Boolean(data.jobId || data.customJob || data.resumeVersionId), {
+    message: 'Supply resumeVersionId, jobId, or customJob to compute ATS score.'
+  });
+export type AtsScoreRequest = z.infer<typeof AtsScoreRequestSchema>;
+
 export const ResumeVersionRecordSchema = z.object({
   id: z.string().uuid(),
   userId: z.string().uuid(),
   jobId: z.string().uuid().nullable(),
+  profileVariantId: z.string().uuid().nullable().default(null),
   parentProfileVersion: z.number().int().min(1),
   versionNumber: z.number().int().min(1),
   label: z.string(),
@@ -147,6 +210,7 @@ export type ResumeVersionRecord = z.infer<typeof ResumeVersionRecordSchema>;
 export const TailorResumeRequestSchema = z
   .object({
     jobId: z.string().uuid().optional(),
+    profileVariantId: z.string().uuid().optional(),
     customJob: z
       .object({
         title: z.string().min(2).max(200),

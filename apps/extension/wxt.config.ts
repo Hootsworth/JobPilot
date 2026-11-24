@@ -26,7 +26,16 @@ export default defineConfig({
       '48': 'icon/icon-48.png',
       '128': 'icon/icon-128.png'
     },
-    permissions: ['storage', 'tabs', 'sidePanel', 'contextMenus', 'scripting'],
+    permissions: ['storage', 'tabs', 'activeTab', 'sidePanel', 'contextMenus', 'scripting'],
+    commands: {
+      'save-current-job': {
+        suggested_key: {
+          default: 'Alt+Shift+S',
+          mac: 'Alt+Shift+S'
+        },
+        description: 'Save current page job to JobPilot Tracker'
+      }
+    },
     host_permissions: [
       'https://boards.greenhouse.io/*',
       'https://job-boards.greenhouse.io/*',

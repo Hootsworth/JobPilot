@@ -6,6 +6,7 @@ import type {
   ApplicationEventRecord,
   ApplicationRecord,
   ApplicationStatus,
+  CoverLetterRecord,
   ResumeVersionRecord
 } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
@@ -90,6 +91,7 @@ function isFollowUpDueOrUpcoming(iso: string | null): {
 export default function TrackerPage() {
   const [applications, setApplications] = useState<ApplicationRecord[]>([]);
   const [resumeVersions, setResumeVersions] = useState<ResumeVersionRecord[]>([]);
+  const [coverLetters, setCoverLetters] = useState<CoverLetterRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [events, setEvents] = useState<ApplicationEventRecord[]>([]);
   const [statusFilter, setStatusFilter] = useState<'all' | ApplicationStatus>('all');
@@ -106,6 +108,7 @@ export default function TrackerPage() {
   const [newLocation, setNewLocation] = useState('Bengaluru, India');
   const [newStatus, setNewStatus] = useState<ApplicationStatus>('applied');
   const [newResumeId, setNewResumeId] = useState<string>('');
+  const [newCoverLetterId, setNewCoverLetterId] = useState<string>('');
   const [newFollowUpDate, setNewFollowUpDate] = useState<string>('');
   const [newFollowUpNote, setNewFollowUpNote] = useState<string>('');
   const [newSalaryOffered, setNewSalaryOffered] = useState<string>('');
@@ -114,6 +117,7 @@ export default function TrackerPage() {
   // Inspector edit state
   const [editStatus, setEditStatus] = useState<ApplicationStatus>('saved');
   const [editResumeId, setEditResumeId] = useState<string>('');
+  const [editCoverLetterId, setEditCoverLetterId] = useState<string>('');
   const [editFollowUpDate, setEditFollowUpDate] = useState<string>('');
   const [editFollowUpNote, setEditFollowUpNote] = useState<string>('');
   const [editSalaryOffered, setEditSalaryOffered] = useState<string>('');
@@ -124,12 +128,14 @@ export default function TrackerPage() {
     setLoading(true);
     setError(null);
     try {
-      const [appsRes, versionsRes] = await Promise.all([
+      const [appsRes, versionsRes, lettersRes] = await Promise.all([
         api.listApplications(),
-        api.listResumeVersions()
+        api.listResumeVersions(),
+        api.listCoverLetters()
       ]);
       setApplications(appsRes.items);
       setResumeVersions(versionsRes);
+      setCoverLetters(lettersRes);
       if (appsRes.items.length > 0 && !selectedId) {
         setSelectedId(appsRes.items[0]!.id);
       }
@@ -162,6 +168,7 @@ export default function TrackerPage() {
     }
     setEditStatus(selectedApplication.status);
     setEditResumeId(selectedApplication.resumeVersionId ?? '');
+    setEditCoverLetterId(selectedApplication.coverLetterId ?? '');
     setEditFollowUpDate(toDateInputValue(selectedApplication.nextFollowUpAt));
     setEditFollowUpNote(selectedApplication.followUpNote ?? '');
     setEditSalaryOffered(selectedApplication.salaryOffered ?? '');
@@ -254,6 +261,7 @@ export default function TrackerPage() {
         ...(newLocation.trim() ? { locationRaw: newLocation.trim() } : {}),
         status: newStatus,
         resumeVersionId: newResumeId || null,
+        coverLetterId: newCoverLetterId || null,
         nextFollowUpAt: newFollowUpDate ? new Date(`${newFollowUpDate}T09:00:00`).toISOString() : null,
         followUpNote: newFollowUpNote.trim(),
         salaryOffered: newSalaryOffered.trim(),
@@ -265,6 +273,7 @@ export default function TrackerPage() {
       setNewTitle('');
       setNewCompany('');
       setNewUrl('');
+      setNewCoverLetterId('');
       setNewFollowUpDate('');
       setNewFollowUpNote('');
       setNewSalaryOffered('');
@@ -288,6 +297,7 @@ export default function TrackerPage() {
       const updated = await api.updateApplication(selectedApplication.id, {
         status: editStatus,
         resumeVersionId: editResumeId || null,
+        coverLetterId: editCoverLetterId || null,
         nextFollowUpAt: editFollowUpDate
           ? new Date(`${editFollowUpDate}T09:00:00`).toISOString()
           : null,
@@ -514,6 +524,22 @@ export default function TrackerPage() {
                     {resumeVersions.map((rv) => (
                       <option key={rv.id} value={rv.id}>
                         v{rv.versionNumber} · {rv.label} ({rv.templateId})
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              <Field label="Linked Cover Letter (optional)" htmlFor="new-app-cover-letter">
+                {(props) => (
+                  <Select
+                    {...props}
+                    value={newCoverLetterId}
+                    onChange={(e) => setNewCoverLetterId(e.target.value)}
+                  >
+                    <option value="">-- No cover letter linked --</option>
+                    {coverLetters.map((cl) => (
+                      <option key={cl.id} value={cl.id}>
+                        v{cl.versionNumber} · {cl.label} ({cl.tone})
                       </option>
                     ))}
                   </Select>
@@ -832,6 +858,40 @@ export default function TrackerPage() {
                         Pinning the exact resume version ensures you have the exact single-column
                         PDF ready before interviews.
                       </p>
+
+                      <div className="pt-2 border-t border-[var(--hairline)] space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <label
+                            htmlFor="insp-cover-letter"
+                            className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]"
+                          >
+                            [CL] Linked Cover Letter
+                          </label>
+                          {editCoverLetterId ? (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => void api.downloadCoverLetterPdf(editCoverLetterId)}
+                            >
+                              Download Cover Letter PDF
+                            </Button>
+                          ) : null}
+                        </div>
+                        <Select
+                          id="insp-cover-letter"
+                          value={editCoverLetterId}
+                          onChange={(e) => setEditCoverLetterId(e.target.value)}
+                        >
+                          <option value="">-- No cover letter linked --</option>
+                          {coverLetters.map((cl) => (
+                            <option key={cl.id} value={cl.id}>
+                              v{cl.versionNumber} · {cl.label} ({cl.tone} ·{' '}
+                              {cl.verifierPassed ? 'GROUNDED' : 'FLAGGED'})
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
                     </div>
 
                     {/* Follow-Up Reminder Scheduler */}

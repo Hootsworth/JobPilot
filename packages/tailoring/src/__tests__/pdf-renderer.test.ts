@@ -92,4 +92,72 @@ describe('@jobpilot/tailoring ATS-safe PDF rendering round-trip', () => {
     expect(text).toContain('Reduced API p95 latency by 62%');
     expect(text).toContain('Class XII: 95%');
   });
+
+  it('renders ats-detailed with certifications, coursework, and page numbers and ats-executive with Times serif fonts', async () => {
+    const resume = createEmptyJsonResume();
+    resume.basics = {
+      name: 'Rohan Kulkarni',
+      label: 'Staff Systems Engineer',
+      email: 'rohan@example.com',
+      phone: '+91-9800011122',
+      url: 'https://github.com/rohan',
+      summary: 'Architected low-latency ledger microservices.',
+      location: { address: '', postalCode: '', city: 'Mumbai', countryCode: 'IN', region: '' },
+      profiles: []
+    };
+    resume.education = [
+      {
+        id: 'edu-1',
+        institution: 'IIT Bombay',
+        url: '',
+        area: 'Computer Science',
+        studyType: 'B.Tech',
+        startDate: '2018',
+        endDate: '2022',
+        score: '9.4',
+        courses: ['Distributed Systems', 'Operating Systems']
+      }
+    ];
+    resume.certificates = [
+      { name: 'AWS Solutions Architect', date: '2024', issuer: 'Amazon', url: '' }
+    ];
+    resume.awards = [
+      { title: 'ICPC Regionalist', date: '2021', awarder: 'ICPC', summary: 'Top 15' }
+    ];
+
+    const india = createEmptyIndiaProfile();
+
+    const detailedTypst = generateTypstResumeSource(resume, india, 'ats-detailed');
+    expect(detailedTypst).toContain('Relevant Coursework');
+    expect(detailedTypst).toContain('Certifications');
+
+    const detailedPdf = await renderAtsPdf({
+      typstSource: detailedTypst,
+      jsonResume: resume,
+      indiaProfile: india,
+      templateId: 'ats-detailed',
+      typstBin: '__nonexistent_typst_binary__'
+    });
+    const proxyDetailed = await getDocumentProxy(new Uint8Array(detailedPdf.pdfBuffer));
+    const detailedText = String((await extractText(proxyDetailed, { mergePages: true })).text);
+    expect(detailedText).toContain('Distributed Systems');
+    expect(detailedText).toContain('AWS Solutions Architect');
+    expect(detailedText).toContain('ICPC Regionalist');
+    expect(detailedText).toContain('Page 1 /');
+
+    const execTypst = generateTypstResumeSource(resume, india, 'ats-executive');
+    expect(execTypst).toContain('Liberation Serif');
+
+    const execPdf = await renderAtsPdf({
+      typstSource: execTypst,
+      jsonResume: resume,
+      indiaProfile: india,
+      templateId: 'ats-executive',
+      typstBin: '__nonexistent_typst_binary__'
+    });
+    expect(execPdf.pdfBuffer.toString('latin1')).toContain('/Times-Roman');
+    const proxyExec = await getDocumentProxy(new Uint8Array(execPdf.pdfBuffer));
+    const execText = String((await extractText(proxyExec, { mergePages: true })).text);
+    expect(execText).toContain('EXECUTIVE SUMMARY');
+  });
 });

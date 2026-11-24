@@ -29,9 +29,10 @@ JobPilot helps software engineers, students, and job seekers complete repetitive
 | :--- | :--- |
 | `storage` | Stores the user's JobPilot API connection settings, selected tailored resume version preference, and per-site opt-in adapter toggles locally in `chrome.storage.local`. |
 | `tabs` | Reads the active tab's URL and title when the user clicks "Scan Form" or "Save Job to Tracker" in the side panel so the matching ATS adapter and job metadata can be loaded. |
+| `activeTab` | Grants temporary, user-gesture-scoped access to the currently active tab ONLY when the user explicitly clicks `"Save this job to JobPilot Tracker"` in the right-click menu, presses `Alt+Shift+S`, or clicks `"Save Active Page to Tracker"` in the side panel. Never runs in the background or across browsing history. |
 | `sidePanel` | Displays the persistent JobPilot review checklist alongside the job application form so the user can inspect confidence scores, edit proposed values, and approve fields before filling. |
-| `contextMenus` | Provides a right-click "Open JobPilot Review Side Panel" and "Save Current Job to JobPilot Tracker" menu action initiated by the user. |
-| `scripting` | Injects the form-scanning and autofill content script into opt-in job portals only after the user explicitly enables that portal and grants runtime host permission. |
+| `contextMenus` | Provides a right-click "Open JobPilot Review Side Panel" and "Save this job to JobPilot Tracker" menu action initiated by the user. |
+| `scripting` | Injects the form-scanning/autofill script or the one-click job metadata extractor only upon explicit user action or per-site opt-in toggle. |
 | `host_permissions` (`*://*.greenhouse.io/*`, `*://*.lever.co/*`, `*://*.ashbyhq.com/*`, `*://*.myworkdayjobs.com/*`, `http://localhost:4000/*`) | Enables automatic form detection and user-approved autofill on the four primary ATS platforms (Greenhouse, Lever, Ashby, Workday) and communicates with the user's configured JobPilot API server. |
 | `optional_host_permissions` (`*://*.naukri.com/*`, `*://*.foundit.in/*`, `*://*.internshala.com/*`, `*://*.instahyre.com/*`, `*://*.wellfound.com/*`, `*://*.linkedin.com/*`) | Requested at runtime via `chrome.permissions.request()` **only** when the user explicitly toggles on an individual Indian or global job portal adapter in the Side Panel to capture a viewed job or assist with an apply drawer. |
 

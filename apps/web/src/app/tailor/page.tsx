@@ -3,7 +3,9 @@
 import React, { Suspense, useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import type {
+  AtsScoreReport,
   JobFeedItem,
+  ProfileVariantRecord,
   ResumeSectionDiffSchema,
   ResumeTemplateId,
   ResumeVersionRecord,
@@ -11,6 +13,9 @@ import type {
 } from '@jobpilot/shared';
 import type { z } from 'zod';
 import { AppShell } from '@/components/layout/app-shell';
+import { AtsScorePanel } from '@/components/tailor/ats-score-panel';
+import { CoverLetterWorkbench } from '@/components/tailor/cover-letter-workbench';
+import { PdfPreviewFrame } from '@/components/tailor/pdf-preview-frame';
 import { MoDecode, MoScan, MoSpinner, moToast } from '@/components/ui/mo';
 import {
   AlertBanner,
@@ -28,7 +33,8 @@ import {
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 
-type TailorTab = 'diff' | 'verifier' | 'jd' | 'preview';
+type StudioMode = 'resume' | 'cover-letter' | 'ats-check';
+type TailorTab = 'pdf' | 'ats' | 'diff' | 'verifier' | 'jd' | 'preview';
 type SourceMode = 'catalog' | 'custom';
 type SectionDiff = z.infer<typeof ResumeSectionDiffSchema>;
 
@@ -157,8 +163,26 @@ function TailorStudioInner() {
   const [deleting, setDeleting] = useState(false);
 
   const [catalogJobs, setCatalogJobs] = useState<JobFeedItem[]>([]);
+  const [studioMode, setStudioMode] = useState<StudioMode>('resume');
+  const [variants, setVariants] = useState<ProfileVariantRecord[]>([]);
+  const [profileVariantId, setProfileVariantId] = useState<string>('');
   const [versions, setVersions] = useState<ResumeVersionRecord[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+
+  const [atsByVersionId, setAtsByVersionId] = useState<Record<string, AtsScoreReport>>({});
+  const [atsLoading, setAtsLoading] = useState(false);
+
+  // Standalone Instant ATS Checker state (#2)
+  const [chkTargetKind, setChkTargetKind] = useState<'variant' | 'version'>('variant');
+  const [chkVariantId, setChkVariantId] = useState<string>('');
+  const [chkVersionId, setChkVersionId] = useState<string>('');
+  const [chkJdSource, setChkJdSource] = useState<'catalog' | 'custom'>('custom');
+  const [chkJobId, setChkJobId] = useState<string>('');
+  const [chkTitle, setChkTitle] = useState('');
+  const [chkCompany, setChkCompany] = useState('');
+  const [chkJdText, setChkJdText] = useState('');
+  const [chkLoading, setChkLoading] = useState(false);
+  const [chkReport, setChkReport] = useState<AtsScoreReport | null>(null);
 
   const [sourceMode, setSourceMode] = useState<SourceMode>('catalog');
   const [selectedJobId, setSelectedJobId] = useState<string>('');
@@ -176,7 +200,7 @@ function TailorStudioInner() {
   const [labelOverride, setLabelOverride] = useState('');
   const [autoRepairFlagged, setAutoRepairFlagged] = useState(true);
 
-  const [activeTab, setActiveTab] = useState<TailorTab>('diff');
+  const [activeTab, setActiveTab] = useState<TailorTab>('pdf');
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [typstCopied, setTypstCopied] = useState(false);
@@ -188,9 +212,10 @@ function TailorStudioInner() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const [jobsRes, versionsRes] = await Promise.all([
+      const [jobsRes, versionsRes, variantsRes] = await Promise.all([
         api.listJobs({ limit: 50 }),
-        api.listResumeVersions()
+        api.listResumeVersions(),
+        api.listProfileVariants()
       ]);
 
       let mergedJobs = jobsRes.items;
@@ -205,6 +230,9 @@ function TailorStudioInner() {
 
       setCatalogJobs(mergedJobs);
       setVersions(versionsRes);
+      setVariants(variantsRes);
+      setChkJobId((prev) => prev || mergedJobs[0]?.job.id || '');
+      setChkVersionId((prev) => prev || versionsRes[0]?.id || '');
 
       if (jobIdParam) {
         setSourceMode('catalog');
@@ -227,6 +255,73 @@ function TailorStudioInner() {
   }, [loadWorkspace]);
 
   const selectedVersion = versions.find((v) => v.id === selectedVersionId) ?? null;
+
+  useEffect(() => {
+    if (activeTab !== 'ats' || !selectedVersion) return;
+    if (atsByVersionId[selectedVersion.id]) return;
+
+    let active = true;
+    setAtsLoading(true);
+    void api
+      .scoreResumeAts({ resumeVersionId: selectedVersion.id })
+      .then((report) => {
+        if (active) {
+          setAtsByVersionId((prev) => ({ ...prev, [selectedVersion.id]: report }));
+        }
+      })
+      .catch(() => {
+        // Keep panel silent if ATS compute errors
+      })
+      .finally(() => {
+        if (active) setAtsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeTab, selectedVersion, atsByVersionId]);
+
+  const handleRunStandaloneAts = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    if (chkTargetKind === 'version' && !chkVersionId) {
+      setErrorMsg('Select a tailored resume version or switch to Master Variant.');
+      return;
+    }
+    if (chkJdSource === 'catalog' && !chkJobId) {
+      setErrorMsg('Select a saved/feed job or paste a custom JD.');
+      return;
+    }
+    if (chkJdSource === 'custom' && chkJdText.trim().length < 20) {
+      setErrorMsg('Paste at least 20 characters of job description text.');
+      return;
+    }
+
+    setChkLoading(true);
+    try {
+      const report = await api.scoreResumeAts({
+        ...(chkTargetKind === 'version'
+          ? { resumeVersionId: chkVersionId }
+          : chkVariantId
+            ? { profileVariantId: chkVariantId }
+            : {}),
+        ...(chkJdSource === 'catalog'
+          ? { jobId: chkJobId }
+          : {
+              customJob: {
+                title: chkTitle.trim() || 'Target Role',
+                companyName: chkCompany.trim(),
+                description: chkJdText.trim()
+              }
+            })
+      });
+      setChkReport(report);
+      moToast(`[ok] ATS Score: ${report.overallScore}%`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to calculate ATS score.');
+    } finally {
+      setChkLoading(false);
+    }
+  };
 
   const handleTailorSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -265,6 +360,7 @@ function TailorStudioInner() {
                 description: customDescription.trim()
               }
             }),
+        ...(profileVariantId ? { profileVariantId } : {}),
         templateId,
         autoRepairFlagged,
         ...(labelOverride.trim() ? { label: labelOverride.trim() } : {})
@@ -273,7 +369,7 @@ function TailorStudioInner() {
       setVersions((prev) => [created, ...prev]);
       setSelectedVersionId(created.id);
       setLabelOverride('');
-      setActiveTab(created.verifierPassed ? 'diff' : 'verifier');
+      setActiveTab(created.verifierPassed ? 'pdf' : 'verifier');
       const msg = created.verifierPassed
         ? `Created verified resume v${created.versionNumber} (${created.label}) via ${created.pdfEngine}.`
         : `Created resume v${created.versionNumber} with ${created.verifierReport.unsupportedClaimCount} flagged claim(s) — inspect Verifier Audit.`;
@@ -386,6 +482,19 @@ function TailorStudioInner() {
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
       {statusMsg ? <AlertBanner tone="success" message={statusMsg} /> : null}
 
+      <div className="mb-5">
+        <TabStrip<StudioMode>
+          label="Tailor studio workflows"
+          activeTab={studioMode}
+          onChange={setStudioMode}
+          tabs={[
+            { id: 'resume', label: 'Resume Tailor', badge: versions.length },
+            { id: 'cover-letter', label: 'Cover Letter Studio' },
+            { id: 'ats-check', label: 'Instant ATS Checker' }
+          ]}
+        />
+      </div>
+
       <ConfirmDialog
         open={confirmFlaggedPdfOpen}
         title="Download Flagged Resume PDF?"
@@ -422,6 +531,147 @@ function TailorStudioInner() {
           </div>
           <div className="lg:col-span-8">
             <SkeletonBlock className="h-[540px] w-full" />
+          </div>
+        </div>
+      ) : studioMode === 'cover-letter' ? (
+        <CoverLetterWorkbench
+          catalogJobs={catalogJobs}
+          variants={variants}
+          defaultJobId={jobIdParam || undefined}
+        />
+      ) : studioMode === 'ats-check' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+          <div className="lg:col-span-4">
+            <SectionBlock
+              title="Instant ATS Check"
+              marker="[%]"
+              description="Deterministic zero-LLM skill, synonym, and impact audit (<15ms)."
+            >
+              <form onSubmit={(e) => void handleRunStandaloneAts(e)} className="space-y-4">
+                <Field label="Resume to Audit" htmlFor="chk-kind">
+                  {(props) => (
+                    <Select
+                      {...props}
+                      value={chkTargetKind}
+                      onChange={(e) => setChkTargetKind(e.target.value as 'variant' | 'version')}
+                    >
+                      <option value="variant">Master Profile Variant</option>
+                      <option value="version">Saved Tailored Version</option>
+                    </Select>
+                  )}
+                </Field>
+
+                {chkTargetKind === 'variant' ? (
+                  <Field label="Profile Variant" htmlFor="chk-variant">
+                    {(props) => (
+                      <Select
+                        {...props}
+                        value={chkVariantId}
+                        onChange={(e) => setChkVariantId(e.target.value)}
+                      >
+                        <option value="">Active Default Variant</option>
+                        {variants.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.name} {v.isDefault ? '(Default)' : ''}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </Field>
+                ) : (
+                  <Field label="Tailored Version" htmlFor="chk-version">
+                    {(props) => (
+                      <Select
+                        {...props}
+                        value={chkVersionId}
+                        onChange={(e) => setChkVersionId(e.target.value)}
+                      >
+                        {versions.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            v{v.versionNumber} · {v.label}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </Field>
+                )}
+
+                <Field label="Target Job Source" htmlFor="chk-jd-src">
+                  {(props) => (
+                    <Select
+                      {...props}
+                      value={chkJdSource}
+                      onChange={(e) => setChkJdSource(e.target.value as 'catalog' | 'custom')}
+                    >
+                      <option value="custom">Paste Any Job Description</option>
+                      <option value="catalog">Saved / Feed Job</option>
+                    </Select>
+                  )}
+                </Field>
+
+                {chkJdSource === 'catalog' ? (
+                  <Field label="Job" htmlFor="chk-job">
+                    {(props) => (
+                      <Select
+                        {...props}
+                        value={chkJobId}
+                        onChange={(e) => setChkJobId(e.target.value)}
+                      >
+                        {catalogJobs.map((j) => (
+                          <option key={j.job.id} value={j.job.id}>
+                            {j.job.companyName} — {j.job.title}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </Field>
+                ) : (
+                  <div className="space-y-3">
+                    <Field label="Role Title" htmlFor="chk-title">
+                      {(props) => (
+                        <Input
+                          {...props}
+                          value={chkTitle}
+                          onChange={(e) => setChkTitle(e.target.value)}
+                          placeholder="e.g. Backend Software Engineer"
+                        />
+                      )}
+                    </Field>
+                    <Field label="Job Description Text" htmlFor="chk-jd" required>
+                      {(props) => (
+                        <Textarea
+                          {...props}
+                          rows={7}
+                          value={chkJdText}
+                          onChange={(e) => setChkJdText(e.target.value)}
+                          placeholder="Paste full JD requirements & nice-to-haves..."
+                        />
+                      )}
+                    </Field>
+                  </div>
+                )}
+
+                <Button type="submit" variant="primary" className="w-full" disabled={chkLoading}>
+                  {chkLoading ? 'Scoring...' : '[%] Run Instant ATS Check'}
+                </Button>
+              </form>
+            </SectionBlock>
+          </div>
+          <div className="lg:col-span-8">
+            {chkReport ? (
+              <SectionBlock
+                title={`ATS Score Breakdown — ${chkReport.overallScore}%`}
+                marker="[%]"
+                description="Matched skills account for common aliases (TS/TypeScript, Postgres/PostgreSQL, k8s/Kubernetes)."
+              >
+                <AtsScorePanel report={chkReport} />
+              </SectionBlock>
+            ) : (
+              <EmptyState
+                title="No ATS audit run yet"
+                description="Select a Master Profile Variant or Tailored Version on the left, paste a job description, and run an instant deterministic check before spending any LLM tokens."
+              />
+            )}
           </div>
         </div>
       ) : (
@@ -534,6 +784,23 @@ function TailorStudioInner() {
                   </div>
                 )}
 
+                <Field label="Source Profile Variant" htmlFor="tailor-variant">
+                  {(inputProps) => (
+                    <Select
+                      {...inputProps}
+                      value={profileVariantId}
+                      onChange={(e) => setProfileVariantId(e.target.value)}
+                    >
+                      <option value="">Active Default Profile</option>
+                      {variants.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name} {v.isDefault ? '(Default)' : ''}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+
                 <Field label="ATS PDF Layout" htmlFor="tailor-template">
                   {(inputProps) => (
                     <Select
@@ -541,8 +808,10 @@ function TailorStudioInner() {
                       value={templateId}
                       onChange={(e) => setTemplateId(e.target.value as ResumeTemplateId)}
                     >
-                      <option value="ats-classic">ATS Classic (single-column, generous spacing)</option>
+                      <option value="ats-classic">ATS Classic (single-column, balanced 1-page)</option>
                       <option value="ats-compact">ATS Compact (tighter 1-page density)</option>
+                      <option value="ats-detailed">ATS Detailed (2-page engineering + coursework/certs)</option>
+                      <option value="ats-executive">ATS Executive (classic single-column serif)</option>
                     </Select>
                   )}
                 </Field>
@@ -725,6 +994,12 @@ function TailorStudioInner() {
                     activeTab={activeTab}
                     onChange={setActiveTab}
                     tabs={[
+                      { id: 'pdf', label: 'PDF Preview' },
+                      {
+                        id: 'ats',
+                        label: 'ATS Score',
+                        badge: atsByVersionId[selectedVersion.id]?.overallScore
+                      },
                       { id: 'diff', label: 'Diff View' },
                       {
                         id: 'verifier',
@@ -736,9 +1011,28 @@ function TailorStudioInner() {
                         label: 'JD Requirements',
                         badge: selectedVersion.jdRequirements.mustHaveSkills.length
                       },
-                      { id: 'preview', label: 'ATS Preview & Typst' }
+                      { id: 'preview', label: 'HTML & Typst' }
                     ]}
                   />
+
+                  {activeTab === 'pdf' ? (
+                    <PdfPreviewFrame
+                      id={selectedVersion.id}
+                      kind="resume"
+                      title={`Resume v${selectedVersion.versionNumber} preview`}
+                      onDownload={handleRequestPdfDownload}
+                    />
+                  ) : null}
+
+                  {activeTab === 'ats' ? (
+                    atsLoading && !atsByVersionId[selectedVersion.id] ? (
+                      <SkeletonBlock className="h-72 w-full" />
+                    ) : atsByVersionId[selectedVersion.id] ? (
+                      <AtsScorePanel report={atsByVersionId[selectedVersion.id]!} />
+                    ) : (
+                      <p className="text-xs text-[var(--mute)]">Unable to compute ATS score.</p>
+                    )
+                  ) : null}
 
                   {activeTab === 'diff' ? (
                     <div className="space-y-5">

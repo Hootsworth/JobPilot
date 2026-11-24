@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   ApplicationStatusSchema,
+  CoverLetterContentSchema,
+  CoverLetterToneSchema,
   CrawlRunSummarySchema,
   IndiaProfileSchema,
   JdRequirementsSchema,
@@ -24,8 +26,10 @@ import {
   type ApplicationStatus,
   type CaptureExtensionJobRequest,
   type CaptureExtensionJobResponse,
+  type CoverLetterRecord,
   type CrawlRunSummary,
   type CreateManualApplicationRequest,
+  type CreateProfileVariantRequest,
   type JdRequirements,
   type JobFeedItem,
   type JobFeedQuery,
@@ -38,24 +42,28 @@ import {
   type LlmUsageSummary,
   type MasterProfile,
   type ProfileStory,
+  type ProfileVariantRecord,
   type ResumeVersionRecord,
   type SavedAnswer,
   type UpdateApplicationRequest,
+  type UpdateProfileVariantRequest,
   type UpsertSavedAnswerRequest,
   type UpsertStoryRequest,
   type VerifierReport
 } from '@jobpilot/shared';
 import type { JobForMatching } from '@jobpilot/ingestion';
 import type { LlmCallLogEntry } from '@jobpilot/llm';
-import { buildUsageSummary } from './memory-store.js';
+import { buildUsageSummary, slugifyVariantName } from './memory-store.js';
 import type {
   AccountExportPayload,
   AuthUser,
+  CreateCoverLetterInput,
   CreateResumeVersionInput,
   DataStore,
   LlmSettingPatch,
   ProfilePatch,
-  StoredLlmSetting
+  StoredLlmSetting,
+  UpdateCoverLetterPatch
 } from './types.js';
 
 function mapProfileRow(row: Record<string, unknown>): MasterProfile {
@@ -219,6 +227,7 @@ function mapResumeVersionRow(row: Record<string, unknown>): ResumeVersionRecord 
     id: row['id'],
     userId: row['user_id'],
     jobId: row['job_id'] ?? null,
+    profileVariantId: (row['profile_variant_id'] as string | null) ?? null,
     parentProfileVersion: Number(row['parent_profile_version'] ?? 1),
     versionNumber: Number(row['version_number'] ?? 1),
     label: String(row['label'] ?? ''),
@@ -235,6 +244,49 @@ function mapResumeVersionRow(row: Record<string, unknown>): ResumeVersionRecord 
     model: (row['model'] as string | null) ?? null,
     createdAt: String(row['created_at'])
   });
+}
+
+function mapProfileVariantRow(row: Record<string, unknown>): ProfileVariantRecord {
+  return {
+    id: String(row['id']),
+    userId: String(row['user_id']),
+    name: String(row['name'] ?? 'Default'),
+    slug: String(row['slug'] ?? 'default'),
+    targetRole: String(row['target_role'] ?? ''),
+    isDefault: Boolean(row['is_default']),
+    jsonResume: JsonResumeSchema.parse(row['json_resume'] ?? {}),
+    indiaProfile: IndiaProfileSchema.parse(row['india_profile'] ?? {}),
+    version: Number(row['version'] ?? 1),
+    createdAt: String(row['created_at'] ?? new Date().toISOString()),
+    updatedAt: String(row['updated_at'] ?? new Date().toISOString())
+  };
+}
+
+function mapCoverLetterRow(row: Record<string, unknown>): CoverLetterRecord {
+  const rawPdfEngine = row['pdf_engine'];
+  return {
+    id: String(row['id']),
+    userId: String(row['user_id']),
+    jobId: (row['job_id'] as string | null) ?? null,
+    profileVariantId: (row['profile_variant_id'] as string | null) ?? null,
+    parentProfileVersion: Number(row['parent_profile_version'] ?? 1),
+    versionNumber: Number(row['version_number'] ?? 1),
+    label: String(row['label'] ?? ''),
+    companyName: String(row['company_name'] ?? ''),
+    roleTitle: String(row['role_title'] ?? ''),
+    tone: CoverLetterToneSchema.catch('concise-technical').parse(row['tone']),
+    jdRequirements: JdRequirementsSchema.parse(row['jd_requirements'] ?? {}),
+    content: CoverLetterContentSchema.parse(row['content'] ?? {}),
+    plainText: String(row['plain_text'] ?? ''),
+    verifierReport: VerifierReportSchema.parse(row['verifier_report'] ?? {}),
+    verifierPassed: Boolean(row['verifier_passed']),
+    typstSource: (row['typst_source'] as string | null) ?? null,
+    pdfStoragePath: (row['pdf_storage_path'] as string | null) ?? null,
+    pdfEngine: rawPdfEngine === 'typst' ? 'typst' : 'builtin-ats-pdf',
+    provider: row['provider'] ? LlmProviderIdSchema.catch('gemini').parse(row['provider']) : null,
+    model: (row['model'] as string | null) ?? null,
+    createdAt: String(row['created_at'] ?? new Date().toISOString())
+  };
 }
 
 export class SupabaseDataStore implements DataStore {
@@ -318,7 +370,19 @@ export class SupabaseDataStore implements DataStore {
       .single();
 
     if (error) throw new Error(`Failed to update profile: ${error.message}`);
-    return mapProfileRow(data as Record<string, unknown>);
+    const updatedProfile = mapProfileRow(data as Record<string, unknown>);
+    if (patch.jsonResume !== undefined || patch.indiaProfile !== undefined) {
+      await this.client
+        .from('profile_variants')
+        .update({
+          json_resume: updatedProfile.jsonResume,
+          india_profile: updatedProfile.indiaProfile,
+          updated_at: new Date().toISOString()
+        })
+        .eq('user_id', userId)
+        .eq('is_default', true);
+    }
+    return updatedProfile;
   }
 
   async updateProfileEmbedding(
@@ -614,25 +678,30 @@ export class SupabaseDataStore implements DataStore {
   async exportAccountData(user: AuthUser): Promise<AccountExportPayload> {
     const [
       profile,
+      profileVariants,
       stories,
       savedAnswers,
       settings,
       usageSummary,
       resumeVersions,
+      coverLetters,
       applications
     ] = await Promise.all([
       this.getOrCreateProfile(user),
+      this.listProfileVariants(user.id),
       this.listStories(user.id),
       this.listSavedAnswers(user.id),
       this.listLlmSettings(user.id),
       this.getUsageSummary(user.id, 500),
       this.listResumeVersions(user.id),
+      this.listCoverLetters(user.id),
       this.listApplications(user.id)
     ]);
 
     return {
       exportedAt: new Date().toISOString(),
       profile,
+      profileVariants,
       stories,
       savedAnswers,
       llmSettings: settings.map(
@@ -643,6 +712,7 @@ export class SupabaseDataStore implements DataStore {
       ),
       usageLogs: usageSummary.recentLogs,
       resumeVersions,
+      coverLetters,
       applications
     };
   }
@@ -1083,6 +1153,179 @@ export class SupabaseDataStore implements DataStore {
     return mapResumeVersionRow(data as Record<string, unknown>);
   }
 
+  async listProfileVariants(userId: string): Promise<ProfileVariantRecord[]> {
+    const profile = await this.getOrCreateProfile({ id: userId });
+    const { data, error } = await this.client
+      .from('profile_variants')
+      .select('*')
+      .eq('user_id', userId)
+      .order('is_default', { ascending: false })
+      .order('updated_at', { ascending: false });
+
+    if (error) throw new Error(`Failed to list profile variants: ${error.message}`);
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    if (rows.length > 0) return rows.map(mapProfileVariantRow);
+
+    const { data: inserted, error: insertErr } = await this.client
+      .from('profile_variants')
+      .insert({
+        user_id: userId,
+        name: 'Default',
+        slug: 'default',
+        target_role: profile.jsonResume.basics.label ?? '',
+        is_default: true,
+        json_resume: profile.jsonResume,
+        india_profile: profile.indiaProfile,
+        version: profile.activeProfileVersion
+      })
+      .select('*')
+      .single();
+
+    if (insertErr || !inserted) {
+      throw new Error(`Failed to seed default profile variant: ${insertErr?.message ?? 'unknown error'}`);
+    }
+    return [mapProfileVariantRow(inserted as Record<string, unknown>)];
+  }
+
+  async getProfileVariant(userId: string, variantId: string): Promise<ProfileVariantRecord | null> {
+    const { data, error } = await this.client
+      .from('profile_variants')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('id', variantId)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return mapProfileVariantRow(data as Record<string, unknown>);
+  }
+
+  async createProfileVariant(
+    userId: string,
+    input: CreateProfileVariantRequest
+  ): Promise<ProfileVariantRecord> {
+    const existing = await this.listProfileVariants(userId);
+    const existingSlugs = new Set(existing.map((v) => v.slug));
+    const source = input.cloneFromVariantId
+      ? existing.find((v) => v.id === input.cloneFromVariantId)
+      : existing.find((v) => v.isDefault);
+    const shouldBeDefault = Boolean(input.isDefault);
+
+    if (shouldBeDefault) {
+      await this.client
+        .from('profile_variants')
+        .update({ is_default: false })
+        .eq('user_id', userId)
+        .eq('is_default', true);
+    }
+
+    const nextJson = JsonResumeSchema.parse(input.jsonResume ?? source?.jsonResume ?? {});
+    const nextIndia = IndiaProfileSchema.parse(input.indiaProfile ?? source?.indiaProfile ?? {});
+
+    const { data, error } = await this.client
+      .from('profile_variants')
+      .insert({
+        user_id: userId,
+        name: input.name,
+        slug: slugifyVariantName(input.name, existingSlugs),
+        target_role: input.targetRole ?? source?.targetRole ?? '',
+        is_default: shouldBeDefault,
+        json_resume: nextJson,
+        india_profile: nextIndia,
+        version: 1
+      })
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      throw new Error(`Failed to create profile variant: ${error?.message ?? 'unknown error'}`);
+    }
+
+    if (shouldBeDefault) {
+      await this.updateProfile(userId, { jsonResume: nextJson, indiaProfile: nextIndia }, true);
+    }
+
+    return mapProfileVariantRow(data as Record<string, unknown>);
+  }
+
+  async updateProfileVariant(
+    userId: string,
+    variantId: string,
+    patch: UpdateProfileVariantRequest
+  ): Promise<ProfileVariantRecord | null> {
+    const existing = await this.listProfileVariants(userId);
+    const target = existing.find((v) => v.id === variantId);
+    if (!target) return null;
+
+    if (patch.isDefault === true) {
+      await this.client
+        .from('profile_variants')
+        .update({ is_default: false })
+        .eq('user_id', userId)
+        .eq('is_default', true);
+    }
+
+    const existingSlugs = new Set(existing.filter((v) => v.id !== variantId).map((v) => v.slug));
+    const rowPatch: Record<string, unknown> = {
+      version: target.version + 1,
+      updated_at: new Date().toISOString()
+    };
+    if (patch.name !== undefined) {
+      rowPatch['name'] = patch.name;
+      rowPatch['slug'] = slugifyVariantName(patch.name, existingSlugs);
+    }
+    if (patch.targetRole !== undefined) rowPatch['target_role'] = patch.targetRole;
+    if (patch.isDefault === true) rowPatch['is_default'] = true;
+    if (patch.jsonResume !== undefined) {
+      rowPatch['json_resume'] = JsonResumeSchema.parse(patch.jsonResume);
+    }
+    if (patch.indiaProfile !== undefined) {
+      rowPatch['india_profile'] = IndiaProfileSchema.parse(patch.indiaProfile);
+    }
+
+    const { data, error } = await this.client
+      .from('profile_variants')
+      .update(rowPatch)
+      .eq('user_id', userId)
+      .eq('id', variantId)
+      .select('*')
+      .maybeSingle();
+
+    if (error || !data) return null;
+    const mapped = mapProfileVariantRow(data as Record<string, unknown>);
+
+    if (mapped.isDefault) {
+      await this.updateProfile(
+        userId,
+        { jsonResume: mapped.jsonResume, indiaProfile: mapped.indiaProfile },
+        true
+      );
+    }
+    return mapped;
+  }
+
+  async deleteProfileVariant(userId: string, variantId: string): Promise<boolean> {
+    const existing = await this.listProfileVariants(userId);
+    if (existing.length <= 1) return false;
+    const target = existing.find((v) => v.id === variantId);
+    if (!target) return false;
+
+    const { error } = await this.client
+      .from('profile_variants')
+      .delete()
+      .eq('user_id', userId)
+      .eq('id', variantId);
+
+    if (error) throw new Error(`Failed to delete profile variant: ${error.message}`);
+
+    if (target.isDefault) {
+      const nextDefault = existing.find((v) => v.id !== variantId);
+      if (nextDefault) {
+        await this.updateProfileVariant(userId, nextDefault.id, { isDefault: true });
+      }
+    }
+    return true;
+  }
+
   async createResumeVersion(
     userId: string,
     input: CreateResumeVersionInput
@@ -1103,6 +1346,7 @@ export class SupabaseDataStore implements DataStore {
         id: input.id,
         user_id: userId,
         job_id: input.jobId,
+        profile_variant_id: input.profileVariantId ?? null,
         parent_profile_version: input.parentProfileVersion,
         version_number: nextVersion,
         label: input.label,
@@ -1160,6 +1404,134 @@ export class SupabaseDataStore implements DataStore {
       .eq('id', versionId);
 
     return !error;
+  }
+
+  async uploadRenderedCoverLetterPdf(
+    userId: string,
+    coverLetterId: string,
+    buffer: Buffer
+  ): Promise<string> {
+    const path = `${userId}/cover-letters/${coverLetterId}.pdf`;
+    const { error } = await this.client.storage
+      .from('resumes-rendered')
+      .upload(path, buffer, { contentType: 'application/pdf', upsert: true });
+
+    if (error) throw new Error(`Failed to upload cover letter PDF: ${error.message}`);
+    return path;
+  }
+
+  async listCoverLetters(userId: string, jobId?: string): Promise<CoverLetterRecord[]> {
+    let q = this.client
+      .from('cover_letters')
+      .select('*')
+      .eq('user_id', userId)
+      .order('version_number', { ascending: false });
+
+    if (jobId) q = q.eq('job_id', jobId);
+    const { data, error } = await q.limit(100);
+    if (error) throw new Error(`Failed to list cover letters: ${error.message}`);
+    return ((data ?? []) as Array<Record<string, unknown>>).map(mapCoverLetterRow);
+  }
+
+  async getCoverLetter(userId: string, coverLetterId: string): Promise<CoverLetterRecord | null> {
+    const { data, error } = await this.client
+      .from('cover_letters')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('id', coverLetterId)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return mapCoverLetterRow(data as Record<string, unknown>);
+  }
+
+  async createCoverLetter(
+    userId: string,
+    input: CreateCoverLetterInput
+  ): Promise<CoverLetterRecord> {
+    const { data: latest } = await this.client
+      .from('cover_letters')
+      .select('version_number')
+      .eq('user_id', userId)
+      .order('version_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const nextVersion = Number((latest as Record<string, unknown> | null)?.['version_number'] ?? 0) + 1;
+
+    const { data, error } = await this.client
+      .from('cover_letters')
+      .insert({
+        id: input.id,
+        user_id: userId,
+        job_id: input.jobId,
+        profile_variant_id: input.profileVariantId ?? null,
+        parent_profile_version: input.parentProfileVersion,
+        version_number: nextVersion,
+        label: input.label,
+        company_name: input.companyName,
+        role_title: input.roleTitle,
+        tone: input.tone,
+        jd_requirements: input.jdRequirements,
+        content: input.content,
+        plain_text: input.plainText,
+        verifier_report: input.verifierReport,
+        verifier_passed: input.verifierPassed,
+        typst_source: input.typstSource,
+        pdf_storage_path: input.pdfStoragePath,
+        pdf_engine: input.pdfEngine,
+        provider: input.provider,
+        model: input.model
+      })
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      throw new Error(`Failed to persist cover letter: ${error?.message ?? 'unknown error'}`);
+    }
+    return mapCoverLetterRow(data as Record<string, unknown>);
+  }
+
+  async updateCoverLetter(
+    userId: string,
+    coverLetterId: string,
+    patch: UpdateCoverLetterPatch
+  ): Promise<CoverLetterRecord | null> {
+    const rowPatch: Record<string, unknown> = {};
+    if (patch.label !== undefined) rowPatch['label'] = patch.label;
+    if (patch.content !== undefined) rowPatch['content'] = patch.content;
+    if (patch.plainText !== undefined) rowPatch['plain_text'] = patch.plainText;
+    if (patch.typstSource !== undefined) rowPatch['typst_source'] = patch.typstSource;
+    if (patch.pdfStoragePath !== undefined) rowPatch['pdf_storage_path'] = patch.pdfStoragePath;
+    if (patch.pdfEngine !== undefined) rowPatch['pdf_engine'] = patch.pdfEngine;
+
+    const { data, error } = await this.client
+      .from('cover_letters')
+      .update(rowPatch)
+      .eq('user_id', userId)
+      .eq('id', coverLetterId)
+      .select('*')
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return mapCoverLetterRow(data as Record<string, unknown>);
+  }
+
+  async deleteCoverLetter(userId: string, coverLetterId: string): Promise<boolean> {
+    const existing = await this.getCoverLetter(userId, coverLetterId);
+    if (!existing) return false;
+    if (existing.pdfStoragePath) {
+      await this.client.storage.from('resumes-rendered').remove([existing.pdfStoragePath]);
+    }
+    const { data, error } = await this.client
+      .from('cover_letters')
+      .delete()
+      .eq('user_id', userId)
+      .eq('id', coverLetterId)
+      .select('id');
+
+    if (error) throw new Error(`Failed to delete cover letter: ${error.message}`);
+    return Array.isArray(data) && data.length > 0;
   }
 
   async captureExtensionJob(
@@ -1312,7 +1684,15 @@ export class SupabaseDataStore implements DataStore {
       )
     );
 
-    const [jobsRes, resumesRes] = await Promise.all([
+    const coverIds = Array.from(
+      new Set(
+        rows
+          .map((r) => (r['cover_letter_id'] ? String(r['cover_letter_id']) : null))
+          .filter((x): x is string => Boolean(x))
+      )
+    );
+
+    const [jobsRes, resumesRes, coversRes] = await Promise.all([
       jobIds.length > 0
         ? this.client
             .from('jobs')
@@ -1327,6 +1707,13 @@ export class SupabaseDataStore implements DataStore {
             .select('id, version_number, label, verifier_passed, template_id')
             .eq('user_id', userId)
             .in('id', resumeIds)
+        : Promise.resolve({ data: [], error: null }),
+      coverIds.length > 0
+        ? this.client
+            .from('cover_letters')
+            .select('id, version_number, label, company_name, role_title, tone, verifier_passed')
+            .eq('user_id', userId)
+            .in('id', coverIds)
         : Promise.resolve({ data: [], error: null })
     ]);
 
@@ -1338,17 +1725,24 @@ export class SupabaseDataStore implements DataStore {
     for (const rv of (resumesRes.data ?? []) as Array<Record<string, unknown>>) {
       resumeMap.set(String(rv['id']), rv);
     }
+    const coverMap = new Map<string, Record<string, unknown>>();
+    for (const cl of (coversRes.data ?? []) as Array<Record<string, unknown>>) {
+      coverMap.set(String(cl['id']), cl);
+    }
 
     return rows.map((row) => {
       const jobId = String(row['job_id']);
       const resumeId = row['resume_version_id'] ? String(row['resume_version_id']) : null;
+      const coverLetterId = row['cover_letter_id'] ? String(row['cover_letter_id']) : null;
       const jobRow = jobMap.get(jobId);
       const resumeRow = resumeId ? resumeMap.get(resumeId) : undefined;
+      const coverRow = coverLetterId ? coverMap.get(coverLetterId) : undefined;
       return {
         id: String(row['id']),
         userId: String(row['user_id']),
         jobId,
         resumeVersionId: resumeId,
+        coverLetterId,
         status: ApplicationStatusSchema.catch('saved').parse(row['status']),
         appliedAt: (row['applied_at'] as string | null) ?? null,
         nextFollowUpAt: (row['next_follow_up_at'] as string | null) ?? null,
@@ -1378,6 +1772,17 @@ export class SupabaseDataStore implements DataStore {
               label: String(resumeRow['label'] ?? 'Tailored Resume'),
               verifierPassed: Boolean(resumeRow['verifier_passed']),
               templateId: String(resumeRow['template_id'] ?? 'ats-classic')
+            }
+          : null,
+        coverLetter: coverRow
+          ? {
+              id: String(coverRow['id']),
+              versionNumber: Number(coverRow['version_number'] ?? 1),
+              label: String(coverRow['label'] ?? 'Cover Letter'),
+              companyName: String(coverRow['company_name'] ?? ''),
+              roleTitle: String(coverRow['role_title'] ?? ''),
+              tone: String(coverRow['tone'] ?? 'concise-technical'),
+              verifierPassed: Boolean(coverRow['verifier_passed'])
             }
           : null
       };
@@ -1494,6 +1899,7 @@ export class SupabaseDataStore implements DataStore {
         user_id: userId,
         job_id: jobId,
         resume_version_id: input.resumeVersionId ?? null,
+        cover_letter_id: input.coverLetterId ?? null,
         status,
         applied_at: status === 'saved' ? null : now,
         next_follow_up_at: input.nextFollowUpAt ?? null,
@@ -1552,6 +1958,7 @@ export class SupabaseDataStore implements DataStore {
     }
     if (patch.appliedAt !== undefined) rowPatch['applied_at'] = patch.appliedAt;
     if (patch.resumeVersionId !== undefined) rowPatch['resume_version_id'] = patch.resumeVersionId;
+    if (patch.coverLetterId !== undefined) rowPatch['cover_letter_id'] = patch.coverLetterId;
     if (patch.nextFollowUpAt !== undefined) rowPatch['next_follow_up_at'] = patch.nextFollowUpAt;
     if (patch.followUpNote !== undefined) rowPatch['follow_up_note'] = patch.followUpNote;
     if (patch.salaryOffered !== undefined) rowPatch['salary_offered'] = patch.salaryOffered;
@@ -1583,6 +1990,14 @@ export class SupabaseDataStore implements DataStore {
         user_id: userId,
         event_type: 'resume_version_linked',
         payload: { from: prev['resume_version_id'], to: patch.resumeVersionId }
+      });
+    }
+    if (patch.coverLetterId !== undefined && patch.coverLetterId !== prev['cover_letter_id']) {
+      await this.client.from('application_events').insert({
+        application_id: applicationId,
+        user_id: userId,
+        event_type: 'cover_letter_linked',
+        payload: { from: prev['cover_letter_id'], to: patch.coverLetterId }
       });
     }
     if (patch.nextFollowUpAt !== undefined && patch.nextFollowUpAt !== prev['next_follow_up_at']) {

@@ -54,6 +54,9 @@ export type ExtensionMessage =
   | {
       type: 'API_FETCH_PDF_BYTES';
       versionId: string;
+    }
+  | {
+      type: 'JOBPILOT_SAVE_ACTIVE_TAB_JOB';
     };
 
 export type ApiProxyResponse<T> =

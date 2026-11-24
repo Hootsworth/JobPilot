@@ -4,8 +4,12 @@ import type {
   ApplicationStatus,
   CaptureExtensionJobRequest,
   CaptureExtensionJobResponse,
+  CoverLetterContent,
+  CoverLetterRecord,
+  CoverLetterTone,
   CrawlRunSummary,
   CreateManualApplicationRequest,
+  CreateProfileVariantRequest,
   IndiaProfile,
   JdRequirements,
   JobFeedItem,
@@ -19,6 +23,7 @@ import type {
   LlmUsageSummary,
   MasterProfile,
   ProfileStory,
+  ProfileVariantRecord,
   ProviderCapabilities,
   ResumeDiffSummary,
   ResumeTemplateId,
@@ -27,6 +32,7 @@ import type {
   SearchPreferences,
   UpdateApplicationRequest,
   UpdateProfileRequest,
+  UpdateProfileVariantRequest,
   UpsertSavedAnswerRequest,
   UpsertStoryRequest,
   VerifierReport
@@ -79,17 +85,20 @@ export interface ProfilePatch extends UpdateProfileRequest {
 export interface AccountExportPayload {
   exportedAt: string;
   profile: MasterProfile;
+  profileVariants: ProfileVariantRecord[];
   stories: ProfileStory[];
   savedAnswers: SavedAnswer[];
   llmSettings: Array<Omit<StoredLlmSetting, 'encryptedApiKey' | 'keyIv' | 'keyAuthTag'> & { hasKey: boolean }>;
   usageLogs: LlmUsageLog[];
   resumeVersions: ResumeVersionRecord[];
+  coverLetters: CoverLetterRecord[];
   applications: ApplicationRecord[];
 }
 
 export interface CreateResumeVersionInput {
   id: string;
   jobId: string | null;
+  profileVariantId?: string | null;
   parentProfileVersion: number;
   label: string;
   jdRequirements: JdRequirements;
@@ -103,6 +112,36 @@ export interface CreateResumeVersionInput {
   pdfEngine: 'typst' | 'builtin-ats-pdf';
   provider: LlmProviderId | null;
   model: string | null;
+}
+
+export interface CreateCoverLetterInput {
+  id: string;
+  jobId: string | null;
+  profileVariantId?: string | null;
+  parentProfileVersion: number;
+  label: string;
+  companyName: string;
+  roleTitle: string;
+  tone: CoverLetterTone;
+  jdRequirements: JdRequirements;
+  content: CoverLetterContent;
+  plainText: string;
+  verifierReport: VerifierReport;
+  verifierPassed: boolean;
+  typstSource: string;
+  pdfStoragePath: string;
+  pdfEngine: 'typst' | 'builtin-ats-pdf';
+  provider: LlmProviderId | null;
+  model: string | null;
+}
+
+export interface UpdateCoverLetterPatch {
+  label?: string;
+  content?: CoverLetterContent;
+  plainText?: string;
+  typstSource?: string;
+  pdfStoragePath?: string;
+  pdfEngine?: 'typst' | 'builtin-ats-pdf';
 }
 
 export interface DataStore {
@@ -191,6 +230,19 @@ export interface DataStore {
   uploadRenderedResumePdf(userId: string, versionId: string, buffer: Buffer): Promise<string>;
   downloadRenderedResumePdf(userId: string, storagePath: string): Promise<Buffer | null>;
 
+  listProfileVariants(userId: string): Promise<ProfileVariantRecord[]>;
+  getProfileVariant(userId: string, variantId: string): Promise<ProfileVariantRecord | null>;
+  createProfileVariant(
+    userId: string,
+    input: CreateProfileVariantRequest
+  ): Promise<ProfileVariantRecord>;
+  updateProfileVariant(
+    userId: string,
+    variantId: string,
+    patch: UpdateProfileVariantRequest
+  ): Promise<ProfileVariantRecord | null>;
+  deleteProfileVariant(userId: string, variantId: string): Promise<boolean>;
+
   listResumeVersions(userId: string, jobId?: string): Promise<ResumeVersionRecord[]>;
   getResumeVersion(userId: string, versionId: string): Promise<ResumeVersionRecord | null>;
   createResumeVersion(
@@ -203,6 +255,21 @@ export interface DataStore {
     report: VerifierReport
   ): Promise<ResumeVersionRecord | null>;
   deleteResumeVersion(userId: string, versionId: string): Promise<boolean>;
+
+  uploadRenderedCoverLetterPdf(
+    userId: string,
+    coverLetterId: string,
+    buffer: Buffer
+  ): Promise<string>;
+  listCoverLetters(userId: string, jobId?: string): Promise<CoverLetterRecord[]>;
+  getCoverLetter(userId: string, coverLetterId: string): Promise<CoverLetterRecord | null>;
+  createCoverLetter(userId: string, input: CreateCoverLetterInput): Promise<CoverLetterRecord>;
+  updateCoverLetter(
+    userId: string,
+    coverLetterId: string,
+    patch: UpdateCoverLetterPatch
+  ): Promise<CoverLetterRecord | null>;
+  deleteCoverLetter(userId: string, coverLetterId: string): Promise<boolean>;
 
   captureExtensionJob(
     userId: string,

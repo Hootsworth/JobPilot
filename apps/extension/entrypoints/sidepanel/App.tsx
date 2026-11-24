@@ -320,6 +320,25 @@ export function App() {
     }
   };
 
+  const handleSaveAnyActivePage = async () => {
+    setSavingJob(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'JOBPILOT_SAVE_ACTIVE_TAB_JOB'
+      } satisfies ExtensionMessage)) as ApiProxyResponse<{ title: string; companyName: string }>;
+      if (!res?.ok) {
+        throw new Error(res?.error || 'Failed to save active page.');
+      }
+      setStatusMsg(`Saved "${res.data.title}" @ ${res.data.companyName} to Tracker.`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to save active page.');
+    } finally {
+      setSavingJob(false);
+    }
+  };
+
   const handleDraftAiAnswers = async () => {
     if (!scan) return;
     const openQuestions = scan.fields
@@ -729,18 +748,28 @@ export function App() {
               </div>
             ) : !scan ? (
               <div className="jp-panel">
-                <div className="jp-label">No Active Job / Application Form Detected</div>
+                <div className="jp-label">No Application Form Detected</div>
                 <p className="jp-meta">
-                  Open Greenhouse, Lever, Ashby, Workday — or enable an opt-in portal in Adapters — then click Rescan.
+                  Save any job page immediately via <strong>Alt+Shift+S</strong>, right-click menu, or below — even outside supported ATS forms.
                 </p>
-                <button
-                  type="button"
-                  className="jp-btn"
-                  disabled={scanning}
-                  onClick={() => void scanActiveTab()}
-                >
-                  {scanning ? 'Scanning...' : 'Rescan Active Tab'}
-                </button>
+                <div className="jp-row" style={{ gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="jp-btn jp-btn-primary"
+                    disabled={savingJob}
+                    onClick={() => void handleSaveAnyActivePage()}
+                  >
+                    {savingJob ? 'Saving...' : '[+] Save Active Page'}
+                  </button>
+                  <button
+                    type="button"
+                    className="jp-btn"
+                    disabled={scanning}
+                    onClick={() => void scanActiveTab()}
+                  >
+                    {scanning ? 'Scanning...' : 'Rescan Tab'}
+                  </button>
+                </div>
               </div>
             ) : scan.disabledByUser ? (
               <div className="jp-panel">
@@ -749,15 +778,25 @@ export function App() {
                   <div className="jp-banner jp-banner-warn">{scan.tosWarning}</div>
                 ) : null}
                 <p className="jp-meta">
-                  Turn this adapter on in the Adapters tab to enable &ldquo;Save this job&rdquo; and user-initiated autofill on this site.
+                  Turn this adapter on in Adapters for autofill, or save this page directly to your Tracker (Alt+Shift+S).
                 </p>
-                <button
-                  type="button"
-                  className="jp-btn jp-btn-primary"
-                  onClick={() => setTab('adapters')}
-                >
-                  Open Adapters Settings -&gt;
-                </button>
+                <div className="jp-row" style={{ gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="jp-btn"
+                    disabled={savingJob}
+                    onClick={() => void handleSaveAnyActivePage()}
+                  >
+                    {savingJob ? 'Saving...' : '[+] Save Page to Tracker'}
+                  </button>
+                  <button
+                    type="button"
+                    className="jp-btn jp-btn-primary"
+                    onClick={() => setTab('adapters')}
+                  >
+                    Open Adapters Settings -&gt;
+                  </button>
+                </div>
               </div>
             ) : (
               <>

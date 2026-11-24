@@ -71,6 +71,7 @@ export const LlmTaskTypeSchema = z.enum([
   'resume_parse',
   'resume_tailor',
   'resume_verify',
+  'cover_letter',
   'job_match_rerank',
   'jd_extract',
   'form_draft',

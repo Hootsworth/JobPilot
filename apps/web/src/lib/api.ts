@@ -4,8 +4,15 @@ import type {
   ApplicationEventRecord,
   ApplicationRecord,
   ApplicationStatus,
+  AtsScoreReport,
+  AtsScoreRequest,
+  CoverLetterRecord,
   CrawlRunSummary,
   CreateManualApplicationRequest,
+  CreateProfileVariantRequest,
+  GenerateCoverLetterRequest,
+  GithubImportRequest,
+  ImportPreviewCandidate,
   JobFeedItem,
   JobSighting,
   JobSourceStatus,
@@ -16,6 +23,7 @@ import type {
   ModelInfo,
   ParsedResumeOutput,
   ProfileStory,
+  ProfileVariantRecord,
   RefreshMatchesRequest,
   ResumeVersionRecord,
   SavedAnswer,
@@ -23,7 +31,9 @@ import type {
   TestLlmKeyRequest,
   TestLlmKeyResult,
   UpdateApplicationRequest,
+  UpdateCoverLetterRequest,
   UpdateProfileRequest,
+  UpdateProfileVariantRequest,
   UpsertLlmSettingsRequest,
   UpsertSavedAnswerRequest,
   UpsertStoryRequest
@@ -141,6 +151,34 @@ export const api = {
     });
   },
 
+  listProfileVariants: () => apiFetch<ProfileVariantRecord[]>('/api/profiles/variants'),
+  createProfileVariant: (payload: CreateProfileVariantRequest) =>
+    apiFetch<ProfileVariantRecord>('/api/profiles/variants', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  updateProfileVariant: (id: string, payload: UpdateProfileVariantRequest) =>
+    apiFetch<ProfileVariantRecord>(`/api/profiles/variants/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  deleteProfileVariant: (id: string) =>
+    apiFetch<{ ok: boolean }>(`/api/profiles/variants/${id}`, { method: 'DELETE' }),
+
+  importGithubProfile: (payload: Partial<GithubImportRequest> & { username: string }) =>
+    apiFetch<ImportPreviewCandidate>('/api/profile/import/github', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  importLinkedinPdf: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return apiFetch<ImportPreviewCandidate>('/api/profile/import/linkedin-pdf', {
+      method: 'POST',
+      body: form
+    });
+  },
+
   listStories: () => apiFetch<ProfileStory[]>('/api/stories'),
   createStory: (payload: UpsertStoryRequest) =>
     apiFetch<ProfileStory>('/api/stories', { method: 'POST', body: JSON.stringify(payload) }),
@@ -244,10 +282,47 @@ export const api = {
       `/api/resumes/versions/${versionId}/pdf`,
       filename ?? `jobpilot-resume-${versionId.slice(0, 8)}.pdf`
     ),
+  fetchResumePdfBlobUrl: (versionId: string) =>
+    fetchAuthenticatedBlobUrl(`/api/resumes/versions/${versionId}/pdf?disposition=inline`),
   downloadResumeTypst: (versionId: string, filename?: string) =>
     downloadAuthenticatedFile(
       `/api/resumes/versions/${versionId}/typst`,
       filename ?? `jobpilot-resume-${versionId.slice(0, 8)}.typ`
+    ),
+  scoreResumeAts: (payload: AtsScoreRequest) =>
+    apiFetch<AtsScoreReport>('/api/resumes/ats-score', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+
+  generateCoverLetter: (payload: GenerateCoverLetterRequest) =>
+    apiFetch<CoverLetterRecord>('/api/cover-letters/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  listCoverLetters: (jobId?: string) => {
+    const suffix = jobId ? `?jobId=${encodeURIComponent(jobId)}` : '';
+    return apiFetch<CoverLetterRecord[]>(`/api/cover-letters${suffix}`);
+  },
+  getCoverLetter: (id: string) => apiFetch<CoverLetterRecord>(`/api/cover-letters/${id}`),
+  updateCoverLetter: (id: string, payload: UpdateCoverLetterRequest) =>
+    apiFetch<CoverLetterRecord>(`/api/cover-letters/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  deleteCoverLetter: (id: string) =>
+    apiFetch<{ ok: boolean }>(`/api/cover-letters/${id}`, { method: 'DELETE' }),
+  downloadCoverLetterPdf: (id: string, filename?: string) =>
+    downloadAuthenticatedFile(
+      `/api/cover-letters/${id}/pdf`,
+      filename ?? `jobpilot-cover-letter-${id.slice(0, 8)}.pdf`
+    ),
+  fetchCoverLetterPdfBlobUrl: (id: string) =>
+    fetchAuthenticatedBlobUrl(`/api/cover-letters/${id}/pdf?disposition=inline`),
+  downloadCoverLetterTypst: (id: string, filename?: string) =>
+    downloadAuthenticatedFile(
+      `/api/cover-letters/${id}/typst`,
+      filename ?? `jobpilot-cover-letter-${id.slice(0, 8)}.typ`
     ),
 
   listApplications: (status?: ApplicationStatus) => {
@@ -275,22 +350,31 @@ export const api = {
   deleteAccount: () => apiFetch<{ ok: boolean }>('/api/account', { method: 'DELETE' })
 };
 
-async function downloadAuthenticatedFile(path: string, fallbackFilename: string): Promise<void> {
+async function fetchAuthenticatedBlobResponse(path: string): Promise<{ blob: Blob; filename?: string }> {
   const token = await getAccessToken();
   const res = await fetch(`${getApiBaseUrl()}${path}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
   if (!res.ok) {
-    throw new ApiError(`Download failed (${res.status})`, res.status);
+    throw new ApiError(`Failed to fetch PDF (${res.status})`, res.status);
   }
   const blob = await res.blob();
   const disposition = res.headers.get('content-disposition');
   const match = disposition?.match(/filename="([^"]+)"/i);
-  const filename = match?.[1] ?? fallbackFilename;
+  return { blob, filename: match?.[1] };
+}
+
+async function fetchAuthenticatedBlobUrl(path: string): Promise<string> {
+  const { blob } = await fetchAuthenticatedBlobResponse(path);
+  return URL.createObjectURL(blob);
+}
+
+async function downloadAuthenticatedFile(path: string, fallbackFilename: string): Promise<void> {
+  const { blob, filename } = await fetchAuthenticatedBlobResponse(path);
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = objectUrl;
-  link.download = filename;
+  link.download = filename ?? fallbackFilename;
   document.body.appendChild(link);
   link.click();
   link.remove();

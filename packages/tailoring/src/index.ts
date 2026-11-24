@@ -5,3 +5,5 @@ export * from './llm-verifier.js';
 export * from './typst-template.js';
 export * from './pdf-renderer.js';
 export * from './tailor.js';
+export * from './ats-checker.js';
+export * from './cover-letter.js';

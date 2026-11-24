@@ -16,7 +16,7 @@ function normalizeStr(s: string | undefined | null): string {
   return (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function collectMasterCorpusText(profile: MasterProfile, stories: ProfileStory[]): string {
+export function collectMasterCorpusText(profile: MasterProfile, stories: ProfileStory[]): string {
   const r = profile.jsonResume;
   const ind = profile.indiaProfile;
   const chunks: string[] = [
@@ -50,7 +50,7 @@ function collectMasterCorpusText(profile: MasterProfile, stories: ProfileStory[]
   return chunks.filter(Boolean).join('\n');
 }
 
-function extractNumericFingerprints(text: string): string[] {
+export function extractNumericFingerprints(text: string): string[] {
   const results: string[] = [];
   const regex = /[$₹€£]?\d+(?:[.,]\d+)?(?:\s*(?:k|m|b|lpa|lakhs?|cr|ms|s|x|%|\+))?/gi;
   for (const match of text.matchAll(regex)) {

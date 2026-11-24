@@ -228,4 +228,58 @@ describe('@jobpilot/form-engine official ATS adapters (Greenhouse, Lever, Ashby)
     expect(plan.find((p) => p.fieldId === wdQ.fieldId)?.source).toBe('llm_fallback');
     expect(plan.find((p) => p.fieldId === wdPre.fieldId)?.included).toBe(false);
   });
+
+  it('extracts JSON-LD JobPosting schema and OpenGraph fallback metadata on any career page', async () => {
+    const { buildGenericJobMetadata } = await import('../adapters/base.js');
+
+    document.head.innerHTML = `
+      <script type="application/ld+json">
+        {
+          "@context": "https://schema.org/",
+          "@type": "JobPosting",
+          "title": "Staff Distributed Systems Engineer",
+          "hiringOrganization": { "@type": "Organization", "name": "Stripe" },
+          "jobLocation": {
+            "@type": "Place",
+            "address": { "@type": "PostalAddress", "addressLocality": "Bengaluru", "addressCountry": "IN" }
+          },
+          "baseSalary": {
+            "@type": "MonetaryAmount",
+            "currency": "INR",
+            "value": { "minValue": 4500000, "maxValue": 6000000 }
+          },
+          "description": "<p>Design idempotent <strong>payment ledgers</strong> at global scale.</p>"
+        }
+      </script>
+    `;
+    document.body.innerHTML = '<main>Fallback body text</main>';
+
+    const ldMeta = buildGenericJobMetadata(
+      document,
+      new URL('https://stripe.com/jobs/listing/staff-systems/123'),
+      'generic'
+    );
+    expect(ldMeta.title).toBe('Staff Distributed Systems Engineer');
+    expect(ldMeta.companyName).toBe('Stripe');
+    expect(ldMeta.locationRaw).toBe('Bengaluru, IN');
+    expect(ldMeta.salaryText).toBe('INR 4500000–6000000');
+    expect(ldMeta.descriptionClean).toContain('Design idempotent payment ledgers at global scale.');
+
+    // OpenGraph fallback when JSON-LD is absent
+    document.head.innerHTML = `
+      <meta property="og:title" content="Founding Systems Engineer" />
+      <meta property="og:site_name" content="Acme Cloud" />
+      <meta property="og:description" content="Work on TypeScript, Rust, and Postgres." />
+    `;
+    document.body.innerHTML = '';
+
+    const ogMeta = buildGenericJobMetadata(
+      document,
+      new URL('https://acme.dev/careers'),
+      'generic'
+    );
+    expect(ogMeta.title).toBe('Founding Systems Engineer');
+    expect(ogMeta.companyName).toBe('Acme Cloud');
+    expect(ogMeta.descriptionClean).toBe('Work on TypeScript, Rust, and Postgres.');
+  });
 });

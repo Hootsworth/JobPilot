@@ -304,6 +304,42 @@ describe('@jobpilot/shared schemas & utilities', () => {
       }
     });
     expect(rec.resumeVersion?.versionNumber).toBe(2);
+    expect(rec.coverLetterId).toBeNull();
+  });
+
+  it('validates new expansion schemas (templates, ATS score, variants, cover letters)', async () => {
+    const mod = await import('../index.js');
+    expect(mod.ResumeTemplateIdSchema.parse('ats-detailed')).toBe('ats-detailed');
+    expect(mod.ResumeTemplateIdSchema.parse('ats-executive')).toBe('ats-executive');
+
+    const variantReq = mod.CreateProfileVariantRequestSchema.parse({
+      name: 'Backend Engineer',
+      targetRole: 'Backend SDE-1'
+    });
+    expect(variantReq.name).toBe('Backend Engineer');
+
+    const ghReq = mod.GithubImportRequestSchema.parse({
+      username: 'https://github.com/octocat'
+    });
+    expect(ghReq.username).toBe('octocat');
+
+    const clReq = mod.GenerateCoverLetterRequestSchema.parse({
+      customJob: {
+        title: 'Software Engineer',
+        companyName: 'Razorpay',
+        description: 'Build distributed payments APIs using Go, PostgreSQL, and Kafka.'
+      },
+      tone: 'concise-technical'
+    });
+    expect(clReq.tone).toBe('concise-technical');
+
+    const atsReq = mod.AtsScoreRequestSchema.parse({
+      customJob: {
+        title: 'Backend Engineer',
+        description: 'Requires TypeScript, PostgreSQL, Docker, and system design.'
+      }
+    });
+    expect(atsReq.customJob?.title).toBe('Backend Engineer');
   });
 });
 
