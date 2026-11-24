@@ -88,6 +88,53 @@ function isFollowUpDueOrUpcoming(iso: string | null): {
   return { state: 'future', label: `Follow-up: ${dateStr}` };
 }
 
+const EVENT_LABELS: Record<string, string> = {
+  captured_from_extension: 'Captured from extension',
+  status_changed: 'Status updated',
+  resume_linked: 'Resume linked',
+  cover_letter_linked: 'Cover letter linked',
+  follow_up_scheduled: 'Follow-up scheduled',
+  created_manual: 'Logged manually',
+  applied_via_extension: 'Applied via extension',
+  created: 'Application created'
+};
+
+function formatEventLabel(eventType: string): string {
+  const known = EVENT_LABELS[eventType];
+  if (known) return known;
+  const spaced = eventType.replace(/_/g, ' ').trim();
+  return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase() : 'Event';
+}
+
+function formatShortUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.replace(/^www\./, '');
+    const path =
+      u.pathname && u.pathname !== '/'
+        ? u.pathname.slice(0, 42) + (u.pathname.length > 42 ? '…' : '')
+        : '';
+    return `${host}${path}`;
+  } catch {
+    return raw.slice(0, 64);
+  }
+}
+
+function formatPayloadValue(key: string, value: unknown): string {
+  if (typeof value === 'string') {
+    if (key.toLowerCase().includes('at') && !Number.isNaN(Date.parse(value))) {
+      return new Date(value).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      });
+    }
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
+}
+
 export default function TrackerPage() {
   const [applications, setApplications] = useState<ApplicationRecord[]>([]);
   const [resumeVersions, setResumeVersions] = useState<ResumeVersionRecord[]>([]);
@@ -981,32 +1028,82 @@ export default function TrackerPage() {
                 {/* Audit Timeline */}
                 <SectionBlock
                   title="Application Audit Timeline"
-                  description="Immutable event log of status transitions, linked resume versions, and scheduled follow-ups."
+                  description="History of status changes, linked resumes, and follow-ups."
                 >
                   {events.length === 0 ? (
                     <p className="text-xs text-[var(--mute)]">No events recorded yet.</p>
                   ) : (
                     <ul className="space-y-2 text-xs">
-                      {events.map((ev) => (
-                        <li
-                          key={ev.id}
-                          className="flex flex-wrap items-center justify-between gap-2 p-2.5 border border-[var(--hairline)] bg-[var(--surface-soft)]"
-                        >
-                          <div>
-                            <span className="font-bold text-[var(--ink)] uppercase">
-                              [{ev.eventType.replace(/_/g, ' ')}]
-                            </span>{' '}
-                            <span className="text-[var(--body)]">
-                              {Object.keys(ev.payload).length > 0
-                                ? JSON.stringify(ev.payload)
-                                : ''}
-                            </span>
-                          </div>
-                          <span className="text-[var(--mute)] tabular-nums">
-                            {new Date(ev.createdAt).toLocaleString('en-IN')}
-                          </span>
-                        </li>
-                      ))}
+                      {events.map((ev) => {
+                        const payload = ev.payload ?? {};
+                        const rawUrl =
+                          typeof payload.sourceUrl === 'string' && /^https?:\/\//i.test(payload.sourceUrl)
+                            ? payload.sourceUrl
+                            : typeof payload.url === 'string' && /^https?:\/\//i.test(payload.url)
+                              ? payload.url
+                              : typeof payload.applyUrl === 'string' && /^https?:\/\//i.test(payload.applyUrl)
+                                ? payload.applyUrl
+                                : null;
+                        const transition =
+                          typeof payload.from === 'string' && typeof payload.to === 'string'
+                            ? `${payload.from} → ${payload.to}`
+                            : null;
+                        const extraEntries = Object.entries(payload).filter(([key, val]) => {
+                          if (val == null || val === '') return false;
+                          if ((key === 'sourceUrl' || key === 'url' || key === 'applyUrl') && rawUrl) {
+                            return false;
+                          }
+                          if ((key === 'from' || key === 'to') && transition) return false;
+                          return true;
+                        });
+                        const hasDetails = Boolean(rawUrl || transition || extraEntries.length > 0);
+
+                        return (
+                          <li
+                            key={ev.id}
+                            className="p-3 border border-[var(--hairline)] bg-[var(--surface-soft)] space-y-1.5 overflow-hidden"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="font-semibold text-[var(--ink)]">
+                                {formatEventLabel(ev.eventType)}
+                              </span>
+                              <span className="text-[var(--mute)] tabular-nums shrink-0">
+                                {new Date(ev.createdAt).toLocaleString('en-IN')}
+                              </span>
+                            </div>
+                            {hasDetails ? (
+                              <div className="text-[var(--body)] min-w-0 break-words [overflow-wrap:anywhere] space-y-1">
+                                {transition ? <div>{transition}</div> : null}
+                                {rawUrl ? (
+                                  <div>
+                                    Source:{' '}
+                                    <a
+                                      href={rawUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="underline text-[var(--ink)] break-all"
+                                    >
+                                      {formatShortUrl(rawUrl)}
+                                    </a>
+                                  </div>
+                                ) : null}
+                                {extraEntries.length > 0 ? (
+                                  <div className="flex flex-wrap gap-x-3 gap-y-1">
+                                    {extraEntries.map(([k, v]) => (
+                                      <span key={k}>
+                                        <span className="text-[var(--mute)]">
+                                          {k.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').toLowerCase()}:
+                                        </span>{' '}
+                                        {formatPayloadValue(k, v)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                 </SectionBlock>

@@ -24,11 +24,7 @@ import {
 const MENU_OPEN_PANEL = 'jobpilot-open-panel';
 const MENU_SAVE_JOB = 'jobpilot-save-job';
 
-const WEB_APP_TAB_PATTERNS = [
-  'https://jobpilot.singulr.tech/*',
-  'https://*.vercel.app/*',
-  'http://localhost:3000/*'
-];
+const WEB_APP_TAB_PATTERNS = ['https://jobpilot.singulr.tech/*'];
 
 interface ExtractedPageJob {
   sourceType: CaptureExtensionJobRequest['sourceType'];

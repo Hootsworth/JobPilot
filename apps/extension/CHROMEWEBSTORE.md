@@ -33,12 +33,14 @@ JobPilot helps software engineers, students, and job seekers complete repetitive
 | `sidePanel` | Displays the persistent JobPilot review checklist alongside the job application form so the user can inspect confidence scores, edit proposed values, and approve fields before filling. |
 | `contextMenus` | Provides a right-click "Open JobPilot Review Side Panel" and "Save this job to JobPilot Tracker" menu action initiated by the user. |
 | `scripting` | Injects the form-scanning/autofill script or the one-click job metadata extractor only upon explicit user action or per-site opt-in toggle. |
-| `host_permissions` (`*://*.greenhouse.io/*`, `*://*.lever.co/*`, `*://*.ashbyhq.com/*`, `https://jobpilot.singulr.tech/*`, `https://*.vercel.app/*`, `http://localhost:3000/*`, `http://localhost:4000/*`, `https://*.onrender.com/*`, `https://*.supabase.co/*`) | Enables automatic form detection and user-approved autofill on Greenhouse, Lever, and Ashby; receives seamless sign-in state from the user's open JobPilot web session; and communicates with the JobPilot API and Supabase Auth endpoints. |
+| `host_permissions` (`*://*.greenhouse.io/*`, `*://*.lever.co/*`, `*://*.ashbyhq.com/*`, `https://jobpilot.singulr.tech/*`, `https://jobpilot-moek.onrender.com/*`, `https://*.supabase.co/*`) | Enables automatic form detection and user-approved autofill on Greenhouse, Lever, and Ashby; receives seamless sign-in state from the user's open JobPilot web session; and communicates with the JobPilot API and Supabase Auth endpoints. |
 | `optional_host_permissions` (`*://*.myworkdayjobs.com/*`, `*://*.myworkdaysite.com/*`, `*://*.naukri.com/*`, `*://*.foundit.in/*`, `*://*.internshala.com/*`, `*://*.instahyre.com/*`, `*://*.wellfound.com/*`, `*://*.angel.co/*`, `*://*.linkedin.com/*`) | Requested at runtime via `chrome.permissions.request()` **only** when the user explicitly toggles on Workday or an individual job portal adapter in the Side Panel to capture a viewed job or assist with an apply drawer. |
 
 ---
 
 ## 3. Privacy Disclosures
+
+- **Privacy Policy URL**: `https://jobpilot.singulr.tech/privacy`
 
 - **Single Purpose**: Assisting the user in capturing job postings to their personal tracker and autofilling job application forms with mandatory human review before submission.
 - **Data Collection & Transmission**:

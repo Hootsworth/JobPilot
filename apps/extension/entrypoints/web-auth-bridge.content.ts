@@ -1,11 +1,7 @@
 import type { ExtensionMessage, WebConfigSyncPayload, WebSessionSyncPayload } from '../src/lib/messaging';
 
 export default defineContentScript({
-  matches: [
-    'https://jobpilot.singulr.tech/*',
-    'https://*.vercel.app/*',
-    'http://localhost:3000/*'
-  ],
+  matches: ['https://jobpilot.singulr.tech/*'],
   runAt: 'document_idle',
 
   main() {

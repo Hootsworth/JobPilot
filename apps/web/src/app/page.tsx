@@ -465,7 +465,7 @@ export default function LandingPage() {
                 onClick={() => setForceLanding(false)}
                 className="text-[var(--ink)] no-underline hover:underline"
               >
-                Open Home Feed -&gt;
+                Open Home
               </Link>
             ) : (
               <>
@@ -483,6 +483,12 @@ export default function LandingPage() {
                 </Link>
               </>
             )}
+            <Link href="/privacy" className="text-[var(--mute)] hover:text-[var(--ink)] no-underline">
+              Privacy
+            </Link>
+            <Link href="/terms" className="text-[var(--mute)] hover:text-[var(--ink)] no-underline">
+              Terms
+            </Link>
             <a
               href="https://github.com/Hootsworth/JobPilot"
               target="_blank"

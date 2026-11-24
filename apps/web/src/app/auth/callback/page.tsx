@@ -34,6 +34,10 @@ function AuthCallbackInner() {
       }
 
       const code = searchParams.get('code');
+      const nextParam = searchParams.get('next');
+      const authType = searchParams.get('type');
+      const safeNext =
+        nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//') ? nextParam : null;
       const { data: initialSessionData } = await supabase.auth.getSession();
 
       if (!initialSessionData.session && code) {
@@ -53,6 +57,16 @@ function AuthCallbackInner() {
         if (active) {
           setErrorMsg('No active session received from OAuth provider. Please try signing in again.');
         }
+        return;
+      }
+
+      if (safeNext === '/auth/reset-password' || authType === 'recovery') {
+        if (active) router.replace('/auth/reset-password');
+        return;
+      }
+
+      if (safeNext) {
+        if (active) router.replace(safeNext);
         return;
       }
 
@@ -94,7 +108,7 @@ function AuthCallbackInner() {
               <div className="space-y-4">
                 <AlertBanner tone="error" title="Sign-in error" message={errorMsg} />
                 <Link href="/login">
-                  <Button variant="primary">Back to Sign In -&gt;</Button>
+                  <Button variant="primary">Back to sign in</Button>
                 </Link>
               </div>
             ) : (

@@ -6,7 +6,7 @@ export default defineConfig({
       jsx: 'automatic'
     }
   }),
-  manifest: {
+  manifest: ({ mode }) => ({
     name: 'JobPilot — AI Application Assistant',
     version: '0.1.0',
     description:
@@ -45,11 +45,9 @@ export default defineConfig({
       'https://jobs.eu.lever.co/*',
       'https://jobs.ashbyhq.com/*',
       'https://jobpilot.singulr.tech/*',
-      'https://*.vercel.app/*',
-      'http://localhost:3000/*',
-      'http://localhost:4000/*',
-      'https://*.onrender.com/*',
-      'https://*.supabase.co/*'
+      'https://jobpilot-moek.onrender.com/*',
+      'https://*.supabase.co/*',
+      ...(mode === 'development' ? ['http://localhost:3000/*', 'http://localhost:4000/*'] : [])
     ],
     optional_host_permissions: [
       'https://*.myworkdayjobs.com/*',
@@ -62,5 +60,5 @@ export default defineConfig({
       'https://*.angel.co/*',
       'https://*.linkedin.com/*'
     ]
-  }
+  })
 });

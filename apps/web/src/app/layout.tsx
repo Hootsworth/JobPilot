@@ -5,9 +5,27 @@ import '@fontsource/jetbrains-mono/700.css';
 import { ExtensionAuthBridge } from '@/components/auth/extension-auth-bridge';
 import './globals.css';
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://jobpilot.singulr.tech';
+
 export const metadata: Metadata = {
-  title: 'JobPilot',
-  description: 'Job discovery, resume tailoring, and application tracking.'
+  metadataBase: new URL(siteUrl),
+  title: {
+    default: 'JobPilot',
+    template: '%s · JobPilot'
+  },
+  description: 'Job discovery, grounded resume tailoring, and Chrome extension autofill.',
+  openGraph: {
+    type: 'website',
+    siteName: 'JobPilot',
+    title: 'JobPilot',
+    description: 'Job discovery, grounded resume tailoring, and Chrome extension autofill.',
+    url: '/'
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'JobPilot',
+    description: 'Job discovery, grounded resume tailoring, and Chrome extension autofill.'
+  }
 };
 
 const THEME_INIT_SCRIPT = `

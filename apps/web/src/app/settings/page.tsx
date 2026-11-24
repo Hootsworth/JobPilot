@@ -12,6 +12,7 @@ import type {
 } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { ThemeSettingsControl } from '@/components/theme-toggle';
+import { moToast } from '@/components/ui/mo';
 import {
   AlertBanner,
   Badge,
@@ -782,6 +783,61 @@ export default function SettingsPage() {
               </div>
             </div>
           </div>
+
+          {/* 4. Feedback & Support */}
+          <section className="border border-[var(--hairline)] bg-[var(--canvas)] p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="text-base font-bold text-[var(--ink)]">Feedback &amp; Support</h2>
+              <p className="text-xs text-[var(--mute)]">
+                Report broken application forms, parsing issues, or request features.{' '}
+                <Link href="/privacy" className="text-[var(--ink)] underline">
+                  Privacy Policy
+                </Link>{' '}
+                ·{' '}
+                <Link href="/terms" className="text-[var(--ink)] underline">
+                  Terms of Service
+                </Link>
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href="https://github.com/Hootsworth/JobPilot/issues/new?labels=bug&title=%5BBug%5D+"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Button type="button" variant="secondary" size="sm">
+                  Report a bug
+                </Button>
+              </a>
+              <a
+                href="https://github.com/Hootsworth/JobPilot/issues/new?labels=enhancement&title=%5BFeature%5D+"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Button type="button" variant="secondary" size="sm">
+                  Request a feature
+                </Button>
+              </a>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  const info = {
+                    app: 'jobpilot-web',
+                    version: '0.1.0',
+                    apiBaseUrl: getApiBaseUrl(),
+                    activeProvider: activeItem?.provider ?? defaultEnvProvider,
+                    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown'
+                  };
+                  void navigator.clipboard?.writeText(JSON.stringify(info, null, 2));
+                  moToast('Copied debug info');
+                }}
+              >
+                Copy debug info
+              </Button>
+            </div>
+          </section>
         </div>
       )}
 

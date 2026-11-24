@@ -20,14 +20,16 @@ function LoginInner() {
   const supabaseReady = isSupabaseConfigured();
 
   const initialModeParam = searchParams.get('mode');
-  const initialMode: 'signin' | 'signup' | 'magic' =
+  const initialMode: 'signin' | 'signup' | 'magic' | 'forgot' =
     initialModeParam === 'signup'
       ? 'signup'
       : initialModeParam === 'magic'
         ? 'magic'
-        : 'signin';
+        : initialModeParam === 'forgot'
+          ? 'forgot'
+          : 'signin';
 
-  const [mode, setMode] = useState<'signin' | 'signup' | 'magic'>(initialMode);
+  const [mode, setMode] = useState<'signin' | 'signup' | 'magic' | 'forgot'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
@@ -38,7 +40,12 @@ function LoginInner() {
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    if (initialModeParam === 'signup' || initialModeParam === 'signin' || initialModeParam === 'magic') {
+    if (
+      initialModeParam === 'signup' ||
+      initialModeParam === 'signin' ||
+      initialModeParam === 'magic' ||
+      initialModeParam === 'forgot'
+    ) {
       setMode(initialModeParam);
     }
   }, [initialModeParam]);
@@ -95,7 +102,13 @@ function LoginInner() {
 
     setLoading(true);
     try {
-      if (mode === 'magic') {
+      if (mode === 'forgot') {
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: `${window.location.origin}/auth/callback?next=/auth/reset-password`
+        });
+        if (error) throw error;
+        setInfoMsg('Password reset link sent. Check your inbox and spam folder.');
+      } else if (mode === 'magic') {
         const { error } = await supabase.auth.signInWithOtp({
           email: email.trim(),
           options: {
@@ -142,7 +155,7 @@ function LoginInner() {
         </Link>
         <div className="flex items-center gap-3">
           <Link href="/" className="text-xs text-[var(--mute)] hover:text-[var(--ink)] no-underline">
-            &lt;- Landing page
+            ← Home
           </Link>
           <ThemeQuickToggle />
         </div>
@@ -164,54 +177,78 @@ function LoginInner() {
                 ? 'Log in to JobPilot'
                 : mode === 'signup'
                   ? 'Create JobPilot account'
-                  : 'Passwordless Magic Link'
+                  : mode === 'forgot'
+                    ? 'Reset your password'
+                    : 'Passwordless Magic Link'
             }
-            description="Your profile, resumes, and encrypted BYOK keys are protected by Postgres RLS."
+            description={
+              mode === 'forgot'
+                ? 'Enter your account email and we will send you a password reset link.'
+                : 'Your profile, resumes, and encrypted BYOK keys are protected by Postgres RLS.'
+            }
           >
-            <div className="space-y-4 mb-5">
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full justify-center font-bold border-[var(--hairline-strong)]"
-                disabled={oauthLoading || loading}
-                onClick={() => void handleGoogleSignIn()}
-              >
-                {oauthLoading ? '[G] Redirecting to Google...' : '[G] Continue with Google'}
-              </Button>
+            {mode !== 'forgot' ? (
+              <>
+                <div className="space-y-4 mb-5">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full justify-center font-bold border-[var(--hairline-strong)]"
+                    disabled={oauthLoading || loading}
+                    onClick={() => void handleGoogleSignIn()}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      aria-hidden="true"
+                    >
+                      <path d="M21 12.2c0-.7-.1-1.4-.2-2H12v3.8h5a4.3 4.3 0 0 1-1.9 2.8v2.3h3c1.8-1.6 2.9-4 2.9-6.9z" />
+                      <path d="M12 21.4c2.6 0 4.8-.9 6.4-2.3l-3-2.3c-.9.6-2 .9-3.4.9-2.6 0-4.8-1.8-5.6-4.1H3.3v2.4A9.4 9.4 0 0 0 12 21.4z" />
+                      <path d="M6.4 13.6a5.6 5.6 0 0 1 0-3.2V8H3.3a9.4 9.4 0 0 0 0 8l3.1-2.4z" />
+                      <path d="M12 6.3c1.4 0 2.7.5 3.7 1.4l2.8-2.8A9.4 9.4 0 0 0 3.3 8l3.1 2.4c.8-2.3 3-4.1 5.6-4.1z" />
+                    </svg>
+                    <span>{oauthLoading ? 'Redirecting to Google...' : 'Continue with Google'}</span>
+                  </Button>
 
-              <div className="flex items-center gap-3 text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                <span className="flex-1 border-t border-[var(--hairline)]" />
-                <span>or continue with email</span>
-                <span className="flex-1 border-t border-[var(--hairline)]" />
-              </div>
-            </div>
+                  <div className="flex items-center gap-3 text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                    <span className="flex-1 border-t border-[var(--hairline)]" />
+                    <span>or continue with email</span>
+                    <span className="flex-1 border-t border-[var(--hairline)]" />
+                  </div>
+                </div>
 
-            <div className="flex border-b border-[var(--hairline)] mb-5 -mt-1">
-              {(
-                [
-                  { id: 'signin', label: 'Log in' },
-                  { id: 'signup', label: 'Sign up' },
-                  { id: 'magic', label: 'Magic link' }
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => {
-                    setMode(tab.id);
-                    setErrorMsg(null);
-                    setInfoMsg(null);
-                  }}
-                  className={`px-3 py-2 text-xs font-medium border-b-2 cursor-pointer ${
-                    mode === tab.id
-                      ? 'border-[var(--ink)] text-[var(--ink)]'
-                      : 'border-transparent text-[var(--mute)] hover:text-[var(--ink)]'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
+                <div className="flex border-b border-[var(--hairline)] mb-5 -mt-1">
+                  {(
+                    [
+                      { id: 'signin', label: 'Log in' },
+                      { id: 'signup', label: 'Sign up' },
+                      { id: 'magic', label: 'Magic link' }
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => {
+                        setMode(tab.id);
+                        setErrorMsg(null);
+                        setInfoMsg(null);
+                      }}
+                      className={`px-3 py-2 text-xs font-medium border-b-2 cursor-pointer ${
+                        mode === tab.id
+                          ? 'border-[var(--ink)] text-[var(--ink)]'
+                          : 'border-transparent text-[var(--mute)] hover:text-[var(--ink)]'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
@@ -257,44 +294,62 @@ function LoginInner() {
                 )}
               </Field>
 
-              {mode !== 'magic' ? (
-                <Field
-                  label="Password"
-                  htmlFor="auth-password"
-                  hint={mode === 'signup' ? 'Minimum 8 characters' : undefined}
-                  required
-                >
-                  {(props) => (
-                    <div className="space-y-2">
-                      <div className="flex gap-2">
-                        <Input
-                          {...props}
-                          type={showPassword ? 'text' : 'password'}
-                          name="password"
-                          autoComplete={
-                            mode === 'signup' ? 'new-password' : 'current-password'
-                          }
-                          minLength={8}
-                          required
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                        />
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          aria-pressed={showPassword}
-                          aria-label={showPassword ? 'Hide password' : 'Show password'}
-                          onClick={() => setShowPassword((v) => !v)}
-                        >
-                          {showPassword ? 'Hide' : 'Show'}
-                        </Button>
+              {mode === 'signin' || mode === 'signup' ? (
+                <div className="space-y-1.5">
+                  <Field
+                    label="Password"
+                    htmlFor="auth-password"
+                    hint={mode === 'signup' ? 'Minimum 8 characters' : undefined}
+                    required
+                  >
+                    {(props) => (
+                      <div className="space-y-2">
+                        <div className="flex gap-2">
+                          <Input
+                            {...props}
+                            type={showPassword ? 'text' : 'password'}
+                            name="password"
+                            autoComplete={
+                              mode === 'signup' ? 'new-password' : 'current-password'
+                            }
+                            minLength={8}
+                            required
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            aria-pressed={showPassword}
+                            aria-label={showPassword ? 'Hide password' : 'Show password'}
+                            onClick={() => setShowPassword((v) => !v)}
+                          >
+                            {showPassword ? 'Hide' : 'Show'}
+                          </Button>
+                        </div>
+                        <span className="visually-hidden">
+                          Toggling Show reveals your password on screen.
+                        </span>
                       </div>
-                      <span className="visually-hidden">
-                        Toggling Show reveals your password on screen.
-                      </span>
+                    )}
+                  </Field>
+                  {mode === 'signin' ? (
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMode('forgot');
+                          setErrorMsg(null);
+                          setInfoMsg(null);
+                        }}
+                        className="text-xs text-[var(--mute)] hover:text-[var(--ink)] cursor-pointer"
+                      >
+                        Forgot password?
+                      </button>
                     </div>
-                  )}
-                </Field>
+                  ) : null}
+                </div>
               ) : null}
 
               <Button
@@ -309,10 +364,40 @@ function LoginInner() {
                     ? 'Log in'
                     : mode === 'signup'
                       ? 'Create account'
-                      : 'Send magic link'}
+                      : mode === 'forgot'
+                        ? 'Send reset link'
+                        : 'Send magic link'}
               </Button>
+
+              {mode === 'forgot' ? (
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('signin');
+                      setErrorMsg(null);
+                      setInfoMsg(null);
+                    }}
+                    className="text-xs text-[var(--mute)] hover:text-[var(--ink)] cursor-pointer"
+                  >
+                    Back to log in
+                  </button>
+                </div>
+              ) : null}
             </form>
           </SectionBlock>
+
+          <p className="text-center text-xs text-[var(--mute)]">
+            By continuing, you agree to our{' '}
+            <Link href="/terms" className="text-[var(--ink)] underline">
+              Terms
+            </Link>{' '}
+            and{' '}
+            <Link href="/privacy" className="text-[var(--ink)] underline">
+              Privacy Policy
+            </Link>
+            .
+          </p>
         </div>
       </main>
     </div>

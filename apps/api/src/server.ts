@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createSupabaseAuthVerifier } from './plugins/auth.js';
+import { parseEncryptionKey } from './services/crypto.js';
 import { JobSyncService } from './services/job-sync.js';
 import { SupabaseDataStore } from './store/supabase-store.js';
 
@@ -55,6 +56,14 @@ async function main() {
     throw new Error(
       `SUPABASE_SECRET_KEY must be a secret key (sb_secret_...) or legacy service_role key, but it looks like: ${secretKind}. ` +
         'Copy the Secret key from Supabase -> Project Settings -> API Keys. If SUPABASE_SERVICE_ROLE_KEY is also set in Render, remove or correct it.'
+    );
+  }
+
+  try {
+    parseEncryptionKey(config.appEncryptionKey);
+  } catch {
+    throw new Error(
+      'Missing or invalid APP_ENCRYPTION_KEY. Set a 64-character hex string (32 bytes for AES-256-GCM), e.g. generated via `openssl rand -hex 32`.'
     );
   }
 
