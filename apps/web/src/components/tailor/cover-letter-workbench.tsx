@@ -7,13 +7,12 @@ import type {
   JobFeedItem,
   ProfileVariantRecord
 } from '@jobpilot/shared';
-import { MoDecode, MoScan, MoSpinner, moToast } from '@/components/ui/mo';
+import { moToast } from '@/components/ui/mo';
 import {
   AlertBanner,
   Badge,
   Button,
   ConfirmDialog,
-  EmptyState,
   Field,
   Input,
   SectionBlock,
@@ -23,23 +22,37 @@ import {
   Textarea
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
+import { GeneratingStage } from './generating-stage';
 import { PdfPreviewFrame } from './pdf-preview-frame';
 
 interface CoverLetterWorkbenchProps {
   catalogJobs: JobFeedItem[];
   variants: ProfileVariantRecord[];
   defaultJobId?: string;
+  onGeneratingChange?: (busy: boolean) => void;
 }
 
+type CoverLetterStage = 'compose' | 'generating' | 'viewer';
 type CoverLetterViewTab = 'pdf' | 'edit' | 'verifier' | 'typst';
+
+const COVER_LETTER_GENERATING_STEPS = [
+  'Reading target role and company context',
+  'Selecting verified metrics from your profile and story bank',
+  'Drafting grounded cover letter',
+  'Auditing claims and tone',
+  'Compiling downloadable PDF'
+];
 
 export function CoverLetterWorkbench({
   catalogJobs,
   variants,
-  defaultJobId
+  defaultJobId,
+  onGeneratingChange
 }: CoverLetterWorkbenchProps) {
   const [letters, setLetters] = useState<CoverLetterRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [stage, setStage] = useState<CoverLetterStage>('compose');
+  const [generatingTarget, setGeneratingTarget] = useState('');
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -67,18 +80,26 @@ export function CoverLetterWorkbench({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
+  useEffect(() => () => onGeneratingChange?.(false), [onGeneratingChange]);
+
   const loadLetters = useCallback(async () => {
     setLoading(true);
     try {
       const items = await api.listCoverLetters();
       setLetters(items);
-      setSelectedId((prev) => prev ?? items[0]?.id ?? null);
+      if (defaultJobId || items.length === 0) {
+        setSelectedId((prev) => prev ?? items[0]?.id ?? null);
+        setStage('compose');
+      } else {
+        setSelectedId((prev) => prev ?? items[0]?.id ?? null);
+        setStage('viewer');
+      }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to load cover letters.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [defaultJobId]);
 
   useEffect(() => {
     void loadLetters();
@@ -109,7 +130,20 @@ export function CoverLetterWorkbench({
       return;
     }
 
+    const catalogMatch =
+      sourceMode === 'catalog' ? catalogJobs.find((j) => j.job.id === selectedJobId)?.job : null;
+    const targetLabel =
+      sourceMode === 'catalog'
+        ? catalogMatch
+          ? `${catalogMatch.companyName} — ${catalogMatch.title}`
+          : 'Target role'
+        : `${customCompany.trim()} — ${customTitle.trim()}`;
+
+    setGeneratingTarget(targetLabel);
     setGenerating(true);
+    onGeneratingChange?.(true);
+    setStage('generating');
+
     try {
       const created = await api.generateCoverLetter({
         ...(sourceMode === 'catalog'
@@ -131,12 +165,16 @@ export function CoverLetterWorkbench({
       });
       setLetters((prev) => [created, ...prev]);
       setSelectedId(created.id);
+      setLabelOverride('');
       setViewTab('pdf');
+      setStage('viewer');
       moToast(`Generated cover letter v${created.versionNumber}`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Cover letter generation failed.');
+      setStage('compose');
     } finally {
       setGenerating(false);
+      onGeneratingChange?.(false);
     }
   };
 
@@ -168,6 +206,9 @@ export function CoverLetterWorkbench({
       const next = letters.filter((c) => c.id !== selected.id);
       setLetters(next);
       setSelectedId(next[0]?.id ?? null);
+      if (next.length === 0) {
+        setStage('compose');
+      }
       moToast('Cover letter deleted');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to delete cover letter.');
@@ -194,11 +235,27 @@ export function CoverLetterWorkbench({
         onCancel={() => setConfirmDeleteOpen(false)}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-        <div className="lg:col-span-4 space-y-5">
+      {loading ? (
+        <SkeletonBlock className="h-[520px] w-full" />
+      ) : stage === 'generating' ? (
+        <GeneratingStage
+          heading="Drafting your cover letter..."
+          targetLabel={generatingTarget || 'Target role'}
+          subtitle="Pulling verified highlights from your profile and story bank."
+          steps={COVER_LETTER_GENERATING_STEPS}
+        />
+      ) : stage === 'compose' || !selected ? (
+        <div className="max-w-3xl mx-auto space-y-6">
           <SectionBlock
             title="New cover letter"
-            description="Generated strictly from your active profile variant and story bank."
+            description="Pick a target job and tone. Your letter opens full-screen once generated."
+            action={
+              letters.length > 0 ? (
+                <Button size="sm" variant="secondary" onClick={() => setStage('viewer')}>
+                  Back to viewer ({letters.length})
+                </Button>
+              ) : undefined
+            }
           >
             <form onSubmit={(e) => void handleGenerate(e)} className="space-y-4">
               <div className="flex border border-[var(--hairline)] rounded-[4px] overflow-hidden">
@@ -247,32 +304,34 @@ export function CoverLetterWorkbench({
                   )}
                 </Field>
               ) : (
-                <div className="space-y-3">
-                  <Field label="Company Name" htmlFor="cl-company" required>
-                    {(props) => (
-                      <Input
-                        {...props}
-                        value={customCompany}
-                        onChange={(e) => setCustomCompany(e.target.value)}
-                        placeholder="e.g. Razorpay"
-                      />
-                    )}
-                  </Field>
-                  <Field label="Role Title" htmlFor="cl-title" required>
-                    {(props) => (
-                      <Input
-                        {...props}
-                        value={customTitle}
-                        onChange={(e) => setCustomTitle(e.target.value)}
-                        placeholder="e.g. Backend Engineer"
-                      />
-                    )}
-                  </Field>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <Field label="Company Name" htmlFor="cl-company" required>
+                      {(props) => (
+                        <Input
+                          {...props}
+                          value={customCompany}
+                          onChange={(e) => setCustomCompany(e.target.value)}
+                          placeholder="e.g. Razorpay"
+                        />
+                      )}
+                    </Field>
+                    <Field label="Role Title" htmlFor="cl-title" required>
+                      {(props) => (
+                        <Input
+                          {...props}
+                          value={customTitle}
+                          onChange={(e) => setCustomTitle(e.target.value)}
+                          placeholder="e.g. Backend Engineer"
+                        />
+                      )}
+                    </Field>
+                  </div>
                   <Field label="Job Description" htmlFor="cl-jd" required>
                     {(props) => (
                       <Textarea
                         {...props}
-                        rows={4}
+                        rows={5}
                         value={customJd}
                         onChange={(e) => setCustomJd(e.target.value)}
                         placeholder="Paste core requirements..."
@@ -282,267 +341,282 @@ export function CoverLetterWorkbench({
                 </div>
               )}
 
-              <Field label="Source Profile Variant" htmlFor="cl-variant">
-                {(props) => (
-                  <Select
-                    {...props}
-                    value={selectedVariantId}
-                    onChange={(e) => setSelectedVariantId(e.target.value)}
-                  >
-                    <option value="">Active Default Profile</option>
-                    {variants.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name} {v.isDefault ? '(Default)' : ''}
-                      </option>
-                    ))}
-                  </Select>
-                )}
-              </Field>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="Source Profile Variant" htmlFor="cl-variant">
+                  {(props) => (
+                    <Select
+                      {...props}
+                      value={selectedVariantId}
+                      onChange={(e) => setSelectedVariantId(e.target.value)}
+                    >
+                      <option value="">Active Default Profile</option>
+                      {variants.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name} {v.isDefault ? '(Default)' : ''}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
 
-              <Field label="Voice & Tone" htmlFor="cl-tone">
-                {(props) => (
-                  <Select
-                    {...props}
-                    value={tone}
-                    onChange={(e) => setTone(e.target.value as CoverLetterTone)}
-                  >
-                    <option value="concise-technical">Concise Technical (3 crisp paragraphs)</option>
-                    <option value="executive">Executive / Architectural Focus</option>
-                    <option value="founder-note">Direct Founder Note (zero fluff)</option>
-                  </Select>
-                )}
-              </Field>
+                <Field label="Voice & Tone" htmlFor="cl-tone">
+                  {(props) => (
+                    <Select
+                      {...props}
+                      value={tone}
+                      onChange={(e) => setTone(e.target.value as CoverLetterTone)}
+                    >
+                      <option value="concise-technical">Concise Technical (3 crisp paragraphs)</option>
+                      <option value="executive">Executive / Architectural Focus</option>
+                      <option value="founder-note">Direct Founder Note (zero fluff)</option>
+                    </Select>
+                  )}
+                </Field>
+              </div>
 
-              <Field label="Focus Hint (optional)" htmlFor="cl-instr">
-                {(props) => (
-                  <Input
-                    {...props}
-                    value={customInstructions}
-                    onChange={(e) => setCustomInstructions(e.target.value)}
-                    placeholder="e.g. Emphasize PostgreSQL queue & latency story"
-                  />
-                )}
-              </Field>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="Focus Hint (optional)" htmlFor="cl-instr">
+                  {(props) => (
+                    <Input
+                      {...props}
+                      value={customInstructions}
+                      onChange={(e) => setCustomInstructions(e.target.value)}
+                      placeholder="e.g. Emphasize PostgreSQL queue & latency story"
+                    />
+                  )}
+                </Field>
 
-              <Field label="Label (optional)" htmlFor="cl-label">
-                {(props) => (
-                  <Input
-                    {...props}
-                    value={labelOverride}
-                    onChange={(e) => setLabelOverride(e.target.value)}
-                    placeholder="Defaults to Company — Role Cover Letter"
-                  />
-                )}
-              </Field>
+                <Field label="Label (optional)" htmlFor="cl-label">
+                  {(props) => (
+                    <Input
+                      {...props}
+                      value={labelOverride}
+                      onChange={(e) => setLabelOverride(e.target.value)}
+                      placeholder="Defaults to Company — Role Cover Letter"
+                    />
+                  )}
+                </Field>
+              </div>
 
-              <Button type="submit" variant="primary" className="w-full" disabled={generating}>
-                {generating ? (
-                  <span className="inline-flex items-center gap-2">
-                    <MoSpinner name="braille" />
-                    <span>Drafting &amp; Grounding</span>
-                    <MoScan width={12} />
-                  </span>
-                ) : (
-                  'Generate cover letter'
-                )}
-              </Button>
+              <div className="pt-1">
+                <Button type="submit" variant="primary" className="w-full sm:w-auto" disabled={generating}>
+                  Generate cover letter
+                </Button>
+              </div>
             </form>
           </SectionBlock>
 
-          <SectionBlock title="Cover letters">
-            {loading ? (
-              <SkeletonBlock className="h-32 w-full" />
-            ) : letters.length === 0 ? (
-              <p className="text-xs text-[var(--mute)]">
-                No cover letters generated yet. Works both with BYOK LLMs and deterministic grounded mode.
-              </p>
-            ) : (
-              <ul className="divide-y divide-[var(--hairline)] border border-[var(--hairline)]">
-                {letters.map((c) => {
-                  const active = c.id === selectedId;
-                  return (
-                    <li key={c.id}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedId(c.id)}
-                        className={`w-full text-left p-3 cursor-pointer transition-colors ${
-                          active
-                            ? 'bg-[var(--surface-dark)] text-[var(--on-dark)]'
-                            : 'bg-[var(--canvas)] hover:bg-[var(--surface-soft)] text-[var(--ink)]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-bold tabular-nums">v{c.versionNumber}</span>
-                          <Badge tone={c.verifierPassed ? 'success' : 'danger'}>
-                            <MoDecode text={c.verifierPassed ? 'GROUNDED' : 'FLAGGED'} frames={6} />
-                          </Badge>
-                        </div>
-                        <p className="text-xs font-medium mt-1 truncate">{c.label}</p>
-                        <span className={`text-[11px] block mt-0.5 ${active ? 'opacity-80' : 'text-[var(--mute)]'}`}>
-                          {c.tone}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </SectionBlock>
-        </div>
-
-        <div className="lg:col-span-8">
-          {!selected ? (
-            <EmptyState
-              title="No cover letter selected"
-              description="Generate a grounded cover letter on the left to preview its inline PDF, edit prose, and inspect metric provenance."
-            />
-          ) : (
+          {letters.length > 0 ? (
             <SectionBlock
-              title={`v${selected.versionNumber} · ${selected.label}`}
-              description={`${selected.companyName} — ${selected.roleTitle} · ${selected.tone} · ${selected.pdfEngine}`}
-              action={
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="primary"
-                    onClick={() =>
-                      void api.downloadCoverLetterPdf(
-                        selected.id,
-                        `jobpilot-cl-v${selected.versionNumber}.pdf`
-                      )
-                    }
-                  >
-                    Download PDF
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => {
-                      void navigator.clipboard?.writeText(selected.plainText);
-                      moToast('Copied plain text to clipboard');
-                    }}
-                  >
-                    Copy Text
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    disabled={deleting}
-                    onClick={() => setConfirmDeleteOpen(true)}
-                  >
-                    Delete
-                  </Button>
-                </div>
-              }
+              title="Saved cover letters"
+              description="Open any saved cover letter full-screen."
             >
-              <div className="space-y-5">
-                <TabStrip<CoverLetterViewTab>
-                  label="Cover letter inspection views"
-                  activeTab={viewTab}
-                  onChange={setViewTab}
-                  tabs={[
-                    { id: 'pdf', label: 'PDF Preview' },
-                    { id: 'edit', label: 'Edit & Re-Render' },
-                    {
-                      id: 'verifier',
-                      label: 'Grounding Audit',
-                      badge: selected.verifierReport.unsupportedClaimCount
-                    },
-                    { id: 'typst', label: 'Typst Source' }
-                  ]}
-                />
-
-                {viewTab === 'pdf' ? (
-                  <PdfPreviewFrame
-                    id={selected.id}
-                    kind="cover-letter"
-                    refreshKey={pdfRefreshKey}
-                    title={`Cover letter v${selected.versionNumber} preview`}
-                    onDownload={() =>
-                      void api.downloadCoverLetterPdf(
-                        selected.id,
-                        `jobpilot-cl-v${selected.versionNumber}.pdf`
-                      )
-                    }
-                  />
-                ) : viewTab === 'edit' ? (
-                  <div className="space-y-4">
-                    <Field label="Version Label" htmlFor="cl-edit-label">
-                      {(props) => (
-                        <Input
-                          {...props}
-                          value={draftLabel}
-                          onChange={(e) => setDraftLabel(e.target.value)}
-                        />
-                      )}
-                    </Field>
-                    <Field
-                      label="Cover Letter Text"
-                      htmlFor="cl-edit-text"
-                      hint="Saving re-compiles Typst & updates the downloadable PDF."
-                    >
-                      {(props) => (
-                        <Textarea
-                          {...props}
-                          rows={14}
-                          value={draftText}
-                          onChange={(e) => setDraftText(e.target.value)}
-                        />
-                      )}
-                    </Field>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="primary"
-                        disabled={savingEdit}
-                        onClick={() => void handleSaveEdit()}
-                      >
-                        {savingEdit ? 'Re-rendering PDF...' : 'Save & Re-Render PDF'}
-                      </Button>
-                    </div>
-                  </div>
-                ) : viewTab === 'verifier' ? (
-                  <div className="space-y-3 text-xs">
-                    <div className="p-3 border border-[var(--hairline)] bg-[var(--surface-soft)]">
-                      {selected.verifierReport.overallNotes}
-                    </div>
-                    {selected.verifierReport.claims.map((c, idx) => (
-                      <div
-                        key={`cl-claim-${idx}`}
-                        className="p-3 border border-[var(--hairline)] bg-[var(--canvas)] space-y-1"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <Badge tone="neutral">{c.section}</Badge>
-                          <Badge
-                            tone={
-                              c.status === 'flagged'
-                                ? 'danger'
-                                : c.status === 'verified'
-                                  ? 'success'
-                                  : 'warning'
-                            }
-                          >
-                            {c.status.toUpperCase()}
-                          </Badge>
-                        </div>
-                        <p className="text-[var(--ink)]">{c.claim}</p>
-                        {c.issue ? <p className="text-[var(--danger-text)]">{c.issue}</p> : null}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-stretch">
+                {letters.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedId(c.id);
+                      setViewTab('pdf');
+                      setStage('viewer');
+                    }}
+                    className="h-full flex flex-col justify-between text-left p-3.5 border border-[var(--hairline)] bg-[var(--canvas)] hover:bg-[var(--surface-soft)] transition-colors cursor-pointer"
+                  >
+                    <div className="space-y-2 w-full">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold tabular-nums text-[var(--ink)]">
+                          v{c.versionNumber}
+                        </span>
+                        <Badge tone={c.verifierPassed ? 'success' : 'danger'}>
+                          {c.verifierPassed ? 'Grounded' : 'Needs review'}
+                        </Badge>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <pre className="p-4 border border-[var(--hairline)] bg-[var(--surface-soft)] text-xs overflow-x-auto leading-relaxed">
-                    {selected.typstSource ?? '// Typst source unavailable'}
-                  </pre>
-                )}
+                      <p className="text-xs font-medium text-[var(--ink)] line-clamp-2">{c.label}</p>
+                    </div>
+                    <span className="text-[11px] text-[var(--mute)] mt-3 block">{c.tone}</span>
+                  </button>
+                ))}
               </div>
             </SectionBlock>
-          )}
+          ) : null}
         </div>
-      </div>
+      ) : (
+        <div className="w-full space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 border border-[var(--hairline)] bg-[var(--surface-card)] p-3 sm:px-4">
+            <div className="flex flex-wrap items-center gap-2.5 min-w-0 flex-1">
+              <Select
+                aria-label="Select cover letter version"
+                className="max-w-md"
+                value={selected.id}
+                onChange={(e) => {
+                  setSelectedId(e.target.value);
+                  setViewTab('pdf');
+                }}
+              >
+                {letters.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    v{c.versionNumber} · {c.label}
+                  </option>
+                ))}
+              </Select>
+              <Badge tone={selected.verifierPassed ? 'success' : 'danger'}>
+                {selected.verifierPassed ? 'Grounded' : 'Needs review'}
+              </Badge>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                onClick={() => setStage('compose')}
+              >
+                New cover letter
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() =>
+                  void api.downloadCoverLetterPdf(
+                    selected.id,
+                    `jobpilot-cl-v${selected.versionNumber}.pdf`
+                  )
+                }
+              >
+                Download PDF
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(selected.plainText);
+                  moToast('Copied plain text to clipboard');
+                }}
+              >
+                Copy text
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={deleting}
+                onClick={() => setConfirmDeleteOpen(true)}
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
+
+          <SectionBlock
+            title={`v${selected.versionNumber} · ${selected.label}`}
+            description={`${selected.companyName} — ${selected.roleTitle} · ${selected.tone} · ${selected.pdfEngine}`}
+          >
+            <div className="space-y-5">
+              <TabStrip<CoverLetterViewTab>
+                label="Cover letter inspection views"
+                activeTab={viewTab}
+                onChange={setViewTab}
+                tabs={[
+                  { id: 'pdf', label: 'PDF Preview' },
+                  { id: 'edit', label: 'Edit & Re-Render' },
+                  {
+                    id: 'verifier',
+                    label: 'Grounding Audit',
+                    badge: selected.verifierReport.unsupportedClaimCount
+                  },
+                  { id: 'typst', label: 'Typst Source' }
+                ]}
+              />
+
+              {viewTab === 'pdf' ? (
+                <PdfPreviewFrame
+                  id={selected.id}
+                  kind="cover-letter"
+                  refreshKey={pdfRefreshKey}
+                  title={`Cover letter v${selected.versionNumber} preview`}
+                  onDownload={() =>
+                    void api.downloadCoverLetterPdf(
+                      selected.id,
+                      `jobpilot-cl-v${selected.versionNumber}.pdf`
+                    )
+                  }
+                />
+              ) : viewTab === 'edit' ? (
+                <div className="space-y-4">
+                  <Field label="Version Label" htmlFor="cl-edit-label">
+                    {(props) => (
+                      <Input
+                        {...props}
+                        value={draftLabel}
+                        onChange={(e) => setDraftLabel(e.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <Field
+                    label="Cover Letter Text"
+                    htmlFor="cl-edit-text"
+                    hint="Saving re-compiles Typst & updates the downloadable PDF."
+                  >
+                    {(props) => (
+                      <Textarea
+                        {...props}
+                        rows={14}
+                        value={draftText}
+                        onChange={(e) => setDraftText(e.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={savingEdit}
+                      onClick={() => void handleSaveEdit()}
+                    >
+                      {savingEdit ? 'Re-rendering PDF...' : 'Save & Re-Render PDF'}
+                    </Button>
+                  </div>
+                </div>
+              ) : viewTab === 'verifier' ? (
+                <div className="space-y-3 text-xs">
+                  <div className="p-3 border border-[var(--hairline)] bg-[var(--surface-soft)]">
+                    {selected.verifierReport.overallNotes}
+                  </div>
+                  {selected.verifierReport.claims.map((c, idx) => (
+                    <div
+                      key={`cl-claim-${idx}`}
+                      className="p-3 border border-[var(--hairline)] bg-[var(--canvas)] space-y-1"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <Badge tone="neutral">{c.section}</Badge>
+                        <Badge
+                          tone={
+                            c.status === 'flagged'
+                              ? 'danger'
+                              : c.status === 'verified'
+                                ? 'success'
+                                : 'warning'
+                          }
+                        >
+                          {c.status.toUpperCase()}
+                        </Badge>
+                      </div>
+                      <p className="text-[var(--ink)]">{c.claim}</p>
+                      {c.issue ? <p className="text-[var(--danger-text)]">{c.issue}</p> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <pre className="p-4 border border-[var(--hairline)] bg-[var(--surface-soft)] text-xs overflow-x-auto leading-relaxed">
+                  {selected.typstSource ?? '// Typst source unavailable'}
+                </pre>
+              )}
+            </div>
+          </SectionBlock>
+        </div>
+      )}
     </div>
   );
 }

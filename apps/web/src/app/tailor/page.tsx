@@ -15,14 +15,14 @@ import type { z } from 'zod';
 import { AppShell } from '@/components/layout/app-shell';
 import { AtsScorePanel } from '@/components/tailor/ats-score-panel';
 import { CoverLetterWorkbench } from '@/components/tailor/cover-letter-workbench';
+import { GeneratingStage } from '@/components/tailor/generating-stage';
 import { PdfPreviewFrame } from '@/components/tailor/pdf-preview-frame';
-import { MoDecode, MoScan, MoSpinner, moToast } from '@/components/ui/mo';
+import { moToast } from '@/components/ui/mo';
 import {
   AlertBanner,
   Badge,
   Button,
   ConfirmDialog,
-  EmptyState,
   Field,
   Input,
   SectionBlock,
@@ -34,10 +34,20 @@ import {
 import { api } from '@/lib/api';
 import { pluralize } from '@/lib/format';
 
-type StudioMode = 'resume' | 'cover-letter' | 'ats-check';
+type StudioMode = 'resume' | 'cover-letter';
+type ResumeStage = 'compose' | 'generating' | 'viewer';
 type TailorTab = 'pdf' | 'ats' | 'diff' | 'verifier' | 'jd' | 'preview';
+type AtsCheckMode = 'target' | 'custom';
 type SourceMode = 'catalog' | 'custom';
 type SectionDiff = z.infer<typeof ResumeSectionDiffSchema>;
+
+const RESUME_GENERATING_STEPS = [
+  'Extracting job requirements and core skills',
+  'Matching relevant experience from your profile',
+  'Rephrasing and ordering bullets for the role',
+  'Verifying every claim against your profile',
+  'Compiling ATS-ready single-column PDF'
+];
 
 function formatPercentRate(rate: number): string {
   return `${Math.round(rate * 100)}%`;
@@ -159,6 +169,9 @@ function TailorStudioInner() {
 
   const [catalogJobs, setCatalogJobs] = useState<JobFeedItem[]>([]);
   const [studioMode, setStudioMode] = useState<StudioMode>('resume');
+  const [resumeStage, setResumeStage] = useState<ResumeStage>('compose');
+  const [generatingTarget, setGeneratingTarget] = useState('');
+  const [coverLetterGenerating, setCoverLetterGenerating] = useState(false);
   const [variants, setVariants] = useState<ProfileVariantRecord[]>([]);
   const [profileVariantId, setProfileVariantId] = useState<string>('');
   const [versions, setVersions] = useState<ResumeVersionRecord[]>([]);
@@ -166,11 +179,11 @@ function TailorStudioInner() {
 
   const [atsByVersionId, setAtsByVersionId] = useState<Record<string, AtsScoreReport>>({});
   const [atsLoading, setAtsLoading] = useState(false);
+  const [atsMode, setAtsMode] = useState<AtsCheckMode>('target');
 
-  // Standalone Instant ATS Checker state (#2)
-  const [chkTargetKind, setChkTargetKind] = useState<'variant' | 'version'>('variant');
+  // In-viewer custom JD ATS checker state
+  const [chkTargetKind, setChkTargetKind] = useState<'variant' | 'version'>('version');
   const [chkVariantId, setChkVariantId] = useState<string>('');
-  const [chkVersionId, setChkVersionId] = useState<string>('');
   const [chkJdSource, setChkJdSource] = useState<'catalog' | 'custom'>('custom');
   const [chkJobId, setChkJobId] = useState<string>('');
   const [chkTitle, setChkTitle] = useState('');
@@ -227,16 +240,21 @@ function TailorStudioInner() {
       setVersions(versionsRes);
       setVariants(variantsRes);
       setChkJobId((prev) => prev || mergedJobs[0]?.job.id || '');
-      setChkVersionId((prev) => prev || versionsRes[0]?.id || '');
 
       if (jobIdParam) {
         setSourceMode('catalog');
         setSelectedJobId(jobIdParam);
         const matchingVersion = versionsRes.find((v) => v.jobId === jobIdParam);
         setSelectedVersionId(matchingVersion?.id ?? versionsRes[0]?.id ?? null);
-      } else {
+        setResumeStage('compose');
+      } else if (versionsRes.length > 0) {
         setSelectedJobId((prev) => prev || mergedJobs[0]?.job.id || '');
         setSelectedVersionId((prev) => prev || versionsRes[0]?.id || null);
+        setResumeStage('viewer');
+      } else {
+        setSelectedJobId((prev) => prev || mergedJobs[0]?.job.id || '');
+        setSelectedVersionId(null);
+        setResumeStage('compose');
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to load tailor workspace.');
@@ -252,7 +270,7 @@ function TailorStudioInner() {
   const selectedVersion = versions.find((v) => v.id === selectedVersionId) ?? null;
 
   useEffect(() => {
-    if (activeTab !== 'ats' || !selectedVersion) return;
+    if (activeTab !== 'ats' || atsMode !== 'target' || !selectedVersion) return;
     if (atsByVersionId[selectedVersion.id]) return;
 
     let active = true;
@@ -273,13 +291,13 @@ function TailorStudioInner() {
     return () => {
       active = false;
     };
-  }, [activeTab, selectedVersion, atsByVersionId]);
+  }, [activeTab, atsMode, selectedVersion, atsByVersionId]);
 
   const handleRunStandaloneAts = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    if (chkTargetKind === 'version' && !chkVersionId) {
-      setErrorMsg('Select a tailored resume version or switch to Master Variant.');
+    if (chkTargetKind === 'version' && !selectedVersion) {
+      setErrorMsg('Select a tailored resume version or switch to Master Profile Variant.');
       return;
     }
     if (chkJdSource === 'catalog' && !chkJobId) {
@@ -294,8 +312,8 @@ function TailorStudioInner() {
     setChkLoading(true);
     try {
       const report = await api.scoreResumeAts({
-        ...(chkTargetKind === 'version'
-          ? { resumeVersionId: chkVersionId }
+        ...(chkTargetKind === 'version' && selectedVersion
+          ? { resumeVersionId: selectedVersion.id }
           : chkVariantId
             ? { profileVariantId: chkVariantId }
             : {}),
@@ -343,7 +361,21 @@ function TailorStudioInner() {
     setCustomErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
+    const catalogJob =
+      sourceMode === 'catalog'
+        ? catalogJobs.find((item) => item.job.id === selectedJobId)?.job
+        : null;
+    const targetLabel =
+      sourceMode === 'catalog'
+        ? catalogJob
+          ? `${catalogJob.companyName} — ${catalogJob.title}`
+          : 'Target role'
+        : `${customCompany.trim()} — ${customTitle.trim()}`;
+
+    setGeneratingTarget(targetLabel);
     setTailoring(true);
+    setResumeStage('generating');
+
     try {
       const created = await api.tailorResume({
         ...(sourceMode === 'catalog'
@@ -365,6 +397,9 @@ function TailorStudioInner() {
       setSelectedVersionId(created.id);
       setLabelOverride('');
       setActiveTab(created.verifierPassed ? 'pdf' : 'verifier');
+      setAtsMode('target');
+      setChkReport(null);
+      setResumeStage('viewer');
       if (!created.verifierPassed) {
         setStatusMsg(
           `Created v${created.versionNumber} with ${created.verifierReport.unsupportedClaimCount} flagged claim(s) — check Verification.`
@@ -373,6 +408,7 @@ function TailorStudioInner() {
       moToast(`Created resume v${created.versionNumber}`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Resume tailoring failed.');
+      setResumeStage('compose');
     } finally {
       setTailoring(false);
     }
@@ -445,6 +481,9 @@ function TailorStudioInner() {
       const remaining = versions.filter((v) => v.id !== deletedId);
       setVersions(remaining);
       setSelectedVersionId(remaining[0]?.id ?? null);
+      if (remaining.length === 0) {
+        setResumeStage('compose');
+      }
       setStatusMsg(`Deleted resume v${selectedVersion.versionNumber}.`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Delete failed.');
@@ -464,6 +503,10 @@ function TailorStudioInner() {
     }
   };
 
+  const hideStudioTabs =
+    (studioMode === 'resume' && resumeStage === 'generating') ||
+    (studioMode === 'cover-letter' && coverLetterGenerating);
+
   return (
     <AppShell
       title="Tailor"
@@ -476,18 +519,19 @@ function TailorStudioInner() {
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
       {statusMsg ? <AlertBanner tone="success" message={statusMsg} /> : null}
 
-      <div className="mb-5">
-        <TabStrip<StudioMode>
-          label="Tailor studio workflows"
-          activeTab={studioMode}
-          onChange={setStudioMode}
-          tabs={[
-            { id: 'resume', label: 'Resume Tailor', badge: versions.length },
-            { id: 'cover-letter', label: 'Cover Letter' },
-            { id: 'ats-check', label: 'ATS Check' }
-          ]}
-        />
-      </div>
+      {!hideStudioTabs ? (
+        <div className="mb-5">
+          <TabStrip<StudioMode>
+            label="Tailor studio workflows"
+            activeTab={studioMode}
+            onChange={setStudioMode}
+            tabs={[
+              { id: 'resume', label: 'Resume', badge: versions.length },
+              { id: 'cover-letter', label: 'Cover Letter' }
+            ]}
+          />
+        </div>
+      ) : null}
 
       <ConfirmDialog
         open={confirmFlaggedPdfOpen}
@@ -518,223 +562,101 @@ function TailorStudioInner() {
       />
 
       {loading ? (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          <div className="lg:col-span-4 space-y-4">
-            <SkeletonBlock className="h-72 w-full" />
-            <SkeletonBlock className="h-64 w-full" />
-          </div>
-          <div className="lg:col-span-8">
-            <SkeletonBlock className="h-[540px] w-full" />
-          </div>
-        </div>
+        <SkeletonBlock className="h-[540px] w-full" />
       ) : studioMode === 'cover-letter' ? (
         <CoverLetterWorkbench
           catalogJobs={catalogJobs}
           variants={variants}
           defaultJobId={jobIdParam || undefined}
+          onGeneratingChange={setCoverLetterGenerating}
         />
-      ) : studioMode === 'ats-check' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-          <div className="lg:col-span-4">
-            <SectionBlock
-              title="ATS check"
-              description="Deterministic skill, synonym, and impact audit."
-            >
-              <form onSubmit={(e) => void handleRunStandaloneAts(e)} className="space-y-4">
-                <Field label="Resume to Audit" htmlFor="chk-kind">
-                  {(props) => (
-                    <Select
-                      {...props}
-                      value={chkTargetKind}
-                      onChange={(e) => setChkTargetKind(e.target.value as 'variant' | 'version')}
-                    >
-                      <option value="variant">Master Profile Variant</option>
-                      <option value="version">Saved Tailored Version</option>
-                    </Select>
-                  )}
-                </Field>
-
-                {chkTargetKind === 'variant' ? (
-                  <Field label="Profile Variant" htmlFor="chk-variant">
-                    {(props) => (
-                      <Select
-                        {...props}
-                        value={chkVariantId}
-                        onChange={(e) => setChkVariantId(e.target.value)}
-                      >
-                        <option value="">Active Default Variant</option>
-                        {variants.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.name} {v.isDefault ? '(Default)' : ''}
-                          </option>
-                        ))}
-                      </Select>
-                    )}
-                  </Field>
-                ) : (
-                  <Field label="Tailored Version" htmlFor="chk-version">
-                    {(props) => (
-                      <Select
-                        {...props}
-                        value={chkVersionId}
-                        onChange={(e) => setChkVersionId(e.target.value)}
-                      >
-                        {versions.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            v{v.versionNumber} · {v.label}
-                          </option>
-                        ))}
-                      </Select>
-                    )}
-                  </Field>
-                )}
-
-                <Field label="Target Job Source" htmlFor="chk-jd-src">
-                  {(props) => (
-                    <Select
-                      {...props}
-                      value={chkJdSource}
-                      onChange={(e) => setChkJdSource(e.target.value as 'catalog' | 'custom')}
-                    >
-                      <option value="custom">Paste Any Job Description</option>
-                      <option value="catalog">Saved / Feed Job</option>
-                    </Select>
-                  )}
-                </Field>
-
-                {chkJdSource === 'catalog' ? (
-                  <Field label="Job" htmlFor="chk-job">
-                    {(props) => (
-                      <Select
-                        {...props}
-                        value={chkJobId}
-                        onChange={(e) => setChkJobId(e.target.value)}
-                      >
-                        {catalogJobs.map((j) => (
-                          <option key={j.job.id} value={j.job.id}>
-                            {j.job.companyName} — {j.job.title}
-                          </option>
-                        ))}
-                      </Select>
-                    )}
-                  </Field>
-                ) : (
-                  <div className="space-y-3">
-                    <Field label="Role Title" htmlFor="chk-title">
-                      {(props) => (
-                        <Input
-                          {...props}
-                          value={chkTitle}
-                          onChange={(e) => setChkTitle(e.target.value)}
-                          placeholder="e.g. Backend Software Engineer"
-                        />
-                      )}
-                    </Field>
-                    <Field label="Job Description Text" htmlFor="chk-jd" required>
-                      {(props) => (
-                        <Textarea
-                          {...props}
-                          rows={7}
-                          value={chkJdText}
-                          onChange={(e) => setChkJdText(e.target.value)}
-                          placeholder="Paste full JD requirements & nice-to-haves..."
-                        />
-                      )}
-                    </Field>
-                  </div>
-                )}
-
-                <Button type="submit" variant="primary" className="w-full" disabled={chkLoading}>
-                  {chkLoading ? 'Scoring...' : 'Run ATS Check'}
+      ) : resumeStage === 'generating' ? (
+        <GeneratingStage
+          heading="Making your tailored resume..."
+          targetLabel={generatingTarget || 'Target role'}
+          subtitle="Grounded strictly in your Master Profile and Story Bank."
+          steps={RESUME_GENERATING_STEPS}
+        />
+      ) : resumeStage === 'compose' || !selectedVersion ? (
+        <div className="max-w-3xl mx-auto space-y-6">
+          <SectionBlock
+            title="Tailor a resume"
+            description="Choose a target job and layout. Once generated, your resume opens full-screen with PDF preview, diff, verification, and ATS check."
+            action={
+              versions.length > 0 ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setResumeStage('viewer')}
+                >
+                  Back to viewer ({versions.length})
                 </Button>
-              </form>
-            </SectionBlock>
-          </div>
-          <div className="lg:col-span-8">
-            {chkReport ? (
-              <SectionBlock
-                title={`ATS Score — ${chkReport.overallScore}%`}
-                description="Matches common aliases such as TS/TypeScript, Postgres/PostgreSQL, and k8s/Kubernetes."
-              >
-                <AtsScorePanel report={chkReport} />
-              </SectionBlock>
-            ) : (
-              <EmptyState
-                title="No ATS audit run yet"
-                description="Select a Master Profile Variant or Tailored Version on the left, paste a job description, and run an instant deterministic check before spending any LLM tokens."
-              />
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-          {/* Left Column: Tailor Form + Version History */}
-          <div className="lg:col-span-4 space-y-5">
-            <SectionBlock
-              title="New tailored version"
-              description="Each run creates a saved version."
-            >
-              <form onSubmit={handleTailorSubmit} noValidate className="space-y-4">
-                <div className="flex border border-[var(--hairline)] rounded-[4px] overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSourceMode('catalog');
-                      setCustomErrors({});
-                    }}
-                    className={`flex-1 py-2 px-3 text-xs font-medium cursor-pointer min-h-[44px] ${
-                      sourceMode === 'catalog'
-                        ? 'bg-[var(--surface-dark)] text-[var(--on-dark)]'
-                        : 'bg-[var(--surface-soft)] text-[var(--ink)]'
-                    }`}
-                  >
-                    Saved / Feed Job
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSourceMode('custom');
-                      setCustomErrors({});
-                    }}
-                    className={`flex-1 py-2 px-3 text-xs font-medium cursor-pointer min-h-[44px] border-l border-[var(--hairline)] ${
-                      sourceMode === 'custom'
-                        ? 'bg-[var(--surface-dark)] text-[var(--on-dark)]'
-                        : 'bg-[var(--surface-soft)] text-[var(--ink)]'
-                    }`}
-                  >
-                    Custom JD Paste
-                  </button>
-                </div>
+              ) : undefined
+            }
+          >
+            <form onSubmit={handleTailorSubmit} noValidate className="space-y-4">
+              <div className="flex border border-[var(--hairline)] rounded-[4px] overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSourceMode('catalog');
+                    setCustomErrors({});
+                  }}
+                  className={`flex-1 py-2 px-3 text-xs font-medium cursor-pointer min-h-[44px] ${
+                    sourceMode === 'catalog'
+                      ? 'bg-[var(--surface-dark)] text-[var(--on-dark)]'
+                      : 'bg-[var(--surface-soft)] text-[var(--ink)]'
+                  }`}
+                >
+                  Saved / Feed Job
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSourceMode('custom');
+                    setCustomErrors({});
+                  }}
+                  className={`flex-1 py-2 px-3 text-xs font-medium cursor-pointer min-h-[44px] border-l border-[var(--hairline)] ${
+                    sourceMode === 'custom'
+                      ? 'bg-[var(--surface-dark)] text-[var(--on-dark)]'
+                      : 'bg-[var(--surface-soft)] text-[var(--ink)]'
+                  }`}
+                >
+                  Custom JD
+                </button>
+              </div>
 
-                {sourceMode === 'catalog' ? (
-                  <Field
-                    label="Target Job"
-                    htmlFor="tailor-job"
-                    hint="Reuses cached JD requirements after first extraction."
-                    error={customErrors.jobId}
-                    required
-                  >
-                    {(inputProps) => (
-                      <Select
-                        {...inputProps}
-                        value={selectedJobId}
-                        onChange={(e) => setSelectedJobId(e.target.value)}
-                      >
-                        {catalogJobs.length === 0 ? (
-                          <option value="">No catalog jobs synced — use Custom JD</option>
-                        ) : (
-                          catalogJobs.map((item) => (
-                            <option key={item.job.id} value={item.job.id}>
-                              {item.job.companyName} — {item.job.title}
-                              {item.match?.llmScore != null ? ` (${item.match.llmScore}/100)` : ''}
-                            </option>
-                          ))
-                        )}
-                      </Select>
-                    )}
-                  </Field>
-                ) : (
-                  <div className="space-y-3">
+              {sourceMode === 'catalog' ? (
+                <Field
+                  label="Target Job"
+                  htmlFor="tailor-job"
+                  hint="Reuses cached JD requirements after first extraction."
+                  error={customErrors.jobId}
+                  required
+                >
+                  {(inputProps) => (
+                    <Select
+                      {...inputProps}
+                      value={selectedJobId}
+                      onChange={(e) => setSelectedJobId(e.target.value)}
+                    >
+                      {catalogJobs.length === 0 ? (
+                        <option value="">No catalog jobs synced — use Custom JD</option>
+                      ) : (
+                        catalogJobs.map((item) => (
+                          <option key={item.job.id} value={item.job.id}>
+                            {item.job.companyName} — {item.job.title}
+                            {item.match?.llmScore != null ? ` (${item.match.llmScore}/100)` : ''}
+                          </option>
+                        ))
+                      )}
+                    </Select>
+                  )}
+                </Field>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <Field label="Role Title" htmlFor="custom-role" error={customErrors.title} required>
                       {(inputProps) => (
                         <Input
@@ -755,26 +677,28 @@ function TailorStudioInner() {
                         />
                       )}
                     </Field>
-                    <Field
-                      label="Job Description"
-                      htmlFor="custom-jd"
-                      hint="Paste raw requirements, stack, and responsibilities."
-                      error={customErrors.description}
-                      required
-                    >
-                      {(inputProps) => (
-                        <Textarea
-                          {...inputProps}
-                          rows={6}
-                          value={customDescription}
-                          onChange={(e) => setCustomDescription(e.target.value)}
-                          placeholder="Build high-throughput TypeScript and PostgreSQL services..."
-                        />
-                      )}
-                    </Field>
                   </div>
-                )}
+                  <Field
+                    label="Job Description"
+                    htmlFor="custom-jd"
+                    hint="Paste raw requirements, stack, and responsibilities."
+                    error={customErrors.description}
+                    required
+                  >
+                    {(inputProps) => (
+                      <Textarea
+                        {...inputProps}
+                        rows={6}
+                        value={customDescription}
+                        onChange={(e) => setCustomDescription(e.target.value)}
+                        placeholder="Build high-throughput TypeScript and PostgreSQL services..."
+                      />
+                    )}
+                  </Field>
+                </div>
+              )}
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Field label="Source Profile Variant" htmlFor="tailor-variant">
                   {(inputProps) => (
                     <Select
@@ -806,214 +730,268 @@ function TailorStudioInner() {
                     </Select>
                   )}
                 </Field>
+              </div>
 
-                <Field
-                  label="Version Label (optional)"
-                  htmlFor="tailor-label"
-                  hint="Defaults to Company — Role Title."
-                >
-                  {(inputProps) => (
-                    <Input
-                      {...inputProps}
-                      value={labelOverride}
-                      onChange={(e) => setLabelOverride(e.target.value)}
-                      placeholder="e.g. Payments Backend Focus"
-                    />
-                  )}
-                </Field>
-
-                <label className="flex items-start gap-2.5 text-xs text-[var(--body)] cursor-pointer min-h-[44px] py-1">
-                  <input
-                    type="checkbox"
-                    checked={autoRepairFlagged}
-                    onChange={(e) => setAutoRepairFlagged(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 accent-[var(--ink)] cursor-pointer"
+              <Field
+                label="Version Label (optional)"
+                htmlFor="tailor-label"
+                hint="Defaults to Company — Role Title."
+              >
+                {(inputProps) => (
+                  <Input
+                    {...inputProps}
+                    value={labelOverride}
+                    onChange={(e) => setLabelOverride(e.target.value)}
+                    placeholder="e.g. Payments Backend Focus"
                   />
-                  <span>
-                    <strong className="text-[var(--ink)] block">Auto-repair flagged claims</strong>
-                    Runs one corrective pass if Layer 1 or Layer 2 catches an ungrounded claim.
-                  </span>
-                </label>
+                )}
+              </Field>
 
-                <Button type="submit" variant="primary" className="w-full" disabled={tailoring}>
-                  {tailoring ? (
-                    <span className="inline-flex items-center gap-2">
-                      <MoSpinner name="braille" />
-                      <span>Tailoring &amp; Verifying</span>
-                      <MoScan width={12} />
-                    </span>
-                  ) : (
-                    'Tailor & verify resume'
-                  )}
+              <label className="flex items-start gap-2.5 text-xs text-[var(--body)] cursor-pointer min-h-[44px] py-1">
+                <input
+                  type="checkbox"
+                  checked={autoRepairFlagged}
+                  onChange={(e) => setAutoRepairFlagged(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 accent-[var(--ink)] cursor-pointer"
+                />
+                <span>
+                  <strong className="text-[var(--ink)] block">Auto-repair flagged claims</strong>
+                  Runs one corrective pass if Layer 1 or Layer 2 catches an ungrounded claim.
+                </span>
+              </label>
+
+              <div className="pt-1">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  className="w-full sm:w-auto"
+                  disabled={tailoring}
+                >
+                  Tailor resume
                 </Button>
-              </form>
-            </SectionBlock>
+              </div>
+            </form>
+          </SectionBlock>
 
+          {versions.length > 0 ? (
             <SectionBlock
-              title="Versions"
-              description="Each tailored resume keeps its own snapshot."
+              title="Saved versions"
+              description="Open any previously tailored resume full-screen."
             >
-              {versions.length === 0 ? (
-                <p className="text-xs text-[var(--mute)]">
-                  No tailored versions yet. Pick a job above to generate v1.
-                </p>
-              ) : (
-                <ul className="divide-y divide-[var(--hairline)] border border-[var(--hairline)]">
-                  {versions.map((ver) => {
-                    const active = ver.id === selectedVersionId;
-                    return (
-                      <li key={ver.id}>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedVersionId(ver.id)}
-                          aria-current={active ? 'true' : undefined}
-                          className={`w-full text-left p-3 cursor-pointer transition-colors min-h-[44px] ${
-                            active
-                              ? 'bg-[var(--surface-dark)] text-[var(--on-dark)]'
-                              : 'bg-[var(--canvas)] hover:bg-[var(--surface-soft)] text-[var(--ink)]'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-bold tabular-nums">v{ver.versionNumber}</span>
-                            <Badge tone={ver.verifierPassed ? 'success' : 'danger'}>
-                              <MoDecode
-                                text={ver.verifierPassed ? 'VERIFIED' : 'FLAGGED'}
-                                frames={6}
-                              />
-                            </Badge>
-                          </div>
-                          <p className="text-xs font-medium mt-1 truncate">{ver.label}</p>
-                          <div
-                            className={`flex items-center justify-between text-[11px] mt-1 ${
-                              active ? 'opacity-80' : 'text-[var(--mute)]'
-                            }`}
-                          >
-                            <span>{ver.templateId}</span>
-                            <span className="tabular-nums">{formatDateTime(ver.createdAt)}</span>
-                          </div>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-stretch">
+                {versions.map((ver) => (
+                  <button
+                    key={ver.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedVersionId(ver.id);
+                      setAtsMode('target');
+                      setChkReport(null);
+                      setResumeStage('viewer');
+                    }}
+                    className="h-full flex flex-col justify-between text-left p-3.5 border border-[var(--hairline)] bg-[var(--canvas)] hover:bg-[var(--surface-soft)] transition-colors cursor-pointer"
+                  >
+                    <div className="space-y-2 w-full">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold tabular-nums text-[var(--ink)]">
+                          v{ver.versionNumber}
+                        </span>
+                        <Badge tone={ver.verifierPassed ? 'success' : 'danger'}>
+                          {ver.verifierPassed ? 'Passed' : 'Needs review'}
+                        </Badge>
+                      </div>
+                      <p className="text-xs font-medium text-[var(--ink)] line-clamp-2">{ver.label}</p>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-[var(--mute)] mt-3 pt-2 border-t border-[var(--hairline)] w-full">
+                      <span>{ver.templateId}</span>
+                      <span className="tabular-nums">{formatDateTime(ver.createdAt)}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
             </SectionBlock>
+          ) : null}
+        </div>
+      ) : (
+        <div className="w-full space-y-5">
+          {/* Full-screen Viewer Top Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border border-[var(--hairline)] bg-[var(--surface-card)] p-3 sm:px-4">
+            <div className="flex flex-wrap items-center gap-2.5 min-w-0 flex-1">
+              <Select
+                aria-label="Select tailored resume version"
+                className="max-w-md"
+                value={selectedVersion.id}
+                onChange={(e) => {
+                  setSelectedVersionId(e.target.value);
+                  setChkReport(null);
+                  setAtsMode('target');
+                }}
+              >
+                {versions.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    v{v.versionNumber} · {v.label}
+                  </option>
+                ))}
+              </Select>
+              <Badge tone={selectedVersion.verifierPassed ? 'success' : 'danger'}>
+                {selectedVersion.verifierPassed ? 'Passed' : 'Needs review'}
+              </Badge>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                onClick={() => setResumeStage('compose')}
+              >
+                New resume
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={handleRequestPdfDownload}
+                disabled={downloading === 'pdf'}
+              >
+                {downloading === 'pdf' ? 'Downloading...' : 'Download PDF'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => void handleDownloadTypst()}
+                disabled={downloading === 'typ' || !selectedVersion.typstSource}
+              >
+                {downloading === 'typ' ? 'Downloading...' : 'Download .typ'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => void handleReverify()}
+                disabled={verifying}
+              >
+                {verifying ? 'Verifying...' : 'Re-verify'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="danger"
+                onClick={() => setConfirmDeleteOpen(true)}
+                disabled={deleting}
+              >
+                Delete
+              </Button>
+            </div>
           </div>
 
-          {/* Right Column: Diff View + Dual Verifier Audit + JD + Typst/PDF */}
-          <div className="lg:col-span-8">
-            {selectedVersion ? (
-              <SectionBlock
-                title={`v${selectedVersion.versionNumber} · ${selectedVersion.label}`}
-                description={`Profile v${selectedVersion.parentProfileVersion} · ${selectedVersion.provider ?? 'llm'} / ${selectedVersion.model ?? 'default'} · ${selectedVersion.pdfEngine}`}
-                action={
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={handleRequestPdfDownload}
-                      disabled={downloading === 'pdf'}
-                    >
-                      {downloading === 'pdf' ? 'Downloading...' : 'Download PDF'}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void handleDownloadTypst()}
-                      disabled={downloading === 'typ' || !selectedVersion.typstSource}
-                    >
-                      {downloading === 'typ' ? 'Downloading...' : 'Download .typ'}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void handleReverify()}
-                      disabled={verifying}
-                    >
-                      {verifying ? 'Verifying...' : 'Re-verify'}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      onClick={() => setConfirmDeleteOpen(true)}
-                      disabled={deleting}
-                    >
-                      Delete
-                    </Button>
-                  </div>
-                }
-              >
-                <div className="space-y-5">
-                  {/* Verifier Status Strip */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3">
-                      <span className="text-[11px] text-[var(--mute)] block">Verification</span>
-                      <strong
-                        className={`text-sm font-bold ${
-                          selectedVersion.verifierPassed
-                            ? 'text-[var(--success-text)]'
-                            : 'text-[var(--danger-text)]'
+          <SectionBlock
+            title={`v${selectedVersion.versionNumber} · ${selectedVersion.label}`}
+            description={`Profile v${selectedVersion.parentProfileVersion} · ${selectedVersion.templateId} · ${formatDateTime(selectedVersion.createdAt)}`}
+          >
+            <div className="space-y-5">
+              {/* Verifier Status Strip */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-[var(--hairline)] border border-[var(--hairline)]">
+                <div className="bg-[var(--surface-soft)] p-3">
+                  <span className="text-[11px] text-[var(--mute)] block">Verification</span>
+                  <strong
+                    className={`text-sm font-bold ${
+                      selectedVersion.verifierPassed
+                        ? 'text-[var(--success-text)]'
+                        : 'text-[var(--danger-text)]'
+                    }`}
+                  >
+                    {selectedVersion.verifierPassed ? 'Passed' : 'Needs review'}
+                  </strong>
+                </div>
+                <div className="bg-[var(--surface-soft)] p-3">
+                  <span className="text-[11px] text-[var(--mute)] block">Unsupported Rate</span>
+                  <strong className="text-sm font-bold tabular-nums text-[var(--ink)]">
+                    {formatPercentRate(selectedVersion.verifierReport.unsupportedClaimRate)}
+                  </strong>
+                </div>
+                <div className="bg-[var(--surface-soft)] p-3">
+                  <span className="text-[11px] text-[var(--mute)] block">Immutable Violations</span>
+                  <strong className="text-sm font-bold tabular-nums text-[var(--ink)]">
+                    {selectedVersion.verifierReport.immutableFieldViolations}
+                  </strong>
+                </div>
+                <div className="bg-[var(--surface-soft)] p-3">
+                  <span className="text-[11px] text-[var(--mute)] block">Claims Audited</span>
+                  <strong className="text-sm font-bold tabular-nums text-[var(--ink)]">
+                    {selectedVersion.verifierReport.totalClaimsChecked}
+                  </strong>
+                </div>
+              </div>
+
+              <TabStrip<TailorTab>
+                label="Tailored resume inspection views"
+                activeTab={activeTab}
+                onChange={setActiveTab}
+                tabs={[
+                  { id: 'pdf', label: 'PDF Preview' },
+                  {
+                    id: 'ats',
+                    label: 'ATS Check',
+                    badge: atsByVersionId[selectedVersion.id]?.overallScore
+                  },
+                  { id: 'diff', label: 'Diff View' },
+                  {
+                    id: 'verifier',
+                    label: 'Verifier Audit',
+                    badge: selectedVersion.verifierReport.unsupportedClaimCount
+                  },
+                  {
+                    id: 'jd',
+                    label: 'JD Requirements',
+                    badge: selectedVersion.jdRequirements.mustHaveSkills.length
+                  },
+                  { id: 'preview', label: 'HTML & Typst' }
+                ]}
+              />
+
+              {activeTab === 'pdf' ? (
+                <PdfPreviewFrame
+                  id={selectedVersion.id}
+                  kind="resume"
+                  title={`Resume v${selectedVersion.versionNumber} preview`}
+                  onDownload={handleRequestPdfDownload}
+                />
+              ) : null}
+
+              {activeTab === 'ats' ? (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--hairline)]">
+                    <div className="inline-flex border border-[var(--hairline)] rounded-[4px] overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => setAtsMode('target')}
+                        className={`px-3 py-1.5 text-xs font-medium cursor-pointer transition-colors ${
+                          atsMode === 'target'
+                            ? 'bg-[var(--surface-dark)] text-[var(--on-dark)]'
+                            : 'bg-[var(--surface-soft)] text-[var(--ink)] hover:bg-[var(--surface-card)]'
                         }`}
                       >
-                        {selectedVersion.verifierPassed ? 'Passed' : 'Needs review'}
-                      </strong>
+                        This role&apos;s JD
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAtsMode('custom')}
+                        className={`px-3 py-1.5 text-xs font-medium cursor-pointer border-l border-[var(--hairline)] transition-colors ${
+                          atsMode === 'custom'
+                            ? 'bg-[var(--surface-dark)] text-[var(--on-dark)]'
+                            : 'bg-[var(--surface-soft)] text-[var(--ink)] hover:bg-[var(--surface-card)]'
+                        }`}
+                      >
+                        Check another JD
+                      </button>
                     </div>
-                    <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3">
-                      <span className="text-[11px] text-[var(--mute)] block">Unsupported Rate</span>
-                      <strong className="text-sm font-bold tabular-nums text-[var(--ink)]">
-                        {formatPercentRate(selectedVersion.verifierReport.unsupportedClaimRate)}
-                      </strong>
-                    </div>
-                    <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3">
-                      <span className="text-[11px] text-[var(--mute)] block">Immutable Violations</span>
-                      <strong className="text-sm font-bold tabular-nums text-[var(--ink)]">
-                        {selectedVersion.verifierReport.immutableFieldViolations}
-                      </strong>
-                    </div>
-                    <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3">
-                      <span className="text-[11px] text-[var(--mute)] block">Claims Audited</span>
-                      <strong className="text-sm font-bold tabular-nums text-[var(--ink)]">
-                        {selectedVersion.verifierReport.totalClaimsChecked}
-                      </strong>
-                    </div>
+                    <span className="text-xs text-[var(--mute)]">
+                      Deterministic skill, synonym, and impact audit.
+                    </span>
                   </div>
 
-                  <TabStrip<TailorTab>
-                    label="Tailored resume inspection views"
-                    activeTab={activeTab}
-                    onChange={setActiveTab}
-                    tabs={[
-                      { id: 'pdf', label: 'PDF Preview' },
-                      {
-                        id: 'ats',
-                        label: 'ATS Score',
-                        badge: atsByVersionId[selectedVersion.id]?.overallScore
-                      },
-                      { id: 'diff', label: 'Diff View' },
-                      {
-                        id: 'verifier',
-                        label: 'Verifier Audit',
-                        badge: selectedVersion.verifierReport.unsupportedClaimCount
-                      },
-                      {
-                        id: 'jd',
-                        label: 'JD Requirements',
-                        badge: selectedVersion.jdRequirements.mustHaveSkills.length
-                      },
-                      { id: 'preview', label: 'HTML & Typst' }
-                    ]}
-                  />
-
-                  {activeTab === 'pdf' ? (
-                    <PdfPreviewFrame
-                      id={selectedVersion.id}
-                      kind="resume"
-                      title={`Resume v${selectedVersion.versionNumber} preview`}
-                      onDownload={handleRequestPdfDownload}
-                    />
-                  ) : null}
-
-                  {activeTab === 'ats' ? (
+                  {atsMode === 'target' ? (
                     atsLoading && !atsByVersionId[selectedVersion.id] ? (
                       <SkeletonBlock className="h-72 w-full" />
                     ) : atsByVersionId[selectedVersion.id] ? (
@@ -1021,345 +999,460 @@ function TailorStudioInner() {
                     ) : (
                       <p className="text-xs text-[var(--mute)]">Unable to compute ATS score.</p>
                     )
-                  ) : null}
-
-                  {activeTab === 'diff' ? (
+                  ) : (
                     <div className="space-y-5">
-                      {/* Summary Diff */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
-                            Summary Diff
-                          </h3>
-                          <Badge tone={selectedVersion.diffSummary.summaryChanged ? 'warning' : 'neutral'}>
-                            {selectedVersion.diffSummary.summaryChanged ? 'Rephrased' : 'Unchanged'}
-                          </Badge>
-                        </div>
-                        {selectedVersion.diffSummary.summaryChanged ? (
-                          <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3 space-y-2 text-xs">
-                            {selectedVersion.diffSummary.summaryBefore ? (
-                              <p className="text-[var(--danger-text)] break-words">
-                                <span className="font-bold mr-2">Before:</span>
-                                {selectedVersion.diffSummary.summaryBefore}
-                              </p>
-                            ) : null}
-                            <p className="text-[var(--success-text)] break-words">
-                              <span className="font-bold mr-2">After:</span>
-                              {selectedVersion.diffSummary.summaryAfter}
-                            </p>
-                          </div>
-                        ) : (
-                          <p className="text-xs text-[var(--body)] border border-[var(--hairline)] p-3">
-                            {selectedVersion.diffSummary.summaryAfter || 'No summary present.'}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Skills Diff */}
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
-                            Skills Reordering
-                          </h3>
-                          <div className="flex flex-wrap gap-2">
-                            {selectedVersion.diffSummary.skillsReordered ? (
-                              <Badge tone="warning">Reordered</Badge>
-                            ) : (
-                              <Badge tone="neutral">Original order</Badge>
+                      <form
+                        onSubmit={(e) => void handleRunStandaloneAts(e)}
+                        className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-4 space-y-4"
+                      >
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <Field label="Resume to audit" htmlFor="chk-kind">
+                            {(props) => (
+                              <Select
+                                {...props}
+                                value={chkTargetKind}
+                                onChange={(e) =>
+                                  setChkTargetKind(e.target.value as 'variant' | 'version')
+                                }
+                              >
+                                <option value="version">
+                                  Current version (v{selectedVersion.versionNumber})
+                                </option>
+                                <option value="variant">Master profile variant</option>
+                              </Select>
                             )}
-                            {selectedVersion.diffSummary.skillsAdded.length > 0 ? (
-                              <Badge tone="danger">
-                                Added ({selectedVersion.diffSummary.skillsAdded.length})
-                              </Badge>
-                            ) : null}
+                          </Field>
+
+                          <Field label="Target JD source" htmlFor="chk-jd-src">
+                            {(props) => (
+                              <Select
+                                {...props}
+                                value={chkJdSource}
+                                onChange={(e) =>
+                                  setChkJdSource(e.target.value as 'catalog' | 'custom')
+                                }
+                              >
+                                <option value="custom">Paste custom JD</option>
+                                <option value="catalog">Saved / Feed Job</option>
+                              </Select>
+                            )}
+                          </Field>
+                        </div>
+
+                        {chkTargetKind === 'variant' ? (
+                          <Field label="Profile Variant" htmlFor="chk-variant">
+                            {(props) => (
+                              <Select
+                                {...props}
+                                value={chkVariantId}
+                                onChange={(e) => setChkVariantId(e.target.value)}
+                              >
+                                <option value="">Active Default Variant</option>
+                                {variants.map((v) => (
+                                  <option key={v.id} value={v.id}>
+                                    {v.name} {v.isDefault ? '(Default)' : ''}
+                                  </option>
+                                ))}
+                              </Select>
+                            )}
+                          </Field>
+                        ) : null}
+
+                        {chkJdSource === 'catalog' ? (
+                          <Field label="Job" htmlFor="chk-job">
+                            {(props) => (
+                              <Select
+                                {...props}
+                                value={chkJobId}
+                                onChange={(e) => setChkJobId(e.target.value)}
+                              >
+                                {catalogJobs.map((j) => (
+                                  <option key={j.job.id} value={j.job.id}>
+                                    {j.job.companyName} — {j.job.title}
+                                  </option>
+                                ))}
+                              </Select>
+                            )}
+                          </Field>
+                        ) : (
+                          <div className="space-y-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <Field label="Role Title" htmlFor="chk-title">
+                                {(props) => (
+                                  <Input
+                                    {...props}
+                                    value={chkTitle}
+                                    onChange={(e) => setChkTitle(e.target.value)}
+                                    placeholder="e.g. Backend Software Engineer"
+                                  />
+                                )}
+                              </Field>
+                              <Field label="Company (optional)" htmlFor="chk-company">
+                                {(props) => (
+                                  <Input
+                                    {...props}
+                                    value={chkCompany}
+                                    onChange={(e) => setChkCompany(e.target.value)}
+                                    placeholder="e.g. Razorpay"
+                                  />
+                                )}
+                              </Field>
+                            </div>
+                            <Field label="Job Description" htmlFor="chk-jd" required>
+                              {(props) => (
+                                <Textarea
+                                  {...props}
+                                  rows={5}
+                                  value={chkJdText}
+                                  onChange={(e) => setChkJdText(e.target.value)}
+                                  placeholder="Paste full JD requirements & nice-to-haves..."
+                                />
+                              )}
+                            </Field>
                           </div>
-                        </div>
-                        <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3 space-y-2 text-xs">
-                          <p className="text-[var(--ink)] break-words">
-                            <span className="font-bold text-[var(--mute)] mr-2">ACTIVE ORDER:</span>
-                            {selectedVersion.diffSummary.skillsAfter.join(', ') || 'None'}
-                          </p>
-                          {selectedVersion.diffSummary.skillsDropped.length > 0 ? (
-                            <p className="text-[var(--mute)] break-words">
-                              <span className="font-bold mr-2">Omitted:</span>
-                              {selectedVersion.diffSummary.skillsDropped.join(', ')}
-                            </p>
-                          ) : null}
-                          {selectedVersion.diffSummary.skillsAdded.length > 0 ? (
-                            <p className="text-[var(--danger-text)] break-words">
-                              <span className="font-bold mr-2">Unsupported skills:</span>
-                              {selectedVersion.diffSummary.skillsAdded.join(', ')}
-                            </p>
-                          ) : null}
-                        </div>
-                      </div>
+                        )}
 
-                      <SectionDiffGroup
-                        heading="Work Experience Diff"
-                        sections={selectedVersion.diffSummary.workDiffs}
-                      />
-                      <SectionDiffGroup
-                        heading="Projects Diff"
-                        sections={selectedVersion.diffSummary.projectDiffs}
-                      />
+                        <Button type="submit" variant="primary" disabled={chkLoading}>
+                          {chkLoading ? 'Scoring...' : 'Run ATS Check'}
+                        </Button>
+                      </form>
+
+                      {chkReport ? <AtsScorePanel report={chkReport} /> : null}
                     </div>
-                  ) : null}
+                  )}
+                </div>
+              ) : null}
 
-                  {activeTab === 'verifier' ? (
-                    <div className="space-y-4">
-                      <AlertBanner
-                        tone={selectedVersion.verifierPassed ? 'success' : 'warning'}
-                        title={
-                          selectedVersion.verifierPassed
-                            ? 'All claims traced back to Master Profile & Story Bank'
-                            : 'One or more claims failed dual verification'
-                        }
-                        message={
-                          selectedVersion.verifierReport.overallNotes ||
-                          `Deterministic checks: ${
-                            selectedVersion.verifierReport.deterministicPassed ? 'PASS' : 'FAIL'
-                          } · LLM audit: ${
-                            selectedVersion.verifierReport.llmVerifierPassed ? 'PASS' : 'FAIL'
-                          }`
-                        }
-                      />
+              {activeTab === 'diff' ? (
+                <div className="space-y-5">
+                  {/* Summary Diff */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
+                        Summary Diff
+                      </h3>
+                      <Badge tone={selectedVersion.diffSummary.summaryChanged ? 'warning' : 'neutral'}>
+                        {selectedVersion.diffSummary.summaryChanged ? 'Rephrased' : 'Unchanged'}
+                      </Badge>
+                    </div>
+                    {selectedVersion.diffSummary.summaryChanged ? (
+                      <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3 space-y-2 text-xs">
+                        {selectedVersion.diffSummary.summaryBefore ? (
+                          <p className="text-[var(--danger-text)] break-words">
+                            <span className="font-bold mr-2">Before:</span>
+                            {selectedVersion.diffSummary.summaryBefore}
+                          </p>
+                        ) : null}
+                        <p className="text-[var(--success-text)] break-words">
+                          <span className="font-bold mr-2">After:</span>
+                          {selectedVersion.diffSummary.summaryAfter}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-[var(--body)] border border-[var(--hairline)] p-3">
+                        {selectedVersion.diffSummary.summaryAfter || 'No summary present.'}
+                      </p>
+                    )}
+                  </div>
 
-                      {selectedVersion.verifierReport.claims.length === 0 ? (
-                        <p className="text-xs text-[var(--mute)]">No individual claims recorded.</p>
-                      ) : (
-                        <div className="divide-y divide-[var(--hairline)] border border-[var(--hairline)]">
-                          {selectedVersion.verifierReport.claims.map((claim, idx) => (
-                            <div key={`claim-${idx}`} className="p-3 space-y-1.5 text-xs">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <Badge tone={claimTone(claim.status)}>
-                                    {claimMarker(claim.status)}
-                                  </Badge>
-                                  <span className="font-bold text-[var(--ink)]">{claim.section}</span>
-                                  {claim.sourceId ? (
-                                    <span className="text-[var(--mute)]">src:{claim.sourceId}</span>
-                                  ) : null}
-                                </div>
-                                <Badge tone={claim.severity === 'critical' ? 'danger' : 'neutral'}>
-                                  {claim.severity}
-                                </Badge>
-                              </div>
-                              <p className="text-[var(--ink)] break-words">{claim.claim}</p>
-                              {claim.evidence ? (
-                                <p className="text-[var(--mute)] break-words">
-                                  Evidence: {claim.evidence}
-                                </p>
-                              ) : null}
-                              {claim.issue ? (
-                                <p className="text-[var(--danger-text)] font-medium break-words">
-                                  {claim.issue}
-                                </p>
+                  {/* Skills Diff */}
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
+                        Skills Reordering
+                      </h3>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedVersion.diffSummary.skillsReordered ? (
+                          <Badge tone="warning">Reordered</Badge>
+                        ) : (
+                          <Badge tone="neutral">Original order</Badge>
+                        )}
+                        {selectedVersion.diffSummary.skillsAdded.length > 0 ? (
+                          <Badge tone="danger">
+                            Added ({selectedVersion.diffSummary.skillsAdded.length})
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3 space-y-2 text-xs">
+                      <p className="text-[var(--ink)] break-words">
+                        <span className="font-bold text-[var(--mute)] mr-2">ACTIVE ORDER:</span>
+                        {selectedVersion.diffSummary.skillsAfter.join(', ') || 'None'}
+                      </p>
+                      {selectedVersion.diffSummary.skillsDropped.length > 0 ? (
+                        <p className="text-[var(--mute)] break-words">
+                          <span className="font-bold mr-2">Omitted:</span>
+                          {selectedVersion.diffSummary.skillsDropped.join(', ')}
+                        </p>
+                      ) : null}
+                      {selectedVersion.diffSummary.skillsAdded.length > 0 ? (
+                        <p className="text-[var(--danger-text)] break-words">
+                          <span className="font-bold mr-2">Unsupported skills:</span>
+                          {selectedVersion.diffSummary.skillsAdded.join(', ')}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <SectionDiffGroup
+                    heading="Work Experience Diff"
+                    sections={selectedVersion.diffSummary.workDiffs}
+                  />
+                  <SectionDiffGroup
+                    heading="Projects Diff"
+                    sections={selectedVersion.diffSummary.projectDiffs}
+                  />
+                </div>
+              ) : null}
+
+              {activeTab === 'verifier' ? (
+                <div className="space-y-4">
+                  <AlertBanner
+                    tone={selectedVersion.verifierPassed ? 'success' : 'warning'}
+                    title={
+                      selectedVersion.verifierPassed
+                        ? 'All claims traced back to Master Profile & Story Bank'
+                        : 'One or more claims failed dual verification'
+                    }
+                    message={
+                      selectedVersion.verifierReport.overallNotes ||
+                      `Deterministic checks: ${
+                        selectedVersion.verifierReport.deterministicPassed ? 'PASS' : 'FAIL'
+                      } · LLM audit: ${
+                        selectedVersion.verifierReport.llmVerifierPassed ? 'PASS' : 'FAIL'
+                      }`
+                    }
+                  />
+
+                  {selectedVersion.verifierReport.claims.length === 0 ? (
+                    <p className="text-xs text-[var(--mute)]">No individual claims recorded.</p>
+                  ) : (
+                    <div className="divide-y divide-[var(--hairline)] border border-[var(--hairline)]">
+                      {selectedVersion.verifierReport.claims.map((claim, idx) => (
+                        <div key={`claim-${idx}`} className="p-3 space-y-1.5 text-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge tone={claimTone(claim.status)}>
+                                {claimMarker(claim.status)}
+                              </Badge>
+                              <span className="font-bold text-[var(--ink)]">{claim.section}</span>
+                              {claim.sourceId ? (
+                                <span className="text-[var(--mute)]">src:{claim.sourceId}</span>
                               ) : null}
                             </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
-
-                  {activeTab === 'jd' ? (
-                    <div className="space-y-4 text-xs">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="border border-[var(--hairline)] p-3">
-                          <span className="text-[var(--mute)] block mb-1">Role & Company</span>
-                          <strong className="text-sm text-[var(--ink)]">
-                            {selectedVersion.jdRequirements.roleTitle} @{' '}
-                            {selectedVersion.jdRequirements.companyName}
-                          </strong>
-                        </div>
-                        <div className="border border-[var(--hairline)] p-3">
-                          <span className="text-[var(--mute)] block mb-1">Seniority Signals</span>
-                          <span className="text-[var(--ink)]">
-                            {selectedVersion.jdRequirements.senioritySignals.join(', ') || 'Unspecified'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <h3 className="font-bold uppercase tracking-wider text-[var(--mute)]">
-                          Must-Have Skills
-                        </h3>
-                        <div className="flex flex-wrap gap-1.5">
-                          {selectedVersion.jdRequirements.mustHaveSkills.map((skill) => (
-                            <Badge key={skill} tone="dark">
-                              {skill}
+                            <Badge tone={claim.severity === 'critical' ? 'danger' : 'neutral'}>
+                              {claim.severity}
                             </Badge>
-                          ))}
-                        </div>
-                      </div>
-
-                      {selectedVersion.jdRequirements.niceToHaveSkills.length > 0 ? (
-                        <div className="space-y-1.5">
-                          <h3 className="font-bold uppercase tracking-wider text-[var(--mute)]">
-                            Nice-To-Have Skills
-                          </h3>
-                          <div className="flex flex-wrap gap-1.5">
-                            {selectedVersion.jdRequirements.niceToHaveSkills.map((skill) => (
-                              <Badge key={skill} tone="neutral">
-                                {skill}
-                              </Badge>
-                            ))}
                           </div>
+                          <p className="text-[var(--ink)] break-words">{claim.claim}</p>
+                          {claim.evidence ? (
+                            <p className="text-[var(--mute)] break-words">
+                              Evidence: {claim.evidence}
+                            </p>
+                          ) : null}
+                          {claim.issue ? (
+                            <p className="text-[var(--danger-text)] font-medium break-words">
+                              {claim.issue}
+                            </p>
+                          ) : null}
                         </div>
-                      ) : null}
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
 
-                      {selectedVersion.jdRequirements.keyResponsibilities.length > 0 ? (
-                        <div className="space-y-1.5">
-                          <h3 className="font-bold uppercase tracking-wider text-[var(--mute)]">
-                            Key Responsibilities
-                          </h3>
-                          <ul className="list-disc pl-5 space-y-1 text-[var(--body)]">
-                            {selectedVersion.jdRequirements.keyResponsibilities.map((r, i) => (
-                              <li key={`resp-${i}`}>{r}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null}
+              {activeTab === 'jd' ? (
+                <div className="space-y-4 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="border border-[var(--hairline)] p-3">
+                      <span className="text-[var(--mute)] block mb-1">Role &amp; Company</span>
+                      <strong className="text-sm text-[var(--ink)]">
+                        {selectedVersion.jdRequirements.roleTitle} @{' '}
+                        {selectedVersion.jdRequirements.companyName}
+                      </strong>
+                    </div>
+                    <div className="border border-[var(--hairline)] p-3">
+                      <span className="text-[var(--mute)] block mb-1">Seniority Signals</span>
+                      <span className="text-[var(--ink)]">
+                        {selectedVersion.jdRequirements.senioritySignals.join(', ') || 'Unspecified'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <h3 className="font-bold uppercase tracking-wider text-[var(--mute)]">
+                      Must-Have Skills
+                    </h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectedVersion.jdRequirements.mustHaveSkills.map((skill) => (
+                        <Badge key={skill} tone="dark">
+                          {skill}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+
+                  {selectedVersion.jdRequirements.niceToHaveSkills.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <h3 className="font-bold uppercase tracking-wider text-[var(--mute)]">
+                        Nice-To-Have Skills
+                      </h3>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedVersion.jdRequirements.niceToHaveSkills.map((skill) => (
+                          <Badge key={skill} tone="neutral">
+                            {skill}
+                          </Badge>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
 
-                  {activeTab === 'preview' ? (
-                    <div className="space-y-5">
-                      {/* Single-column ATS HTML Preview */}
-                      <div className="border border-[var(--hairline-strong)] bg-[var(--canvas)] p-5 space-y-4 text-xs">
-                        <header className="border-b border-[var(--hairline)] pb-3 space-y-1">
-                          <h3 className="text-lg font-bold text-[var(--ink)]">
-                            {selectedVersion.tailoredJsonResume.basics.name || 'Candidate'}
-                          </h3>
-                          {selectedVersion.tailoredJsonResume.basics.label ? (
-                            <p className="text-[var(--body)]">
-                              {selectedVersion.tailoredJsonResume.basics.label}
-                            </p>
-                          ) : null}
-                          <p className="text-[var(--mute)]">
-                            {[
-                              selectedVersion.tailoredJsonResume.basics.email,
-                              selectedVersion.tailoredJsonResume.basics.phone,
-                              selectedVersion.tailoredJsonResume.basics.location?.city
-                            ]
-                              .filter(Boolean)
-                              .join(' · ')}
-                          </p>
-                        </header>
-
-                        {selectedVersion.tailoredJsonResume.basics.summary ? (
-                          <div>
-                            <h4 className="font-bold text-[var(--mute)] uppercase mb-1">Summary</h4>
-                            <p className="text-[var(--body)] leading-relaxed">
-                              {selectedVersion.tailoredJsonResume.basics.summary}
-                            </p>
-                          </div>
-                        ) : null}
-
-                        {selectedVersion.tailoredJsonResume.skills.length > 0 ? (
-                          <div>
-                            <h4 className="font-bold text-[var(--mute)] uppercase mb-1">Skills</h4>
-                            <div className="space-y-1">
-                              {selectedVersion.tailoredJsonResume.skills.map((grp, i) => (
-                                <p key={`sg-${i}`} className="text-[var(--body)]">
-                                  <strong className="text-[var(--ink)]">{grp.name}:</strong>{' '}
-                                  {grp.keywords.join(', ')}
-                                </p>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
-
-                        {selectedVersion.tailoredJsonResume.work.length > 0 ? (
-                          <div className="space-y-2.5">
-                            <h4 className="font-bold text-[var(--mute)] uppercase">Experience</h4>
-                            {selectedVersion.tailoredJsonResume.work.map((w, i) => (
-                              <div key={`pw-${i}`} className="space-y-1">
-                                <div className="flex flex-wrap justify-between gap-2">
-                                  <strong className="text-[var(--ink)]">
-                                    {w.position} — {w.name}
-                                  </strong>
-                                  <span className="text-[var(--mute)] tabular-nums">
-                                    {w.startDate} – {w.endDate || 'Present'}
-                                  </span>
-                                </div>
-                                <ul className="list-disc pl-5 space-y-0.5 text-[var(--body)]">
-                                  {w.highlights.map((h, hi) => (
-                                    <li key={`pwh-${hi}`}>{h}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            ))}
-                          </div>
-                        ) : null}
-
-                        {selectedVersion.tailoredJsonResume.projects.length > 0 ? (
-                          <div className="space-y-2.5">
-                            <h4 className="font-bold text-[var(--mute)] uppercase">Projects</h4>
-                            {selectedVersion.tailoredJsonResume.projects.map((p, i) => (
-                              <div key={`pp-${i}`} className="space-y-1">
-                                <strong className="text-[var(--ink)]">{p.name}</strong>
-                                {p.description ? (
-                                  <p className="text-[var(--body)]">{p.description}</p>
-                                ) : null}
-                                <ul className="list-disc pl-5 space-y-0.5 text-[var(--body)]">
-                                  {p.highlights.map((h, hi) => (
-                                    <li key={`pph-${hi}`}>{h}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            ))}
-                          </div>
-                        ) : null}
-
-                        {selectedVersion.tailoredJsonResume.education.length > 0 ? (
-                          <div className="space-y-1.5">
-                            <h4 className="font-bold text-[var(--mute)] uppercase">Education</h4>
-                            {selectedVersion.tailoredJsonResume.education.map((e, i) => (
-                              <div key={`pe-${i}`} className="flex flex-wrap justify-between gap-2">
-                                <span className="text-[var(--body)]">
-                                  <strong className="text-[var(--ink)]">{e.institution}</strong>
-                                  {e.studyType || e.area
-                                    ? ` · ${[e.studyType, e.area].filter(Boolean).join(' ')}`
-                                    : ''}
-                                  {e.score ? ` · CGPA ${e.score}` : ''}
-                                </span>
-                                <span className="text-[var(--mute)] tabular-nums">
-                                  {e.startDate} – {e.endDate}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-
-                      {/* Raw Typst Source */}
-                      {selectedVersion.typstSource ? (
-                        <div className="border border-[var(--hairline)] bg-[var(--surface-soft)]">
-                          <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-[var(--hairline)]">
-                            <span className="text-xs font-bold text-[var(--ink)]">
-                              Typst Source (.typ)
-                            </span>
-                            <Button size="sm" variant="ghost" onClick={() => void handleCopyTypst()}>
-                              {typstCopied ? 'Copied' : 'Copy Typst'}
-                            </Button>
-                          </div>
-                          <pre className="p-3 text-[11px] leading-relaxed text-[var(--body)] overflow-x-auto max-h-72">
-                            {selectedVersion.typstSource}
-                          </pre>
-                        </div>
-                      ) : null}
+                  {selectedVersion.jdRequirements.keyResponsibilities.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <h3 className="font-bold uppercase tracking-wider text-[var(--mute)]">
+                        Key Responsibilities
+                      </h3>
+                      <ul className="list-disc pl-5 space-y-1 text-[var(--body)]">
+                        {selectedVersion.jdRequirements.keyResponsibilities.map((r, i) => (
+                          <li key={`resp-${i}`}>{r}</li>
+                        ))}
+                      </ul>
                     </div>
                   ) : null}
                 </div>
-              </SectionBlock>
-            ) : (
-              <EmptyState
-                title="No tailored resume selected"
-                description="Choose a target job (or paste a custom JD) on the left to extract requirements, rephrase and reorder strictly from your Master Profile, run the Dual Verifier, and render a downloadable single-column ATS PDF."
-              />
-            )}
-          </div>
+              ) : null}
+
+              {activeTab === 'preview' ? (
+                <div className="space-y-5">
+                  {/* Single-column ATS HTML Preview */}
+                  <div className="border border-[var(--hairline-strong)] bg-[var(--canvas)] p-5 space-y-4 text-xs">
+                    <header className="border-b border-[var(--hairline)] pb-3 space-y-1">
+                      <h3 className="text-lg font-bold text-[var(--ink)]">
+                        {selectedVersion.tailoredJsonResume.basics.name || 'Candidate'}
+                      </h3>
+                      {selectedVersion.tailoredJsonResume.basics.label ? (
+                        <p className="text-[var(--body)]">
+                          {selectedVersion.tailoredJsonResume.basics.label}
+                        </p>
+                      ) : null}
+                      <p className="text-[var(--mute)]">
+                        {[
+                          selectedVersion.tailoredJsonResume.basics.email,
+                          selectedVersion.tailoredJsonResume.basics.phone,
+                          selectedVersion.tailoredJsonResume.basics.location?.city
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    </header>
+
+                    {selectedVersion.tailoredJsonResume.basics.summary ? (
+                      <div>
+                        <h4 className="font-bold text-[var(--mute)] uppercase mb-1">Summary</h4>
+                        <p className="text-[var(--body)] leading-relaxed">
+                          {selectedVersion.tailoredJsonResume.basics.summary}
+                        </p>
+                      </div>
+                    ) : null}
+
+                    {selectedVersion.tailoredJsonResume.skills.length > 0 ? (
+                      <div>
+                        <h4 className="font-bold text-[var(--mute)] uppercase mb-1">Skills</h4>
+                        <div className="space-y-1">
+                          {selectedVersion.tailoredJsonResume.skills.map((grp, i) => (
+                            <p key={`sg-${i}`} className="text-[var(--body)]">
+                              <strong className="text-[var(--ink)]">{grp.name}:</strong>{' '}
+                              {grp.keywords.join(', ')}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {selectedVersion.tailoredJsonResume.work.length > 0 ? (
+                      <div className="space-y-2.5">
+                        <h4 className="font-bold text-[var(--mute)] uppercase">Experience</h4>
+                        {selectedVersion.tailoredJsonResume.work.map((w, i) => (
+                          <div key={`pw-${i}`} className="space-y-1">
+                            <div className="flex flex-wrap justify-between gap-2">
+                              <strong className="text-[var(--ink)]">
+                                {w.position} — {w.name}
+                              </strong>
+                              <span className="text-[var(--mute)] tabular-nums">
+                                {w.startDate} – {w.endDate || 'Present'}
+                              </span>
+                            </div>
+                            <ul className="list-disc pl-5 space-y-0.5 text-[var(--body)]">
+                              {w.highlights.map((h, hi) => (
+                                <li key={`pwh-${hi}`}>{h}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {selectedVersion.tailoredJsonResume.projects.length > 0 ? (
+                      <div className="space-y-2.5">
+                        <h4 className="font-bold text-[var(--mute)] uppercase">Projects</h4>
+                        {selectedVersion.tailoredJsonResume.projects.map((p, i) => (
+                          <div key={`pp-${i}`} className="space-y-1">
+                            <strong className="text-[var(--ink)]">{p.name}</strong>
+                            {p.description ? (
+                              <p className="text-[var(--body)]">{p.description}</p>
+                            ) : null}
+                            <ul className="list-disc pl-5 space-y-0.5 text-[var(--body)]">
+                              {p.highlights.map((h, hi) => (
+                                <li key={`pph-${hi}`}>{h}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {selectedVersion.tailoredJsonResume.education.length > 0 ? (
+                      <div className="space-y-1.5">
+                        <h4 className="font-bold text-[var(--mute)] uppercase">Education</h4>
+                        {selectedVersion.tailoredJsonResume.education.map((e, i) => (
+                          <div key={`pe-${i}`} className="flex flex-wrap justify-between gap-2">
+                            <span className="text-[var(--body)]">
+                              <strong className="text-[var(--ink)]">{e.institution}</strong>
+                              {e.studyType || e.area
+                                ? ` · ${[e.studyType, e.area].filter(Boolean).join(' ')}`
+                                : ''}
+                              {e.score ? ` · CGPA ${e.score}` : ''}
+                            </span>
+                            <span className="text-[var(--mute)] tabular-nums">
+                              {e.startDate} – {e.endDate}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Raw Typst Source */}
+                  {selectedVersion.typstSource ? (
+                    <div className="border border-[var(--hairline)] bg-[var(--surface-soft)]">
+                      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-[var(--hairline)]">
+                        <span className="text-xs font-bold text-[var(--ink)]">
+                          Typst Source (.typ)
+                        </span>
+                        <Button size="sm" variant="ghost" onClick={() => void handleCopyTypst()}>
+                          {typstCopied ? 'Copied' : 'Copy Typst'}
+                        </Button>
+                      </div>
+                      <pre className="p-3 text-[11px] leading-relaxed text-[var(--body)] overflow-x-auto max-h-72">
+                        {selectedVersion.typstSource}
+                      </pre>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </SectionBlock>
         </div>
       )}
     </AppShell>
@@ -1370,7 +1463,7 @@ export default function TailorPage() {
   return (
     <Suspense
       fallback={
-        <AppShell title="Tailor Studio & Dual Verifier" subtitle="Loading tailoring workspace...">
+        <AppShell title="Tailor">
           <SkeletonBlock className="h-[520px] w-full" />
         </AppShell>
       }
