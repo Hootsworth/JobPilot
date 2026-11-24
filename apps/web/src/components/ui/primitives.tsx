@@ -81,7 +81,7 @@ export function Button({
   ...rest
 }: ButtonProps) {
   const base =
-    'inline-flex items-center justify-center gap-2 font-medium rounded-[4px] border transition-colors cursor-pointer active:translate-y-[1px] disabled:cursor-not-allowed disabled:bg-[var(--surface-card)] disabled:text-[var(--ash)] disabled:border-[var(--hairline)]';
+    'inline-flex items-center justify-center gap-2 font-medium whitespace-nowrap shrink-0 leading-none rounded-[4px] border transition-colors cursor-pointer active:translate-y-[1px] disabled:cursor-not-allowed disabled:bg-[var(--surface-card)] disabled:text-[var(--ash)] disabled:border-[var(--hairline)]';
 
   const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
     primary:
@@ -95,8 +95,8 @@ export function Button({
   };
 
   const sizes: Record<NonNullable<ButtonProps['size']>, string> = {
-    sm: 'min-h-[36px] px-3 py-1 text-sm leading-normal',
-    md: 'min-h-[40px] px-5 py-1 text-base leading-[1.8]'
+    sm: 'h-9 px-3 text-xs',
+    md: 'h-10 px-4 text-sm'
   };
 
   return (
@@ -160,7 +160,7 @@ export function Field({ label, htmlFor, hint, error, required, children }: Field
       })}
       {error ? (
         <p id={errorId} className="text-xs font-medium text-[var(--danger-text)]" role="status">
-          [!] {error}
+          {error}
         </p>
       ) : null}
     </div>
@@ -245,7 +245,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-[4px] border tabular-nums',
+        'inline-flex items-center gap-1 px-2 py-1 text-xs font-medium whitespace-nowrap shrink-0 leading-none rounded-[4px] border tabular-nums',
         tones[tone],
         className
       )}
@@ -261,7 +261,7 @@ export function Badge({
  */
 export function SectionBlock({
   title,
-  marker = '[+]',
+  marker: _marker,
   action,
   description,
   children,
@@ -277,23 +277,20 @@ export function SectionBlock({
   return (
     <section
       className={cn(
-        'border border-[var(--hairline)] bg-[var(--canvas)] rounded-none',
+        'border border-[var(--hairline)] bg-[var(--canvas)] rounded-none flex flex-col',
         className
       )}
     >
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-[var(--hairline)] bg-[var(--surface-soft)]">
-        <div>
-          <h2 className="text-base font-bold text-[var(--ink)]">
-            <span className="text-[var(--mute)] mr-2">{marker}</span>
-            {title}
-          </h2>
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold text-[var(--ink)]">{title}</h2>
           {description ? (
             <p className="text-xs text-[var(--mute)] mt-0.5">{description}</p>
           ) : null}
         </div>
-        {action}
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
-      <div className="p-4 sm:p-5">{children}</div>
+      <div className="p-4 sm:p-5 flex-1">{children}</div>
     </section>
   );
 }
@@ -312,7 +309,7 @@ export function TabStrip<T extends string>({
   return (
     <nav
       aria-label={label}
-      className="flex items-center gap-1 overflow-x-auto border-b border-[var(--hairline-strong)]"
+      className="flex items-center gap-1 overflow-x-auto border-b border-[var(--hairline)]"
     >
       {tabs.map((tab) => {
         const active = tab.id === activeTab;
@@ -323,15 +320,15 @@ export function TabStrip<T extends string>({
             onClick={() => onChange(tab.id)}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              'px-4 py-2.5 text-sm font-medium whitespace-nowrap rounded-none border-b-2 transition-colors cursor-pointer min-h-[44px]',
+              'px-3.5 py-2.5 text-sm font-medium whitespace-nowrap shrink-0 rounded-none border-b-2 transition-colors cursor-pointer min-h-[42px]',
               active
-                ? 'text-[var(--ink)] border-[var(--ink)]'
+                ? 'text-[var(--ink)] border-[var(--ink)] font-semibold'
                 : 'text-[var(--mute)] border-transparent hover:text-[var(--ink)]'
             )}
           >
             {tab.label}
             {tab.badge !== undefined ? (
-              <span className="ml-2 text-xs text-[var(--mute)] tabular-nums">[{tab.badge}]</span>
+              <span className="ml-1.5 text-xs text-[var(--mute)] tabular-nums">{tab.badge}</span>
             ) : null}
           </button>
         );
@@ -351,11 +348,23 @@ export function AlertBanner({
   message: string;
   action?: React.ReactNode;
 }) {
-  const styles: Record<NonNullable<typeof tone>, { box: string; prefix: string }> = {
-    info: { box: 'bg-[var(--surface-soft)] text-[var(--ink)] border-[var(--hairline-strong)]', prefix: '[i]' },
-    success: { box: 'bg-[var(--success-bg)] text-[var(--success-text)] border-[var(--success-text)]/40', prefix: '[ok]' },
-    warning: { box: 'bg-[var(--warning-bg)] text-[var(--warning-text)] border-[var(--warning-text)]/40', prefix: '[!]' },
-    error: { box: 'bg-[var(--danger-bg)] text-[var(--danger-text)] border-[var(--danger-text)]/40', prefix: '[err]' }
+  const styles: Record<NonNullable<typeof tone>, { box: string; dot: string }> = {
+    info: {
+      box: 'bg-[var(--surface-soft)] text-[var(--ink)] border-[var(--hairline-strong)]',
+      dot: 'bg-[var(--accent)]'
+    },
+    success: {
+      box: 'bg-[var(--success-bg)] text-[var(--success-text)] border-[var(--success-text)]/40',
+      dot: 'bg-[var(--success-text)]'
+    },
+    warning: {
+      box: 'bg-[var(--warning-bg)] text-[var(--warning-text)] border-[var(--warning-text)]/40',
+      dot: 'bg-[var(--warning-text)]'
+    },
+    error: {
+      box: 'bg-[var(--danger-bg)] text-[var(--danger-text)] border-[var(--danger-text)]/40',
+      dot: 'bg-[var(--danger-text)]'
+    }
   };
 
   return (
@@ -366,14 +375,17 @@ export function AlertBanner({
         styles[tone].box
       )}
     >
-      <div className="space-y-0.5">
-        <p className="font-medium">
-          <span className="mr-2 font-bold">{styles[tone].prefix}</span>
-          {title ?? message}
-        </p>
-        {title ? <p className="text-xs opacity-90">{message}</p> : null}
+      <div className="flex items-start gap-2.5 min-w-0">
+        <span
+          aria-hidden="true"
+          className={cn('mt-1.5 w-2 h-2 rounded-full shrink-0', styles[tone].dot)}
+        />
+        <div className="space-y-0.5 min-w-0">
+          <p className="font-medium">{title ?? message}</p>
+          {title ? <p className="text-xs opacity-90">{message}</p> : null}
+        </div>
       </div>
-      {action}
+      {action ? <div className="shrink-0">{action}</div> : null}
     </div>
   );
 }
@@ -398,7 +410,7 @@ export function EmptyState({
 }) {
   return (
     <div className="border border-dashed border-[var(--hairline-strong)] bg-[var(--surface-soft)] p-6 text-left">
-      <p className="text-sm font-bold text-[var(--ink)]">[-] {title}</p>
+      <p className="text-sm font-bold text-[var(--ink)]">{title}</p>
       <p className="text-sm text-[var(--body)] mt-1 max-w-prose">{description}</p>
       {action ? <div className="mt-4">{action}</div> : null}
     </div>
@@ -493,7 +505,7 @@ export function ConfirmDialog({
     >
       <div className="space-y-4">
         <h2 id={titleId} className="text-base font-bold text-[var(--ink)]">
-          [!] {title}
+          {title}
         </h2>
         <p className="text-sm text-[var(--body)]">{description}</p>
         <form method="dialog" className="flex flex-wrap justify-end gap-2 pt-2">

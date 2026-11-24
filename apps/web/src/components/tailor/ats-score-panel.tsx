@@ -73,7 +73,7 @@ export function AtsScorePanel({ report }: { report: AtsScoreReport }) {
             <div className="flex flex-wrap gap-1.5">
               {report.matchedMustHave.map((s) => (
                 <Badge key={`mm-${s}`} tone="success">
-                  [x] {s}
+                  {s}
                 </Badge>
               ))}
               {report.matchedKeywords.map((k) => (
@@ -100,7 +100,7 @@ export function AtsScorePanel({ report }: { report: AtsScoreReport }) {
             <div className="flex flex-wrap gap-1.5">
               {report.missingMustHave.map((s) => (
                 <Badge key={`miss-${s}`} tone="danger">
-                  [!] {s}
+                  {s}
                 </Badge>
               ))}
               {report.missingNiceToHave.map((s) => (

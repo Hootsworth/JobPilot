@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { RecommendationsHome } from '@/components/home/recommendations-home';
 import { ThemeQuickToggle } from '@/components/theme-toggle';
-import { MoBar, MoDecode } from '@/components/ui/mo';
+import { MoBar, MoDecode, MoSpinner } from '@/components/ui/mo';
 import {
   AsciiWordmark,
   Button,
@@ -162,8 +162,9 @@ export default function LandingPage() {
 
   if (!authChecked) {
     return (
-      <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex items-center justify-center text-xs text-[var(--mute)]">
-        Loading workspace...
+      <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex items-center justify-center gap-2.5 text-xs text-[var(--mute)]">
+        <MoSpinner name="braille" />
+        <JobPilotLogo size={20} />
       </div>
     );
   }
@@ -198,9 +199,9 @@ export default function LandingPage() {
             </a>
             <ThemeQuickToggle />
             {signedInEmail ? (
-              <Link href="/?view=home" onClick={() => setForceLanding(false)}>
+              <Link href="/" onClick={() => setForceLanding(false)}>
                 <Button variant="primary" size="sm">
-                  Recommendations -&gt;
+                  Open Home
                 </Button>
               </Link>
             ) : (

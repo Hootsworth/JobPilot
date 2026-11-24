@@ -132,8 +132,7 @@ export function CoverLetterWorkbench({
       setLetters((prev) => [created, ...prev]);
       setSelectedId(created.id);
       setViewTab('pdf');
-      setStatusMsg(`[ok] Generated grounded cover letter v${created.versionNumber}`);
-      moToast(`[ok] Cover letter v${created.versionNumber} ready`);
+      moToast(`Generated cover letter v${created.versionNumber}`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Cover letter generation failed.');
     } finally {
@@ -152,8 +151,7 @@ export function CoverLetterWorkbench({
       });
       setLetters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
       setPdfRefreshKey((k) => k + 1);
-      setStatusMsg('[ok] Saved edits & re-rendered cover letter PDF.');
-      moToast('[ok] Re-rendered cover letter PDF');
+      moToast('Saved edits & updated PDF');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save edits.');
     } finally {
@@ -199,9 +197,8 @@ export function CoverLetterWorkbench({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         <div className="lg:col-span-4 space-y-5">
           <SectionBlock
-            title="New Grounded Cover Letter"
-            marker="[+]"
-            description="Generated strictly from your Master Variant + Story Bank metrics."
+            title="New cover letter"
+            description="Generated strictly from your active profile variant and story bank."
           >
             <form onSubmit={(e) => void handleGenerate(e)} className="space-y-4">
               <div className="flex border border-[var(--hairline)] rounded-[4px] overflow-hidden">
@@ -346,13 +343,13 @@ export function CoverLetterWorkbench({
                     <MoScan width={12} />
                   </span>
                 ) : (
-                  '[+] Generate Cover Letter'
+                  'Generate cover letter'
                 )}
               </Button>
             </form>
           </SectionBlock>
 
-          <SectionBlock title="Cover Letters" marker="[v]">
+          <SectionBlock title="Cover letters">
             {loading ? (
               <SkeletonBlock className="h-32 w-full" />
             ) : letters.length === 0 ? (

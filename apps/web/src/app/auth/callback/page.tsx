@@ -99,7 +99,7 @@ function AuthCallbackInner() {
               </div>
             ) : (
               <p className="text-xs text-[var(--mute)]">
-                [*] Finalizing sign-in and loading your JobPilot workspace...
+                Finalizing sign-in and loading your workspace...
               </p>
             )}
           </SectionBlock>
@@ -114,7 +114,7 @@ export default function AuthCallbackPage() {
     <Suspense
       fallback={
         <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex items-center justify-center p-8 text-xs text-[var(--mute)]">
-          [*] Verifying authentication callback...
+          Verifying sign-in...
         </div>
       }
     >

@@ -21,6 +21,13 @@ import {
   SkeletonBlock
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
+import {
+  formatRelativeTime,
+  formatSeniority,
+  formatSourceLabel,
+  formatWorkMode,
+  pluralize
+} from '@/lib/format';
 
 function scoreTone(score: number | null | undefined): 'success' | 'warning' | 'neutral' {
   if (score == null) return 'neutral';
@@ -83,7 +90,7 @@ export default function JobsFeedPage() {
           : (feedRes.items[0]?.job.id ?? null)
       );
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to load job feed.');
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to load jobs.');
     } finally {
       setLoading(false);
     }
@@ -99,14 +106,16 @@ export default function JobsFeedPage() {
       setErrorMsg(null);
       try {
         const res = await api.syncJobs({ mode: 'quick', force });
-        if (!res.skipped) {
+        if (!res.skipped && force) {
           setStatusMsg(
-            `Synced ${res.boardSuccess} company boards & ${res.aggregatorCount} job feeds (+${res.insertedCount} new, ${res.updatedCount} refreshed).`
+            res.insertedCount > 0
+              ? `Added ${pluralize(res.insertedCount, 'new job')} to catalog.`
+              : 'Job catalog is up to date.'
           );
         }
         await loadJobs();
       } catch (err) {
-        setErrorMsg(err instanceof Error ? err.message : 'Failed to sync job sources.');
+        setErrorMsg(err instanceof Error ? err.message : 'Could not refresh job feeds.');
       } finally {
         setSyncing(false);
       }
@@ -126,7 +135,7 @@ export default function JobsFeedPage() {
           await handleSyncSources(false);
         }
       } catch {
-        // ignore initial status probe failure; user can click Sync Sources manually
+        // ignore initial probe error
       }
     }
     void checkAndAutoSync();
@@ -137,18 +146,16 @@ export default function JobsFeedPage() {
 
   const selectedItem = items.find((i) => i.job.id === selectedId) ?? items[0] ?? null;
 
-  const handleRefreshMatches = async () => {
+  const handleRescore = async () => {
     setMatching(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
       const res = await api.refreshMatches({ topKVector: 40, topKLlm: 15 });
-      setStatusMsg(
-        `Matched v${res.profileVersion}: ${res.stats.hardFilterPassed} passed (${res.stats.hardFilterFailed} filtered), ${res.stats.llmScored} LLM scored, ${res.stats.reusedFromCache} cached.`
-      );
+      setStatusMsg(`Updated match scores for ${pluralize(res.stats.totalEvaluated, 'job')}.`);
       await loadJobs();
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to run 3-stage matching.');
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to re-score matches.');
     } finally {
       setMatching(false);
     }
@@ -163,30 +170,33 @@ export default function JobsFeedPage() {
           item.job.id === jobId ? { ...item, applicationStatus: res.status } : item
         )
       );
-      setStatusMsg('Saved job to tracker.');
+      setStatusMsg('Saved to Tracker.');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save job.');
     }
   }, []);
 
-  const handleDismissJob = useCallback(async (jobId: string) => {
-    setErrorMsg(null);
-    try {
-      await api.dismissJob(jobId, true);
-      setItems((prev) => {
-        const next = prev.filter((item) => item.job.id !== jobId);
-        if (selectedId === jobId) {
-          setSelectedId(next[0]?.job.id ?? null);
-        }
-        return next;
-      });
-      setStatusMsg('Dismissed job for this profile version.');
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to dismiss job.');
-    }
-  }, [selectedId]);
+  const handleDismissJob = useCallback(
+    async (jobId: string) => {
+      setErrorMsg(null);
+      try {
+        await api.dismissJob(jobId, true);
+        setItems((prev) => {
+          const next = prev.filter((item) => item.job.id !== jobId);
+          if (selectedId === jobId) {
+            setSelectedId(next[0]?.job.id ?? null);
+          }
+          return next;
+        });
+        setStatusMsg('Hidden from feed.');
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to hide job.');
+      }
+    },
+    [selectedId]
+  );
 
-  // Keyboard shortcuts: j/k navigate, / search, s save, x dismiss
+  // Keyboard shortcuts: j/k navigate, / search, s save, x dismiss, t tailor
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -224,21 +234,22 @@ export default function JobsFeedPage() {
 
   return (
     <AppShell
-      title="Job Feed"
-      subtitle="3-stage matching: hard filters (India LPA / location / YoE) -> local bge-small vectors -> cached LLM re-rank."
+      title="Jobs"
       actions={
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge tone="neutral">{total} jobs</Badge>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className="text-xs text-[var(--mute)] tabular-nums whitespace-nowrap">
+            {pluralize(total, 'job')}
+          </span>
           <Button
             variant="secondary"
             size="sm"
             onClick={() => void handleSyncSources(true)}
             disabled={syncing}
           >
-            {syncing ? 'Syncing...' : 'Sync Sources'}
+            {syncing ? 'Refreshing...' : 'Refresh'}
           </Button>
-          <Button variant="primary" size="sm" onClick={handleRefreshMatches} disabled={matching}>
-            {matching ? 'Scoring matches...' : 'AI Deep Rank'}
+          <Button variant="primary" size="sm" onClick={handleRescore} disabled={matching}>
+            {matching ? 'Re-scoring...' : 'Re-score'}
           </Button>
         </div>
       }
@@ -247,154 +258,144 @@ export default function JobsFeedPage() {
         <div
           role="status"
           aria-live="polite"
-          className="border border-[var(--hairline-strong)] bg-[var(--surface-soft)] px-4 py-3 text-xs flex items-center gap-3"
+          className="border border-[var(--hairline)] bg-[var(--surface-soft)] px-3.5 py-2.5 text-xs text-[var(--body)] flex items-center gap-2.5"
         >
-          <MoSpinner name="braille" className="text-[var(--accent)] font-bold" />
-          <span>
-            Syncing official ATS boards &amp; public job feeds into your catalog...
-          </span>
+          <MoSpinner name="braille" className="text-[var(--accent-text)] font-bold" />
+          <span>Checking for new openings...</span>
         </div>
       ) : null}
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
       {statusMsg ? <AlertBanner tone="success" message={statusMsg} /> : null}
 
-      {/* Filter Bar inside <search> landmark per modern-web-guidance */}
-      <SectionBlock title="Filters & Search" marker="[/]">
+      {/* Clean 2-Row Balanced Filter Bar */}
+      <SectionBlock title="Filters">
         <search>
           <form
             onSubmit={(e) => {
               e.preventDefault();
               void loadJobs();
             }}
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end"
+            className="space-y-3"
           >
-            <div className="lg:col-span-2 flex flex-col gap-1">
-              <label htmlFor="feed-search" className="text-xs text-[var(--mute)]">
-                Keyword / Company / Skill (press /)
-              </label>
-              <Input
-                ref={searchInputRef}
-                id="feed-search"
-                type="search"
-                autoCorrect="off"
-                autoCapitalize="none"
-                spellCheck={false}
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="TypeScript, Bengaluru, Razorpay..."
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label htmlFor="feed-country" className="text-xs text-[var(--mute)]">
-                Country
-              </label>
-              <Select
-                id="feed-country"
-                value={country}
-                onChange={(e) => setCountry(e.target.value)}
-              >
-                <option value="">All countries</option>
-                <option value="IN">India (IN)</option>
-                <option value="US">United States (US)</option>
-                <option value="GB">United Kingdom (GB)</option>
-                <option value="SG">Singapore (SG)</option>
-                <option value="DE">Germany (DE)</option>
-              </Select>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label htmlFor="feed-mode" className="text-xs text-[var(--mute)]">
-                Work Mode
-              </label>
-              <Select
-                id="feed-mode"
-                value={workMode}
-                onChange={(e) => setWorkMode(e.target.value)}
-              >
-                <option value="">Any mode</option>
-                <option value="remote">Remote</option>
-                <option value="hybrid">Hybrid</option>
-                <option value="onsite">Onsite</option>
-              </Select>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label htmlFor="feed-seniority" className="text-xs text-[var(--mute)]">
-                Seniority
-              </label>
-              <Select
-                id="feed-seniority"
-                value={seniority}
-                onChange={(e) => setSeniority(e.target.value)}
-              >
-                <option value="">Any level</option>
-                <option value="intern">Intern</option>
-                <option value="fresher">Fresher</option>
-                <option value="junior">Junior / SDE-1</option>
-                <option value="mid">Mid / SDE-2</option>
-                <option value="senior">Senior</option>
-              </Select>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label htmlFor="feed-lpa" className="text-xs text-[var(--mute)]">
-                Min Salary (LPA)
-              </label>
-              <Input
-                id="feed-lpa"
-                type="number"
-                min={0}
-                step="1"
-                value={minSalaryLpa}
-                onChange={(e) => setMinSalaryLpa(e.target.value)}
-                placeholder="e.g. 12"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label htmlFor="feed-source" className="text-xs text-[var(--mute)]">
-                Source
-              </label>
-              <Select
-                id="feed-source"
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-              >
-                <option value="">All sources</option>
-                <option value="greenhouse">Greenhouse</option>
-                <option value="lever">Lever</option>
-                <option value="ashby">Ashby</option>
-                <option value="workable">Workable</option>
-                <option value="smartrecruiters">SmartRecruiters</option>
-                <option value="himalayas">Himalayas</option>
-                <option value="jobicy">Jobicy</option>
-                <option value="themuse">The Muse</option>
-                <option value="hackernews">Hacker News</option>
-                <option value="remotive">Remotive</option>
-                <option value="arbeitnow">Arbeitnow</option>
-                <option value="remoteok">RemoteOK</option>
-                <option value="adzuna">Adzuna</option>
-                <option value="jooble">Jooble</option>
-                <option value="jsearch">JSearch</option>
-              </Select>
-            </div>
-
-            <div className="lg:col-span-7 flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[var(--hairline)]">
-              <div className="flex flex-wrap items-center gap-4 text-xs">
-                <label className="inline-flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={onlyPassed}
-                    onChange={(e) => setOnlyPassed(e.target.checked)}
-                    className="w-4 h-4"
-                  />
-                  <span>Hide hard-filter mismatches</span>
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+              <div className="md:col-span-5 flex flex-col gap-1">
+                <label htmlFor="feed-search" className="text-xs text-[var(--mute)]">
+                  Keyword, company, or skill
                 </label>
+                <Input
+                  ref={searchInputRef}
+                  id="feed-search"
+                  type="search"
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="TypeScript, Bengaluru, Razorpay..."
+                />
+              </div>
 
-                <div className="flex items-center gap-2">
-                  <label htmlFor="feed-sort" className="text-[var(--mute)]">
-                    Sort:
+              <div className="md:col-span-2 flex flex-col gap-1">
+                <label htmlFor="feed-country" className="text-xs text-[var(--mute)]">
+                  Country
+                </label>
+                <Select
+                  id="feed-country"
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value)}
+                >
+                  <option value="">All</option>
+                  <option value="IN">India</option>
+                  <option value="US">United States</option>
+                  <option value="GB">United Kingdom</option>
+                  <option value="SG">Singapore</option>
+                  <option value="DE">Germany</option>
+                </Select>
+              </div>
+
+              <div className="md:col-span-2 flex flex-col gap-1">
+                <label htmlFor="feed-mode" className="text-xs text-[var(--mute)]">
+                  Work Mode
+                </label>
+                <Select
+                  id="feed-mode"
+                  value={workMode}
+                  onChange={(e) => setWorkMode(e.target.value)}
+                >
+                  <option value="">Any</option>
+                  <option value="remote">Remote</option>
+                  <option value="hybrid">Hybrid</option>
+                  <option value="onsite">On-site</option>
+                </Select>
+              </div>
+
+              <div className="md:col-span-3 flex flex-col gap-1">
+                <label htmlFor="feed-seniority" className="text-xs text-[var(--mute)]">
+                  Level
+                </label>
+                <Select
+                  id="feed-seniority"
+                  value={seniority}
+                  onChange={(e) => setSeniority(e.target.value)}
+                >
+                  <option value="">Any level</option>
+                  <option value="intern">Intern</option>
+                  <option value="fresher">Fresher</option>
+                  <option value="junior">Junior / SDE-1</option>
+                  <option value="mid">Mid / SDE-2</option>
+                  <option value="senior">Senior</option>
+                </Select>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-end justify-between gap-3 pt-3 border-t border-[var(--hairline)]">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="w-44 flex flex-col gap-1">
+                  <label htmlFor="feed-source" className="text-xs text-[var(--mute)]">
+                    Source
+                  </label>
+                  <Select
+                    id="feed-source"
+                    value={source}
+                    onChange={(e) => setSource(e.target.value)}
+                  >
+                    <option value="">All sources</option>
+                    <option value="greenhouse">Greenhouse</option>
+                    <option value="lever">Lever</option>
+                    <option value="ashby">Ashby</option>
+                    <option value="workable">Workable</option>
+                    <option value="smartrecruiters">SmartRecruiters</option>
+                    <option value="himalayas">Himalayas</option>
+                    <option value="jobicy">Jobicy</option>
+                    <option value="themuse">The Muse</option>
+                    <option value="hackernews">Hacker News</option>
+                    <option value="remotive">Remotive</option>
+                    <option value="arbeitnow">Arbeitnow</option>
+                    <option value="remoteok">RemoteOK</option>
+                    <option value="adzuna">Adzuna</option>
+                    <option value="jooble">Jooble</option>
+                    <option value="jsearch">JSearch</option>
+                  </Select>
+                </div>
+
+                <div className="w-28 flex flex-col gap-1">
+                  <label htmlFor="feed-lpa" className="text-xs text-[var(--mute)]">
+                    Min LPA
+                  </label>
+                  <Input
+                    id="feed-lpa"
+                    type="number"
+                    min={0}
+                    step="1"
+                    value={minSalaryLpa}
+                    onChange={(e) => setMinSalaryLpa(e.target.value)}
+                    placeholder="e.g. 12"
+                  />
+                </div>
+
+                <div className="w-44 flex flex-col gap-1">
+                  <label htmlFor="feed-sort" className="text-xs text-[var(--mute)]">
+                    Sort by
                   </label>
                   <Select
                     id="feed-sort"
@@ -402,22 +403,33 @@ export default function JobsFeedPage() {
                     onChange={(e) =>
                       setSortBy(e.target.value as 'match_score' | 'recent' | 'salary_lpa')
                     }
-                    className="w-auto min-h-[36px] py-1 text-xs"
                   >
-                    <option value="match_score">Best Match Score</option>
-                    <option value="recent">Most Recent</option>
-                    <option value="salary_lpa">Highest LPA</option>
+                    <option value="match_score">Best match</option>
+                    <option value="recent">Most recent</option>
+                    <option value="salary_lpa">Highest salary</option>
                   </Select>
                 </div>
+
+                <label className="h-11 inline-flex items-center gap-2 text-xs cursor-pointer px-1">
+                  <input
+                    type="checkbox"
+                    checked={onlyPassed}
+                    onChange={(e) => setOnlyPassed(e.target.checked)}
+                    className="w-4 h-4"
+                  />
+                  <span>Hide near mismatches</span>
+                </label>
               </div>
 
-              <div className="flex items-center gap-2 text-xs text-[var(--mute)]">
-                <span>
-                  Sources: {activeSourcesCount} active
-                  {lastRun?.finishedAt
-                    ? ` · Last crawl ${new Date(lastRun.finishedAt).toLocaleDateString()}`
-                    : ''}
-                </span>
+              <div className="flex items-center gap-3 text-xs text-[var(--mute)]">
+                {activeSourcesCount > 0 ? (
+                  <span>
+                    {pluralize(activeSourcesCount, 'source')}
+                    {lastRun?.finishedAt
+                      ? ` · Synced ${formatRelativeTime(lastRun.finishedAt)}`
+                      : ''}
+                  </span>
+                ) : null}
                 <Button type="submit" size="sm" variant="secondary">
                   Apply
                 </Button>
@@ -440,19 +452,20 @@ export default function JobsFeedPage() {
         </div>
       ) : items.length === 0 ? (
         <EmptyState
-          title={syncing ? 'Syncing live job feeds...' : 'No matching jobs for current filters'}
-          description="Sync live official ATS boards and public tech feeds now, or include near matches outside strict filters."
+          title={syncing ? 'Loading job openings...' : 'No jobs match these filters'}
+          description="Refresh your job catalog or include near matches outside strict location or experience filters."
           action={
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="primary"
+                size="sm"
                 onClick={() => void handleSyncSources(true)}
                 disabled={syncing}
               >
-                {syncing ? 'Syncing...' : 'Sync Live Sources Now'}
+                {syncing ? 'Refreshing...' : 'Refresh'}
               </Button>
               {onlyPassed ? (
-                <Button variant="secondary" onClick={() => setOnlyPassed(false)}>
+                <Button variant="secondary" size="sm" onClick={() => setOnlyPassed(false)}>
                   Show Near Matches
                 </Button>
               ) : null}
@@ -461,10 +474,11 @@ export default function JobsFeedPage() {
         />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Job List Pane */}
-          <div className="lg:col-span-5 border border-[var(--hairline)] divide-y divide-[var(--hairline)] bg-[var(--canvas)]">
+          {/* Scrollable Job List Pane */}
+          <div className="lg:col-span-5 border border-[var(--hairline)] divide-y divide-[var(--hairline)] bg-[var(--canvas)] lg:max-h-[calc(100vh-240px)] lg:overflow-y-auto">
             {items.map((item) => {
               const active = selectedItem?.job.id === item.job.id;
+              const mode = formatWorkMode(item.job.workMode);
               const salaryText = formatSalaryRange(
                 item.job.salaryMin,
                 item.job.salaryMax,
@@ -486,7 +500,7 @@ export default function JobsFeedPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="text-xs text-[var(--mute)] truncate">
-                        {item.job.companyName} · {item.job.sourceType}
+                        {item.job.companyName} · {formatSourceLabel(item.job.sourceType)}
                       </p>
                       <h3 className="text-sm font-bold text-[var(--ink)] truncate">
                         {item.job.title}
@@ -499,12 +513,20 @@ export default function JobsFeedPage() {
                     ) : null}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--body)]">
-                    <span>{item.job.city ?? item.job.locationRaw ?? 'Unspecified'}</span>
-                    <span>·</span>
-                    <span>{item.job.workMode}</span>
-                    <span>·</span>
-                    <span className="tabular-nums">{salaryText}</span>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--body)]">
+                    <span>{item.job.city ?? item.job.locationRaw ?? 'Location flexible'}</span>
+                    {mode ? (
+                      <>
+                        <span>·</span>
+                        <span>{mode}</span>
+                      </>
+                    ) : null}
+                    {salaryText !== 'Not disclosed' ? (
+                      <>
+                        <span>·</span>
+                        <span className="tabular-nums">{salaryText}</span>
+                      </>
+                    ) : null}
                     {item.applicationStatus ? (
                       <Badge tone="accent">{item.applicationStatus}</Badge>
                     ) : null}
@@ -520,28 +542,27 @@ export default function JobsFeedPage() {
             })}
           </div>
 
-          {/* Detail Pane */}
+          {/* Sticky Detail Pane */}
           {selectedItem ? (
-            <div className="lg:col-span-7 space-y-4">
+            <div className="lg:col-span-7 lg:sticky lg:top-6">
               <SectionBlock
                 title={selectedItem.job.title}
-                marker="[>]"
-                description={`${selectedItem.job.companyName} · ${selectedItem.job.locationRaw || 'Location unspecified'} · ${selectedItem.job.workMode}`}
+                description={`${selectedItem.job.companyName} · ${selectedItem.job.city ?? selectedItem.job.locationRaw ?? 'Location flexible'}${formatWorkMode(selectedItem.job.workMode) ? ` · ${formatWorkMode(selectedItem.job.workMode)}` : ''}`}
                 action={
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       size="sm"
                       variant="secondary"
                       onClick={() => void handleSaveJob(selectedItem.job.id)}
                     >
-                      {selectedItem.applicationStatus ? '[x] Saved' : '[+] Save (S)'}
+                      {selectedItem.applicationStatus ? 'Saved' : 'Save'}
                     </Button>
                     <Button
                       size="sm"
                       variant="ghost"
                       onClick={() => void handleDismissJob(selectedItem.job.id)}
                     >
-                      Dismiss (X)
+                      Dismiss
                     </Button>
                     <Button
                       size="sm"
@@ -550,7 +571,7 @@ export default function JobsFeedPage() {
                         router.push(`/tailor?jobId=${encodeURIComponent(selectedItem.job.id)}`)
                       }
                     >
-                      Tailor (T)
+                      Tailor
                     </Button>
                     <a
                       href={selectedItem.job.applyUrl ?? selectedItem.job.sourceUrl}
@@ -558,71 +579,51 @@ export default function JobsFeedPage() {
                       rel="noopener noreferrer"
                     >
                       <Button size="sm" variant="primary">
-                        Apply -&gt;
+                        Apply
                       </Button>
                     </a>
                   </div>
                 }
               >
                 <div className="space-y-5">
-                  {/* Explainable 3-Stage Breakdown */}
-                  <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-4 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-bold text-[var(--ink)]">
-                        3-STAGE MATCH EXPLANATION
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        <Badge
-                          tone={
-                            selectedItem.match == null
-                              ? 'neutral'
-                              : selectedItem.match.hardFilterPassed
-                                ? 'success'
-                                : 'danger'
-                          }
-                        >
-                          {selectedItem.match == null
-                            ? 'NOT SCORED'
-                            : selectedItem.match.hardFilterPassed
-                              ? 'HARD FILTERS: PASS'
-                              : 'HARD FILTERS: FAIL'}
-                        </Badge>
-                        {selectedItem.match?.vectorSimilarity != null ? (
-                          <Badge tone="neutral">
-                            VEC: {Math.round(selectedItem.match.vectorSimilarity * 100)}%
-                          </Badge>
-                        ) : null}
-                        {selectedItem.match?.llmScore != null ? (
-                          <Badge tone={scoreTone(selectedItem.match.llmScore)}>
-                            SCORE: {selectedItem.match.llmScore}/100
-                          </Badge>
-                        ) : null}
+                  {/* Match Summary */}
+                  {selectedItem.match ? (
+                    <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-[var(--ink)]">Match summary</span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {!selectedItem.match.hardFilterPassed ? (
+                            <Badge tone="warning">Near match</Badge>
+                          ) : null}
+                          {selectedItem.match.llmScore != null ? (
+                            <Badge tone={scoreTone(selectedItem.match.llmScore)}>
+                              {selectedItem.match.llmScore}% match
+                            </Badge>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
 
-                    {selectedItem.match?.matchReason ? (
-                      <p className="text-sm text-[var(--ink)]">{selectedItem.match.matchReason}</p>
-                    ) : (
-                      <p className="text-xs text-[var(--mute)]">
-                        Click &ldquo;Run 3-Stage Match&rdquo; above to compute personalized scores and skill gaps against your Master Profile.
-                      </p>
-                    )}
+                      {selectedItem.match.matchReason ? (
+                        <p className="text-sm text-[var(--ink)]">{selectedItem.match.matchReason}</p>
+                      ) : null}
 
-                    {selectedItem.match &&
-                    !selectedItem.match.hardFilterPassed &&
-                    selectedItem.match.hardFilterReasons.length > 0 ? (
-                      <ul className="text-xs text-[var(--danger-text)] list-disc pl-5 space-y-0.5">
-                        {selectedItem.match.hardFilterReasons.map((r, i) => (
-                          <li key={i}>{r}</li>
-                        ))}
-                      </ul>
-                    ) : null}
+                      {!selectedItem.match.hardFilterPassed &&
+                      selectedItem.match.hardFilterReasons.some(
+                        (r) => !r.startsWith('dismiss_reason:')
+                      ) ? (
+                        <ul className="text-xs text-[var(--warning-text)] list-disc pl-5 space-y-0.5">
+                          {selectedItem.match.hardFilterReasons
+                            .filter((r) => !r.startsWith('dismiss_reason:'))
+                            .map((r, i) => (
+                              <li key={i}>{r}</li>
+                            ))}
+                        </ul>
+                      ) : null}
 
-                    {selectedItem.match ? (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[var(--hairline)] text-xs">
                         <div>
-                          <p className="font-bold text-[var(--success-text)] mb-1">
-                            [+] Matched Skills
+                          <p className="font-bold text-[var(--success-text)] mb-1.5">
+                            Matched skills
                           </p>
                           <div className="flex flex-wrap gap-1">
                             {selectedItem.match.matchedSkills.length > 0 ? (
@@ -637,8 +638,8 @@ export default function JobsFeedPage() {
                           </div>
                         </div>
                         <div>
-                          <p className="font-bold text-[var(--warning-text)] mb-1">
-                            [!] Skill Gaps
+                          <p className="font-bold text-[var(--warning-text)] mb-1.5">
+                            Missing skills
                           </p>
                           <div className="flex flex-wrap gap-1">
                             {selectedItem.match.skillGaps.length > 0 ? (
@@ -648,13 +649,13 @@ export default function JobsFeedPage() {
                                 </Badge>
                               ))
                             ) : (
-                              <span className="text-[var(--mute)]">No explicit gaps flagged</span>
+                              <span className="text-[var(--mute)]">No gaps flagged</span>
                             )}
                           </div>
                         </div>
                       </div>
-                    ) : null}
-                  </div>
+                    </div>
+                  ) : null}
 
                   {/* Metadata */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs border-b border-[var(--hairline)] pb-4">
@@ -671,11 +672,13 @@ export default function JobsFeedPage() {
                       </strong>
                     </div>
                     <div>
-                      <span className="text-[var(--mute)] block">Seniority</span>
-                      <strong>{selectedItem.job.seniority}</strong>
+                      <span className="text-[var(--mute)] block">Level</span>
+                      <strong>
+                        {formatSeniority(selectedItem.job.seniority) ?? 'Unspecified'}
+                      </strong>
                     </div>
                     <div>
-                      <span className="text-[var(--mute)] block">Min Experience</span>
+                      <span className="text-[var(--mute)] block">Experience</span>
                       <strong className="tabular-nums">
                         {selectedItem.job.experienceMinYears != null
                           ? `${selectedItem.job.experienceMinYears}+ yrs`
@@ -683,18 +686,21 @@ export default function JobsFeedPage() {
                       </strong>
                     </div>
                     <div>
-                      <span className="text-[var(--mute)] block">Source / Sightings</span>
+                      <span className="text-[var(--mute)] block">Source</span>
                       <strong>
-                        {selectedItem.job.sourceType} ({selectedItem.job.sightingsCount})
+                        {formatSourceLabel(selectedItem.job.sourceType)} (
+                        {selectedItem.job.sightingsCount})
                       </strong>
                     </div>
                   </div>
 
                   {/* Clean JD */}
                   <div className="space-y-2">
-                    <h3 className="text-xs font-bold text-[var(--mute)]">JOB DESCRIPTION</h3>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--mute)]">
+                      Job description
+                    </h3>
                     <div className="text-sm text-[var(--body)] whitespace-pre-wrap leading-relaxed max-h-[420px] overflow-y-auto pr-2">
-                      {selectedItem.job.descriptionClean || 'No description text provided.'}
+                      {selectedItem.job.descriptionClean || 'No description provided.'}
                     </div>
                   </div>
                 </div>
@@ -703,12 +709,6 @@ export default function JobsFeedPage() {
           ) : null}
         </div>
       )}
-
-      {/* OpenCode TUI-style keybinding hint bar */}
-      <div className="border-t border-[var(--hairline)] pt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--mute)]">
-        <span>j/k navigate · / search · s save · x dismiss · t tailor</span>
-        <span>Official APIs only · Zero non-API server scraping</span>
-      </div>
     </AppShell>
   );
 }

@@ -32,6 +32,7 @@ import {
   Textarea
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
+import { pluralize } from '@/lib/format';
 
 type StudioMode = 'resume' | 'cover-letter' | 'ats-check';
 type TailorTab = 'pdf' | 'ats' | 'diff' | 'verifier' | 'jd' | 'preview';
@@ -62,9 +63,9 @@ function claimTone(status: VerifierClaim['status']): 'success' | 'warning' | 'da
 }
 
 function claimMarker(status: VerifierClaim['status']): string {
-  if (status === 'verified') return '[x] VERIFIED';
-  if (status === 'rephrased_ok') return '[~] REPHRASED OK';
-  return '[!] FLAGGED';
+  if (status === 'verified') return 'Verified';
+  if (status === 'rephrased_ok') return 'Rephrased';
+  return 'Needs review';
 }
 
 function SectionDiffGroup({
@@ -95,10 +96,10 @@ function SectionDiffGroup({
                   }
                 >
                   {sec.status === 'kept'
-                    ? '[=] KEPT'
+                    ? 'Kept'
                     : sec.status === 'reordered'
-                      ? `[~] REORDERED (#${sec.masterIndex + 1} -> #${(sec.tailoredIndex ?? 0) + 1})`
-                      : '[-] OMITTED'}
+                      ? `Moved #${sec.masterIndex + 1} to #${(sec.tailoredIndex ?? 0) + 1}`
+                      : 'Omitted'}
                 </Badge>
               </div>
             </div>
@@ -108,36 +109,30 @@ function SectionDiffGroup({
                 {sec.bulletDiffs.map((b, idx) => (
                   <div key={`${sec.id}-b-${idx}`} className="text-xs space-y-1">
                     {b.changeType === 'unchanged' ? (
-                      <p className="text-[var(--body)] break-words">
-                        <span className="text-[var(--mute)] mr-2">[=]</span>
-                        {b.after ?? b.before}
-                      </p>
+                      <p className="text-[var(--body)] break-words">{b.after ?? b.before}</p>
                     ) : null}
                     {b.changeType === 'rephrased' ? (
                       <div className="space-y-1 bg-[var(--canvas)] border border-[var(--hairline)] p-2">
                         {b.before ? (
                           <p className="text-[var(--danger-text)] break-words">
-                            <span className="font-bold mr-2">[-]</span>
+                            <span className="font-bold mr-2">Before:</span>
                             {b.before}
                           </p>
                         ) : null}
                         {b.after ? (
                           <p className="text-[var(--success-text)] break-words">
-                            <span className="font-bold mr-2">[+]</span>
+                            <span className="font-bold mr-2">After:</span>
                             {b.after}
                           </p>
                         ) : null}
                       </div>
                     ) : null}
                     {b.changeType === 'removed' && b.before ? (
-                      <p className="text-[var(--mute)] line-through break-words">
-                        <span className="mr-2">[-]</span>
-                        {b.before}
-                      </p>
+                      <p className="text-[var(--mute)] line-through break-words">{b.before}</p>
                     ) : null}
                     {b.changeType === 'added' && b.after ? (
                       <p className="text-[var(--warning-text)] break-words">
-                        <span className="font-bold mr-2">[+]</span>
+                        <span className="font-bold mr-2">Added:</span>
                         {b.after}
                       </p>
                     ) : null}
@@ -315,7 +310,7 @@ function TailorStudioInner() {
             })
       });
       setChkReport(report);
-      moToast(`[ok] ATS Score: ${report.overallScore}%`);
+      moToast(`ATS score: ${report.overallScore}%`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to calculate ATS score.');
     } finally {
@@ -370,11 +365,12 @@ function TailorStudioInner() {
       setSelectedVersionId(created.id);
       setLabelOverride('');
       setActiveTab(created.verifierPassed ? 'pdf' : 'verifier');
-      const msg = created.verifierPassed
-        ? `Created verified resume v${created.versionNumber} (${created.label}) via ${created.pdfEngine}.`
-        : `Created resume v${created.versionNumber} with ${created.verifierReport.unsupportedClaimCount} flagged claim(s) — inspect Verifier Audit.`;
-      setStatusMsg(msg);
-      moToast(`[ok] v${created.versionNumber} tailored & verified`);
+      if (!created.verifierPassed) {
+        setStatusMsg(
+          `Created v${created.versionNumber} with ${created.verifierReport.unsupportedClaimCount} flagged claim(s) — check Verification.`
+        );
+      }
+      moToast(`Created resume v${created.versionNumber}`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Resume tailoring failed.');
     } finally {
@@ -470,12 +466,10 @@ function TailorStudioInner() {
 
   return (
     <AppShell
-      title="Tailor Studio & Dual Verifier"
-      subtitle="Select, reorder, and rephrase from your Master Profile & Story Bank ONLY — audited by deterministic + LLM checks and exported as ATS PDF."
+      title="Tailor"
       actions={
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge tone="neutral">{versions.length} versions</Badge>
-          <Badge tone="dark">MASTER-ONLY GROUNDING</Badge>
+        <div className="flex items-center gap-2 text-xs text-[var(--mute)] tabular-nums">
+          <span>{pluralize(versions.length, 'version')}</span>
         </div>
       }
     >
@@ -489,8 +483,8 @@ function TailorStudioInner() {
           onChange={setStudioMode}
           tabs={[
             { id: 'resume', label: 'Resume Tailor', badge: versions.length },
-            { id: 'cover-letter', label: 'Cover Letter Studio' },
-            { id: 'ats-check', label: 'Instant ATS Checker' }
+            { id: 'cover-letter', label: 'Cover Letter' },
+            { id: 'ats-check', label: 'ATS Check' }
           ]}
         />
       </div>
@@ -543,9 +537,8 @@ function TailorStudioInner() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
           <div className="lg:col-span-4">
             <SectionBlock
-              title="Instant ATS Check"
-              marker="[%]"
-              description="Deterministic zero-LLM skill, synonym, and impact audit (<15ms)."
+              title="ATS check"
+              description="Deterministic skill, synonym, and impact audit."
             >
               <form onSubmit={(e) => void handleRunStandaloneAts(e)} className="space-y-4">
                 <Field label="Resume to Audit" htmlFor="chk-kind">
@@ -652,7 +645,7 @@ function TailorStudioInner() {
                 )}
 
                 <Button type="submit" variant="primary" className="w-full" disabled={chkLoading}>
-                  {chkLoading ? 'Scoring...' : '[%] Run Instant ATS Check'}
+                  {chkLoading ? 'Scoring...' : 'Run ATS Check'}
                 </Button>
               </form>
             </SectionBlock>
@@ -660,9 +653,8 @@ function TailorStudioInner() {
           <div className="lg:col-span-8">
             {chkReport ? (
               <SectionBlock
-                title={`ATS Score Breakdown — ${chkReport.overallScore}%`}
-                marker="[%]"
-                description="Matched skills account for common aliases (TS/TypeScript, Postgres/PostgreSQL, k8s/Kubernetes)."
+                title={`ATS Score — ${chkReport.overallScore}%`}
+                description="Matches common aliases such as TS/TypeScript, Postgres/PostgreSQL, and k8s/Kubernetes."
               >
                 <AtsScorePanel report={chkReport} />
               </SectionBlock>
@@ -679,9 +671,8 @@ function TailorStudioInner() {
           {/* Left Column: Tailor Form + Version History */}
           <div className="lg:col-span-4 space-y-5">
             <SectionBlock
-              title="New Tailored Version"
-              marker="[+]"
-              description="Each run creates an immutable version."
+              title="New tailored version"
+              description="Each run creates a saved version."
             >
               <form onSubmit={handleTailorSubmit} noValidate className="space-y-4">
                 <div className="flex border border-[var(--hairline)] rounded-[4px] overflow-hidden">
@@ -852,16 +843,15 @@ function TailorStudioInner() {
                       <MoScan width={12} />
                     </span>
                   ) : (
-                    '[+] Tailor & Verify Resume'
+                    'Tailor & verify resume'
                   )}
                 </Button>
               </form>
             </SectionBlock>
 
             <SectionBlock
-              title="Immutable Versions"
-              marker="[v]"
-              description="Every application keeps its exact snapshot."
+              title="Versions"
+              description="Each tailored resume keeps its own snapshot."
             >
               {versions.length === 0 ? (
                 <p className="text-xs text-[var(--mute)]">
@@ -915,8 +905,7 @@ function TailorStudioInner() {
             {selectedVersion ? (
               <SectionBlock
                 title={`v${selectedVersion.versionNumber} · ${selectedVersion.label}`}
-                marker={selectedVersion.verifierPassed ? '[x]' : '[!]'}
-                description={`Profile v${selectedVersion.parentProfileVersion} · ${selectedVersion.provider ?? 'llm'} / ${selectedVersion.model ?? 'default'} · PDF engine: ${selectedVersion.pdfEngine}`}
+                description={`Profile v${selectedVersion.parentProfileVersion} · ${selectedVersion.provider ?? 'llm'} / ${selectedVersion.model ?? 'default'} · ${selectedVersion.pdfEngine}`}
                 action={
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
@@ -958,7 +947,7 @@ function TailorStudioInner() {
                   {/* Verifier Status Strip */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3">
-                      <span className="text-[11px] text-[var(--mute)] block">Dual Verifier</span>
+                      <span className="text-[11px] text-[var(--mute)] block">Verification</span>
                       <strong
                         className={`text-sm font-bold ${
                           selectedVersion.verifierPassed
@@ -966,7 +955,7 @@ function TailorStudioInner() {
                             : 'text-[var(--danger-text)]'
                         }`}
                       >
-                        {selectedVersion.verifierPassed ? '[x] PASSED' : '[!] FLAGGED'}
+                        {selectedVersion.verifierPassed ? 'Passed' : 'Needs review'}
                       </strong>
                     </div>
                     <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3">
@@ -1043,19 +1032,19 @@ function TailorStudioInner() {
                             Summary Diff
                           </h3>
                           <Badge tone={selectedVersion.diffSummary.summaryChanged ? 'warning' : 'neutral'}>
-                            {selectedVersion.diffSummary.summaryChanged ? '[~] REPHRASED' : '[=] UNCHANGED'}
+                            {selectedVersion.diffSummary.summaryChanged ? 'Rephrased' : 'Unchanged'}
                           </Badge>
                         </div>
                         {selectedVersion.diffSummary.summaryChanged ? (
                           <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3 space-y-2 text-xs">
                             {selectedVersion.diffSummary.summaryBefore ? (
                               <p className="text-[var(--danger-text)] break-words">
-                                <span className="font-bold mr-2">[-] MASTER:</span>
+                                <span className="font-bold mr-2">Before:</span>
                                 {selectedVersion.diffSummary.summaryBefore}
                               </p>
                             ) : null}
                             <p className="text-[var(--success-text)] break-words">
-                              <span className="font-bold mr-2">[+] TAILORED:</span>
+                              <span className="font-bold mr-2">After:</span>
                               {selectedVersion.diffSummary.summaryAfter}
                             </p>
                           </div>
@@ -1074,13 +1063,13 @@ function TailorStudioInner() {
                           </h3>
                           <div className="flex flex-wrap gap-2">
                             {selectedVersion.diffSummary.skillsReordered ? (
-                              <Badge tone="warning">[~] REORDERED FOR JD</Badge>
+                              <Badge tone="warning">Reordered</Badge>
                             ) : (
-                              <Badge tone="neutral">[=] SAME ORDER</Badge>
+                              <Badge tone="neutral">Original order</Badge>
                             )}
                             {selectedVersion.diffSummary.skillsAdded.length > 0 ? (
                               <Badge tone="danger">
-                                [!] ADDED ({selectedVersion.diffSummary.skillsAdded.length})
+                                Added ({selectedVersion.diffSummary.skillsAdded.length})
                               </Badge>
                             ) : null}
                           </div>
@@ -1092,13 +1081,13 @@ function TailorStudioInner() {
                           </p>
                           {selectedVersion.diffSummary.skillsDropped.length > 0 ? (
                             <p className="text-[var(--mute)] break-words">
-                              <span className="font-bold mr-2">[-] OMITTED FROM PRINT:</span>
+                              <span className="font-bold mr-2">Omitted:</span>
                               {selectedVersion.diffSummary.skillsDropped.join(', ')}
                             </p>
                           ) : null}
                           {selectedVersion.diffSummary.skillsAdded.length > 0 ? (
                             <p className="text-[var(--danger-text)] break-words">
-                              <span className="font-bold mr-2">[!] UNGROUNDED SKILLS:</span>
+                              <span className="font-bold mr-2">Unsupported skills:</span>
                               {selectedVersion.diffSummary.skillsAdded.join(', ')}
                             </p>
                           ) : null}
@@ -1163,7 +1152,7 @@ function TailorStudioInner() {
                               ) : null}
                               {claim.issue ? (
                                 <p className="text-[var(--danger-text)] font-medium break-words">
-                                  [!] {claim.issue}
+                                  {claim.issue}
                                 </p>
                               ) : null}
                             </div>
@@ -1352,7 +1341,7 @@ function TailorStudioInner() {
                               Typst Source (.typ)
                             </span>
                             <Button size="sm" variant="ghost" onClick={() => void handleCopyTypst()}>
-                              {typstCopied ? '[x] Copied' : 'Copy Typst'}
+                              {typstCopied ? 'Copied' : 'Copy Typst'}
                             </Button>
                           </div>
                           <pre className="p-3 text-[11px] leading-relaxed text-[var(--body)] overflow-x-auto max-h-72">

@@ -25,13 +25,13 @@ import {
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 
-const STATUS_OPTIONS: Array<{ value: ApplicationStatus; label: string; marker: string }> = [
-  { value: 'saved', label: 'SAVED', marker: '[·]' },
-  { value: 'applied', label: 'APPLIED', marker: '[>]' },
-  { value: 'interview', label: 'INTERVIEW', marker: '[*]' },
-  { value: 'offer', label: 'OFFER', marker: '[+]' },
-  { value: 'rejected', label: 'REJECTED', marker: '[x]' },
-  { value: 'withdrawn', label: 'WITHDRAWN', marker: '[-]' }
+const STATUS_OPTIONS: Array<{ value: ApplicationStatus; label: string }> = [
+  { value: 'saved', label: 'Saved' },
+  { value: 'applied', label: 'Applied' },
+  { value: 'interview', label: 'Interview' },
+  { value: 'offer', label: 'Offer' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'withdrawn', label: 'Withdrawn' }
 ];
 
 function statusTone(
@@ -80,12 +80,12 @@ function isFollowUpDueOrUpcoming(iso: string | null): {
     year: 'numeric'
   });
   if (diffHours <= 0) {
-    return { state: 'overdue', label: `[!] OVERDUE (${dateStr})` };
+    return { state: 'overdue', label: `Overdue (${dateStr})` };
   }
   if (diffHours <= 48) {
-    return { state: 'upcoming', label: `[!] DUE SOON (${dateStr})` };
+    return { state: 'upcoming', label: `Due soon (${dateStr})` };
   }
-  return { state: 'future', label: `FOLLOW-UP: ${dateStr}` };
+  return { state: 'future', label: `Follow-up: ${dateStr}` };
 }
 
 export default function TrackerPage() {
@@ -278,8 +278,7 @@ export default function TrackerPage() {
       setNewFollowUpNote('');
       setNewSalaryOffered('');
       setNewNotes('');
-      setNotice(`[+] Application logged: ${created.job.companyName} — ${created.job.title}`);
-      moToast(`[ok] Logged ${created.job.companyName}`);
+      moToast(`Logged ${created.job.companyName}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create application.');
     } finally {
@@ -308,8 +307,7 @@ export default function TrackerPage() {
       setApplications((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
       const detail = await api.getApplicationDetail(updated.id);
       setEvents(detail.events);
-      setNotice(`[+] Updated ${updated.job.companyName} (${updated.status.toUpperCase()})`);
-      moToast(`[ok] Saved ${updated.job.companyName} (${updated.status.toUpperCase()})`);
+      moToast(`Saved ${updated.job.companyName}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update application.');
     } finally {
@@ -326,7 +324,7 @@ export default function TrackerPage() {
         const detail = await api.getApplicationDetail(appId);
         setEvents(detail.events);
       }
-      setNotice(`[+] Status updated to ${nextStatus.toUpperCase()}`);
+      moToast(`Status updated to ${nextStatus.toLowerCase()}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update status.');
     }
@@ -342,7 +340,7 @@ export default function TrackerPage() {
       setApplications(remaining);
       setSelectedId(remaining[0]?.id ?? null);
       setConfirmDeleteOpen(false);
-      setNotice('[-] Application removed from tracker.');
+      setNotice('Application removed from tracker.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete application.');
     } finally {
@@ -352,18 +350,17 @@ export default function TrackerPage() {
 
   return (
     <AppShell
-      title="Application Tracker"
-      subtitle="Track every saved, applied, interview, offer, and rejected role with the exact tailored resume version used and follow-up reminders. Shortcuts: j/k navigate, n log application."
+      title="Tracker"
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant={showNewForm ? 'secondary' : 'primary'}
             onClick={() => setShowNewForm((prev) => !prev)}
           >
-            {showNewForm ? '[-] Close Form' : '[+] Log Application (n)'}
+            {showNewForm ? 'Close form' : 'Log application'}
           </Button>
           <Link href="/jobs">
-            <Button variant="secondary">Browse Job Feed -&gt;</Button>
+            <Button variant="secondary">Browse jobs</Button>
           </Link>
         </div>
       }
@@ -376,12 +373,11 @@ export default function TrackerPage() {
         <div
           role="region"
           aria-label="Follow-up reminders"
-          className="border border-[var(--warning)] bg-[var(--warning-soft)] p-4 space-y-2"
+          className="border border-[var(--warning)] bg-[var(--warning-bg)] p-4 space-y-2"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]">
-              [!] {dueReminders.length} Follow-Up Reminder{dueReminders.length > 1 ? 's' : ''} Due or
-              Upcoming (within 48h)
+            <p className="text-xs font-semibold uppercase tracking-wider text-[var(--ink)]">
+              {dueReminders.length} follow-up reminder{dueReminders.length > 1 ? 's' : ''} due within 48h
             </p>
             <span className="text-xs text-[var(--body)]">
               Click any role below to inspect notes or reschedule
@@ -411,20 +407,20 @@ export default function TrackerPage() {
       <div
         role="tablist"
         aria-label="Filter applications by status"
-        className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 border border-[var(--hairline)] bg-[var(--surface-card)]"
+        className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-px bg-[var(--hairline)] border border-[var(--hairline)]"
       >
         <button
           type="button"
           role="tab"
           aria-selected={statusFilter === 'all'}
           onClick={() => setStatusFilter('all')}
-          className={`p-3 text-left border-b sm:border-b-0 border-r border-[var(--hairline)] cursor-pointer transition-colors ${
+          className={`p-3 text-left cursor-pointer transition-colors ${
             statusFilter === 'all'
               ? 'bg-[var(--ink)] text-[var(--on-primary)]'
-              : 'hover:bg-[var(--surface-soft)]'
+              : 'bg-[var(--surface-card)] hover:bg-[var(--surface-soft)]'
           }`}
         >
-          <div className="text-[11px] uppercase tracking-wider opacity-80">[*] ALL</div>
+          <div className="text-[11px] uppercase tracking-wider opacity-80">All</div>
           <div className="text-xl font-bold tabular-nums mt-0.5">
             <MoCount to={countsByStatus['all'] ?? 0} />
           </div>
@@ -438,14 +434,14 @@ export default function TrackerPage() {
               role="tab"
               aria-selected={active}
               onClick={() => setStatusFilter(opt.value)}
-              className={`p-3 text-left border-b sm:border-b-0 border-r last:border-r-0 border-[var(--hairline)] cursor-pointer transition-colors ${
+              className={`p-3 text-left cursor-pointer transition-colors ${
                 active
                   ? 'bg-[var(--ink)] text-[var(--on-primary)]'
-                  : 'hover:bg-[var(--surface-soft)]'
+                  : 'bg-[var(--surface-card)] hover:bg-[var(--surface-soft)]'
               }`}
             >
               <div className="text-[11px] uppercase tracking-wider opacity-80">
-                {opt.marker} {opt.label}
+                {opt.label}
               </div>
               <div className="text-xl font-bold tabular-nums mt-0.5">
                 <MoCount to={countsByStatus[opt.value] ?? 0} />
@@ -603,7 +599,7 @@ export default function TrackerPage() {
 
             <div className="flex flex-wrap gap-2 pt-2 border-t border-[var(--hairline)]">
               <Button type="submit" variant="primary" disabled={saving}>
-                {saving ? 'Logging...' : '[+] Save Application'}
+                {saving ? 'Saving...' : 'Save application'}
               </Button>
               <Button type="button" variant="secondary" onClick={() => setShowNewForm(false)}>
                 Cancel
@@ -632,13 +628,13 @@ export default function TrackerPage() {
         >
           <div className="flex flex-wrap gap-2">
             <Button variant="primary" onClick={() => setShowNewForm(true)}>
-              [+] Log Your First Application
+              Log first application
             </Button>
             <Link href="/jobs">
-              <Button variant="secondary">Explore Matched Jobs -&gt;</Button>
+              <Button variant="secondary">Explore jobs</Button>
             </Link>
             <Link href="/tailor">
-              <Button variant="secondary">Tailor a Resume -&gt;</Button>
+              <Button variant="secondary">Tailor a resume</Button>
             </Link>
           </div>
         </SectionBlock>
@@ -689,10 +685,10 @@ export default function TrackerPage() {
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs">
                     {app.resumeVersion ? (
                       <Badge tone="success">
-                        [PDF] v{app.resumeVersion.versionNumber} · {app.resumeVersion.label}
+                        Resume v{app.resumeVersion.versionNumber} · {app.resumeVersion.label}
                       </Badge>
                     ) : (
-                      <Badge tone="neutral">[·] No resume version linked</Badge>
+                      <Badge tone="neutral">No resume version</Badge>
                     )}
 
                     {followInfo.state !== 'none' ? (
@@ -802,7 +798,7 @@ export default function TrackerPage() {
                           >
                             {STATUS_OPTIONS.map((opt) => (
                               <option key={opt.value} value={opt.value}>
-                                {opt.marker} {opt.label}
+                                {opt.label}
                               </option>
                             ))}
                           </Select>
@@ -826,9 +822,9 @@ export default function TrackerPage() {
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <label
                           htmlFor="insp-resume-version"
-                          className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]"
+                          className="text-xs font-semibold uppercase tracking-wider text-[var(--ink)]"
                         >
-                          [PDF] Exact Tailored Resume Version Used
+                          Linked resume version
                         </label>
                         {editResumeId ? (
                           <Button
@@ -863,9 +859,9 @@ export default function TrackerPage() {
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <label
                             htmlFor="insp-cover-letter"
-                            className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]"
+                            className="text-xs font-semibold uppercase tracking-wider text-[var(--ink)]"
                           >
-                            [CL] Linked Cover Letter
+                            Linked cover letter
                           </label>
                           {editCoverLetterId ? (
                             <Button
@@ -897,8 +893,8 @@ export default function TrackerPage() {
                     {/* Follow-Up Reminder Scheduler */}
                     <div className="p-3.5 border border-[var(--hairline)] bg-[var(--surface-soft)] space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-xs font-bold uppercase tracking-wider text-[var(--ink)]">
-                          [!] Follow-Up Reminder
+                        <span className="text-xs font-semibold uppercase tracking-wider text-[var(--ink)]">
+                          Follow-up reminder
                         </span>
                         <div className="flex flex-wrap items-center gap-1.5">
                           <Button

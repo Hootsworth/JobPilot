@@ -157,7 +157,6 @@ export default function ProfilePage() {
         setIndia(updatedVariant.indiaProfile);
         setRawJsonText(JSON.stringify(updatedVariant.jsonResume, null, 2));
         setSuccessMsg(`Saved variant "${updatedVariant.name}" (v${updatedVariant.version}).`);
-        moToast(`[ok] Saved variant "${updatedVariant.name}"`);
       } else {
         const updated = await api.updateProfile({
           fullName: fullName.trim() || undefined,
@@ -170,8 +169,7 @@ export default function ProfilePage() {
         setVariants(refreshedVariants);
         const def = refreshedVariants.find((v) => v.id === activeVariantId) ?? refreshedVariants[0] ?? null;
         hydrateFromProfile(updated, def);
-        setSuccessMsg(`Saved Master Profile (v${updated.activeProfileVersion}).`);
-        moToast(`[ok] Saved Master Profile v${updated.activeProfileVersion}`);
+        setSuccessMsg(`Saved Profile (v${updated.activeProfileVersion}).`);
       }
       setEditingBasics(false);
       setEditingWorkId(null);
@@ -225,7 +223,7 @@ export default function ProfilePage() {
       const next = vList.find((v) => v.id === variantId) ?? vList[0] ?? null;
       setActiveVariantId(next?.id ?? null);
       hydrateFromProfile(p, next);
-      moToast('[ok] Updated active default variant');
+      moToast('Updated default variant');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to set active default.');
     } finally {
@@ -302,10 +300,7 @@ export default function ProfilePage() {
       });
       setVariants((prev) => prev.map((v) => (v.id === updatedVariant.id ? updatedVariant : v)));
       setImportOpen(false);
-      setSuccessMsg(
-        `Merged ${pickedProjects.length} project(s), ${pickedWork.length} role(s), and ${pickedSkills.length} skill group(s) from ${candidate.sourceLabel}.`
-      );
-      moToast(`[ok] Merged ${candidate.source.toUpperCase()} items into variant`);
+      moToast(`Merged ${candidate.sourceLabel} items`);
     }
   };
 
@@ -321,8 +316,7 @@ export default function ProfilePage() {
       }
       const p = res.parsed.jsonResume;
       const summary = `Parsed "${file.name}" (${p.work.length} experience, ${p.projects.length} projects, ${p.education.length} education, ${p.skills.length} skill groups).`;
-      setSuccessMsg(summary);
-      moToast('[ok] PDF resume parsed & applied');
+      moToast(summary);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Resume upload failed.');
     } finally {
@@ -522,7 +516,7 @@ export default function ProfilePage() {
               variant="secondary"
               onClick={() => setEditingBasics((prev) => !prev)}
             >
-              {editingBasics ? '[-] Close Basics' : '[Edit Basics]'}
+              {editingBasics ? 'Close' : 'Edit basics'}
             </Button>
           </div>
         </div>
@@ -709,7 +703,7 @@ export default function ProfilePage() {
             </p>
           </div>
           <Button size="sm" variant="secondary" onClick={addWorkEntry}>
-            [+] Add Experience
+            Add experience
           </Button>
         </div>
 
@@ -717,7 +711,7 @@ export default function ProfilePage() {
           <div className="p-5">
             <EmptyState
               title="No experience entries yet"
-              description="Upload your PDF resume above or click [+] Add Experience to add internships and roles."
+              description="Upload your PDF resume above or click Add experience to add internships and roles."
             />
           </div>
         ) : (
@@ -875,7 +869,7 @@ export default function ProfilePage() {
             </p>
           </div>
           <Button size="sm" variant="secondary" onClick={addProjectEntry}>
-            [+] Add Project
+            Add project
           </Button>
         </div>
 
@@ -883,7 +877,7 @@ export default function ProfilePage() {
           <div className="p-5">
             <EmptyState
               title="No projects added yet"
-              description="Upload your PDF resume above or click [+] Add Project to add technical projects."
+              description="Upload your PDF resume above or click Add project to add technical projects."
             />
           </div>
         ) : (
@@ -1057,7 +1051,7 @@ export default function ProfilePage() {
             </p>
           </div>
           <Button size="sm" variant="secondary" onClick={addEducationEntry}>
-            [+] Add Education
+            Add education
           </Button>
         </div>
 
@@ -1224,7 +1218,7 @@ export default function ProfilePage() {
               })
             }
           >
-            [+] Add Category
+            Add category
           </Button>
         </div>
 
@@ -1590,13 +1584,12 @@ export default function ProfilePage() {
                   type="button"
                   onClick={() => togglePreferredCity(city)}
                   aria-pressed={active}
-                  className={`px-3 py-1.5 text-xs rounded-[4px] border cursor-pointer transition-colors ${
+                  className={`inline-flex items-center h-8 px-3 text-xs rounded-[4px] border cursor-pointer transition-colors ${
                     active
-                      ? 'bg-[var(--ink)] text-[var(--on-primary)] border-[var(--ink)] font-bold'
+                      ? 'bg-[var(--ink)] text-[var(--on-primary)] border-[var(--ink)] font-semibold'
                       : 'bg-[var(--surface-soft)] text-[var(--body)] border-[var(--hairline)] hover:border-[var(--hairline-strong)]'
                   }`}
                 >
-                  {active ? '[x] ' : '[+] '}
                   {city}
                 </button>
               );
@@ -1608,9 +1601,9 @@ export default function ProfilePage() {
                   key={city}
                   type="button"
                   onClick={() => togglePreferredCity(city)}
-                  className="px-3 py-1.5 text-xs rounded-[4px] border bg-[var(--ink)] text-[var(--on-primary)] border-[var(--ink)] font-bold cursor-pointer"
+                  className="inline-flex items-center h-8 px-3 text-xs rounded-[4px] border bg-[var(--ink)] text-[var(--on-primary)] border-[var(--ink)] font-semibold cursor-pointer"
                 >
-                  [x] {city}
+                  {city} ×
                 </button>
               ))}
           </div>
@@ -1621,8 +1614,7 @@ export default function ProfilePage() {
 
   return (
     <AppShell
-      title="Master Profile"
-      subtitle="Single source of truth for grounded resume tailoring and Chrome MV3 autofill."
+      title="Profile"
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <input
@@ -1645,7 +1637,7 @@ export default function ProfilePage() {
                 <span>Parsing PDF...</span>
               </span>
             ) : (
-              '[^] Import PDF Resume'
+              'Import PDF'
             )}
           </Button>
           <Button
@@ -1654,7 +1646,7 @@ export default function ProfilePage() {
             disabled={loading}
             onClick={() => setImportOpen((prev) => !prev)}
           >
-            [↓] GitHub / LinkedIn Import
+            Import GitHub / LinkedIn
           </Button>
           <Button
             variant="primary"
@@ -1662,7 +1654,7 @@ export default function ProfilePage() {
             onClick={() => void handleSaveProfile()}
             disabled={saving || loading}
           >
-            {saving ? 'Saving...' : 'Save Changes'}
+            {saving ? 'Saving...' : 'Save changes'}
           </Button>
         </div>
       }
@@ -1703,24 +1695,32 @@ export default function ProfilePage() {
           {renderBasicsBlock()}
 
           {/* Section Switcher Tabs */}
-          <TabStrip
-            label="Master Profile sections"
-            activeTab={tab}
-            onChange={setTab}
-            tabs={[
-              { id: 'overview', label: 'Full Resume View' },
-              { id: 'work', label: 'Experience', badge: resume.work.length },
-              { id: 'projects', label: 'Projects', badge: resume.projects.length },
-              { id: 'education', label: 'Education', badge: resume.education.length },
-              {
-                id: 'skills',
-                label: 'Skills',
-                badge: resume.skills.reduce((a, g) => a + g.keywords.length, 0)
-              },
-              { id: 'india', label: 'India & CTC' },
-              { id: 'json', label: 'Raw JSON' }
-            ]}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <TabStrip
+              label="Profile sections"
+              activeTab={tab}
+              onChange={setTab}
+              tabs={[
+                { id: 'overview', label: 'Overview' },
+                { id: 'work', label: 'Experience', badge: resume.work.length },
+                { id: 'projects', label: 'Projects', badge: resume.projects.length },
+                { id: 'education', label: 'Education', badge: resume.education.length },
+                {
+                  id: 'skills',
+                  label: 'Skills',
+                  badge: resume.skills.reduce((a, g) => a + g.keywords.length, 0)
+                },
+                { id: 'india', label: 'Preferences' }
+              ]}
+            />
+            <Button
+              variant={tab === 'json' ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => setTab(tab === 'json' ? 'overview' : 'json')}
+            >
+              {tab === 'json' ? 'Back to overview' : 'View JSON'}
+            </Button>
+          </div>
 
           {tab === 'overview' ? (
             <div className="space-y-6">
@@ -1755,7 +1755,7 @@ export default function ProfilePage() {
                   variant="secondary"
                   onClick={() => {
                     void navigator.clipboard?.writeText(rawJsonText);
-                    moToast('[ok] Copied JSON Resume');
+                    moToast('Copied JSON Resume');
                   }}
                 >
                   Copy JSON

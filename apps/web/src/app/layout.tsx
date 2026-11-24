@@ -6,9 +6,8 @@ import { ExtensionAuthBridge } from '@/components/auth/extension-auth-bridge';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'JobPilot // AI Job Search & Application Assistant',
-  description:
-    'Open-source, privacy-first AI job search, India & global profile manager, and resume assistant.'
+  title: 'JobPilot',
+  description: 'Job discovery, resume tailoring, and application tracking.'
 };
 
 const THEME_INIT_SCRIPT = `

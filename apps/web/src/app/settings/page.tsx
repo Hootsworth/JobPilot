@@ -38,26 +38,25 @@ const PROVIDER_META: Record<
 > = {
   gemini: {
     shortName: 'Google Gemini',
-    name: 'Google Gemini (@google/genai)',
-    tagline: 'Structured responseSchema + fast Flash/Pro inference',
-    docsNote: 'Uses official @google/genai SDK with responseMimeType application/json and responseSchema.',
+    name: 'Google Gemini',
+    tagline: 'Fast Gemini Flash and Pro models',
+    docsNote: 'Connect your Google AI Studio key or use a configured server key.',
     defaultEndpoint: 'https://generativelanguage.googleapis.com',
     suggestedModelPlaceholder: 'e.g. gemini-2.5-flash'
   },
   openai: {
     shortName: 'OpenAI',
-    name: 'OpenAI (Official SDK)',
-    tagline: 'Strict json_schema structured outputs',
-    docsNote: 'Uses official openai SDK with strict json_schema validation and automatic repair.',
+    name: 'OpenAI',
+    tagline: 'GPT-4o and reasoning models',
+    docsNote: 'Connect an OpenAI API key for structured generation and matching.',
     defaultEndpoint: 'https://api.openai.com/v1',
     suggestedModelPlaceholder: 'e.g. gpt-4o-mini'
   },
   meta: {
-    shortName: 'Meta Llama API',
-    name: 'Meta Llama API (OpenAI Compat)',
-    tagline: 'OpenAI-compatible /compat/v1/ wire with live capability probing',
-    docsNote:
-      'Connects via OpenAI SDK pointed at META_BASE_URL (/compat/v1/) with runtime capability detection.',
+    shortName: 'Meta Llama',
+    name: 'Meta Llama API',
+    tagline: 'Llama models via Meta API',
+    docsNote: 'Connect a Meta Llama API key and optional custom base URL.',
     defaultEndpoint: 'https://api.llama.com/compat/v1/',
     suggestedModelPlaceholder: 'e.g. Llama-4-Maverick-17B-128E-Instruct-FP8'
   }
@@ -332,12 +331,11 @@ export default function SettingsPage() {
 
   return (
     <AppShell
-      title="Settings // AI Engine, Extension & Privacy"
-      subtitle="Configure your active LLM provider (BYOK encrypted AES-256-GCM), pair the Chrome MV3 extension, and manage your data."
+      title="Settings"
       actions={
         <Link href="/usage">
           <Button variant="secondary" size="sm">
-            View Token &amp; Cost Logs -&gt;
+            Usage logs
           </Button>
         </Link>
       }
@@ -355,57 +353,54 @@ export default function SettingsPage() {
           </div>
         </div>
       ) : (
-        <div className="space-y-8">
-          {/* 1. Active Engine Summary Bar */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 border border-[var(--hairline)] bg-[var(--surface-card)]">
-            <div className="p-4 border-b lg:border-b-0 border-r border-[var(--hairline)]">
+        <div className="space-y-6">
+          {/* 1. Uniform Hairline Summary Bar */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-[var(--hairline)] border border-[var(--hairline)]">
+            <div className="p-4 bg-[var(--surface-soft)]">
               <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                Active AI Provider
+                Provider
               </div>
-              <div className="text-base font-bold text-[var(--ink)] mt-1">
+              <div className="text-sm font-bold text-[var(--ink)] mt-1">
                 {activeItem ? PROVIDER_META[activeItem.provider].shortName : defaultEnvProvider}
               </div>
             </div>
 
-            <div className="p-4 border-b lg:border-b-0 lg:border-r border-[var(--hairline)]">
+            <div className="p-4 bg-[var(--surface-soft)]">
               <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                Selected Model
+                Model
               </div>
-              <div className="text-base font-bold text-[var(--ink)] truncate mt-1">
-                {activeItem?.selectedModel || 'Auto (Live Default)'}
+              <div className="text-sm font-bold text-[var(--ink)] truncate mt-1">
+                {activeItem?.selectedModel || 'Default'}
               </div>
             </div>
 
-            <div className="p-4 border-r border-[var(--hairline)]">
+            <div className="p-4 bg-[var(--surface-soft)]">
               <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                Credential Source
+                API Key
               </div>
-              <div className="text-base font-bold text-[var(--ink)] mt-1">
+              <div className="text-sm font-bold text-[var(--ink)] mt-1">
                 {activeItem?.hasKey
-                  ? `BYOK (${activeItem.keyHint})`
+                  ? `Saved (${activeItem.keyHint})`
                   : activeItem?.usingEnvFallback
-                    ? 'Server Default Key'
-                    : 'No Key Configured'}
+                    ? 'Server default'
+                    : 'Not set'}
               </div>
             </div>
 
-            <div className="p-4">
+            <div className="p-4 bg-[var(--surface-soft)]">
               <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                Key Storage &amp; Wire
+                Security
               </div>
-              <div className="text-base font-bold text-[var(--ink)] mt-1">
-                AES-256-GCM · RLS
-              </div>
+              <div className="text-sm font-bold text-[var(--ink)] mt-1">Encrypted</div>
             </div>
           </div>
 
-          {/* 2. AI Provider Console: 3-Column Selector + Focused Inspector */}
+          {/* 2. AI Provider Console */}
           <section className="border border-[var(--hairline)] bg-[var(--canvas)]">
-            {/* Top 3-Column Provider Selector Tabs */}
             <div
               role="tablist"
               aria-label="Select AI Provider to configure"
-              className="grid grid-cols-1 md:grid-cols-3 border-b border-[var(--hairline)] bg-[var(--surface-soft)]"
+              className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[var(--hairline)] border-b border-[var(--hairline)]"
             >
               {PROVIDER_ORDER.map((provId) => {
                 const item = items.find((i) => i.provider === provId);
@@ -420,50 +415,44 @@ export default function SettingsPage() {
                     role="tab"
                     aria-selected={isFocused}
                     onClick={() => setFocusedProvider(provId)}
-                    className={`p-4 text-left border-b md:border-b-0 md:border-r last:border-r-0 border-[var(--hairline)] transition-colors cursor-pointer ${
+                    className={`p-4 text-left transition-colors cursor-pointer ${
                       isFocused
                         ? 'bg-[var(--canvas)] border-t-2 border-t-[var(--ink)]'
-                        : 'hover:bg-[var(--surface-card)] opacity-85'
+                        : 'bg-[var(--surface-soft)] hover:bg-[var(--surface-card)]'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm font-bold text-[var(--ink)]">
-                        {isFocused ? '> ' : ''}
                         {meta.shortName}
                       </span>
                       <div className="flex items-center gap-1.5">
-                        {isActive ? <Badge tone="dark">ACTIVE</Badge> : null}
+                        {isActive ? <Badge tone="dark">Active</Badge> : null}
                         {item?.hasKey ? (
-                          <Badge tone="success">BYOK {item.keyHint}</Badge>
+                          <Badge tone="success">{item.keyHint}</Badge>
                         ) : item?.usingEnvFallback ? (
-                          <Badge tone="accent">ENV</Badge>
+                          <Badge tone="accent">Default</Badge>
                         ) : (
-                          <Badge tone="neutral">NO KEY</Badge>
+                          <Badge tone="neutral">Not set</Badge>
                         )}
                       </div>
                     </div>
                     <p className="text-xs text-[var(--mute)] mt-1.5 truncate">
-                      {item?.selectedModel
-                        ? `Model: ${item.selectedModel}`
-                        : meta.tagline}
+                      {item?.selectedModel || meta.tagline}
                     </p>
                   </button>
                 );
               })}
             </div>
 
-            {/* Focused Provider Inspector Body */}
             {currentItem ? (
               <div className="p-5 sm:p-6 space-y-6">
                 <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-[var(--hairline)]">
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-bold text-[var(--ink)]">{focusedMeta.name}</h2>
-                      {currentItem.isActive ? (
-                        <Badge tone="dark">[*] CURRENTLY ACTIVE</Badge>
-                      ) : null}
+                      <h2 className="text-base font-bold text-[var(--ink)]">{focusedMeta.name}</h2>
+                      {currentItem.isActive ? <Badge tone="dark">Active</Badge> : null}
                     </div>
-                    <p className="text-xs text-[var(--body)]">{focusedMeta.docsNote}</p>
+                    <p className="text-xs text-[var(--mute)]">{focusedMeta.docsNote}</p>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
@@ -474,7 +463,7 @@ export default function SettingsPage() {
                         onClick={() => void handleSaveProvider(focusedProvider, true)}
                         disabled={focusedDraft.saving}
                       >
-                        Set as Active Engine
+                        Set as active
                       </Button>
                     ) : null}
                     <Button
@@ -483,7 +472,7 @@ export default function SettingsPage() {
                       onClick={() => void handleTestKey(focusedProvider)}
                       disabled={focusedDraft.testing}
                     >
-                      {focusedDraft.testing ? 'Testing Connection...' : 'Test Connection'}
+                      {focusedDraft.testing ? 'Testing...' : 'Test key'}
                     </Button>
                   </div>
                 </div>
@@ -499,38 +488,33 @@ export default function SettingsPage() {
                     tone={focusedDraft.testResult.ok ? 'success' : 'error'}
                     title={
                       focusedDraft.testResult.ok
-                        ? `Connection Verified (${focusedDraft.testResult.modelTested ?? 'default'}) · ${focusedDraft.testResult.latencyMs} ms`
-                        : 'Connection Test Failed'
+                        ? `Verified (${focusedDraft.testResult.modelTested ?? 'default'}) · ${focusedDraft.testResult.latencyMs} ms`
+                        : 'Connection test failed'
                     }
-                    message={
-                      focusedDraft.testResult.detectedCapabilities
-                        ? `${focusedDraft.testResult.message} · Mode: ${focusedDraft.testResult.detectedCapabilities.structuredOutputMode}`
-                        : focusedDraft.testResult.message
-                    }
+                    message={focusedDraft.testResult.message}
                   />
                 ) : null}
 
                 {/* 2-Column Credentials & Model Form */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Left: API Key */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <label
                         htmlFor={`key-${focusedProvider}`}
                         className="text-sm font-medium text-[var(--ink)]"
                       >
-                        BYOK API Key
+                        API Key
                       </label>
                       <span className="text-xs text-[var(--mute)]">
                         {currentItem.hasKey
-                          ? `Stored: ${currentItem.keyHint}`
+                          ? `Saved: ${currentItem.keyHint}`
                           : currentItem.usingEnvFallback
-                            ? 'Using server env key'
-                            : 'No key stored'}
+                            ? 'Using server default'
+                            : 'No key saved'}
                       </span>
                     </div>
                     <p className="text-xs text-[var(--mute)]">
-                      Encrypted server-side with AES-256-GCM before storage. Never logged or exposed.
+                      Stored encrypted on the server and never exposed in browser logs.
                     </p>
                     <div className="flex gap-2">
                       <Input
@@ -546,7 +530,7 @@ export default function SettingsPage() {
                         }
                         placeholder={
                           currentItem.hasKey
-                            ? '•••••••••••• (leave blank to keep existing key)'
+                            ? '•••••••••••• (leave blank to keep)'
                             : `Paste ${focusedMeta.shortName} API key...`
                         }
                       />
@@ -563,30 +547,29 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  {/* Right: Live Model Picker */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <label
                         htmlFor={`model-${focusedProvider}`}
                         className="text-sm font-medium text-[var(--ink)]"
                       >
-                        Model ID
+                        Model
                       </label>
                       <button
                         type="button"
                         onClick={() => void handleFetchModels(focusedProvider)}
                         disabled={focusedDraft.loadingModels}
-                        className="text-xs font-bold text-[var(--accent-text)] hover:underline cursor-pointer disabled:opacity-50"
+                        className="text-xs font-medium text-[var(--accent-text)] hover:underline cursor-pointer disabled:opacity-50"
                       >
                         {focusedDraft.loadingModels
-                          ? '[Fetching live models...]'
+                          ? 'Loading models...'
                           : focusedDraft.models.length > 0
-                            ? `[Refresh live list (${focusedDraft.models.length})]`
-                            : '[Fetch live models from API ->]'}
+                            ? `Refresh list (${focusedDraft.models.length})`
+                            : 'Fetch live models'}
                       </button>
                     </div>
                     <p className="text-xs text-[var(--mute)]">
-                      Pick from the provider&apos;s live <code>/models</code> list or enter a model ID.
+                      Pick from available models or enter a model identifier directly.
                     </p>
                     {focusedDraft.models.length > 0 ? (
                       <Select
@@ -596,7 +579,7 @@ export default function SettingsPage() {
                           updateDraft(focusedProvider, { selectedModel: e.target.value })
                         }
                       >
-                        <option value="">-- Use provider default model --</option>
+                        <option value="">Use provider default</option>
                         {focusedDraft.models.map((m) => (
                           <option key={m.id} value={m.id}>
                             {m.displayName && m.displayName !== m.id
@@ -621,13 +604,12 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                {/* Meta Base URL Override */}
                 {focusedProvider === 'meta' ? (
                   <div className="pt-2 border-t border-[var(--hairline)]">
                     <Field
-                      label="META_BASE_URL Endpoint Override"
+                      label="Custom Base URL"
                       htmlFor="meta-base-url"
-                      hint={`Defaults to ${focusedMeta.defaultEndpoint} (OpenAI-compatible wire).`}
+                      hint={`Defaults to ${focusedMeta.defaultEndpoint}`}
                     >
                       {(props) => (
                         <Input
@@ -647,7 +629,6 @@ export default function SettingsPage() {
                   </div>
                 ) : null}
 
-                {/* Footer Action Bar */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-[var(--hairline)]">
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
@@ -659,8 +640,8 @@ export default function SettingsPage() {
                       {focusedDraft.saving
                         ? 'Saving...'
                         : currentItem.isActive
-                          ? 'Save Configuration'
-                          : 'Save & Set Active'}
+                          ? 'Save changes'
+                          : 'Save & activate'}
                     </Button>
                     {!currentItem.isActive ? (
                       <Button
@@ -669,7 +650,7 @@ export default function SettingsPage() {
                         onClick={() => void handleSaveProvider(focusedProvider, false)}
                         disabled={focusedDraft.saving}
                       >
-                        Save Without Activating
+                        Save only
                       </Button>
                     ) : null}
                     {currentItem.hasKey ? (
@@ -679,72 +660,68 @@ export default function SettingsPage() {
                         onClick={() => void handleClearKey(focusedProvider)}
                         disabled={focusedDraft.saving}
                       >
-                        Remove Stored Key
+                        Remove key
                       </Button>
                     ) : null}
                   </div>
 
                   <span className="text-xs text-[var(--mute)]">
                     {currentItem.lastTestedAt
-                      ? `Last verified: ${new Date(currentItem.lastTestedAt).toLocaleString()} (${currentItem.lastTestStatus?.toUpperCase()})`
-                      : `Default endpoint: ${focusedMeta.defaultEndpoint}`}
+                      ? `Last checked ${new Date(currentItem.lastTestedAt).toLocaleString()}`
+                      : focusedMeta.defaultEndpoint}
                   </span>
                 </div>
               </div>
             ) : null}
           </section>
 
-          {/* 3. Lower 2-Column Workspace Grid: Extension + Appearance vs Privacy + Danger Zone */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-            {/* Left Column: Chrome Extension & Theme */}
-            <div className="border border-[var(--hairline)] bg-[var(--canvas)] divide-y divide-[var(--hairline)]">
+          {/* 3. Lower Equal-Height 2-Column Workspace Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+            {/* Left Column: Extension & Theme */}
+            <div className="border border-[var(--hairline)] bg-[var(--canvas)] divide-y divide-[var(--hairline)] flex flex-col justify-between">
               <div className="p-5 sm:p-6 space-y-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-base font-bold text-[var(--ink)]">
-                      [ext] Chrome MV3 Extension Pairing
-                    </h2>
-                    <p className="text-xs text-[var(--mute)] mt-0.5">
-                      Connect the JobPilot Side Panel in one click to autofill ATS &amp; Indian job portals.
-                    </p>
-                  </div>
-                  <Badge tone="neutral">MV3 Side Panel</Badge>
+                <div>
+                  <h2 className="text-base font-bold text-[var(--ink)]">Chrome Extension</h2>
+                  <p className="text-xs text-[var(--mute)] mt-0.5">
+                    Sign in once here and the JobPilot extension connects automatically.
+                  </p>
                 </div>
 
                 <div className="p-3 bg-[var(--surface-soft)] border border-[var(--hairline)] text-xs space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[var(--mute)]">API Endpoint</span>
-                    <code className="font-bold text-[var(--ink)]">{getApiBaseUrl()}</code>
+                    <code className="font-bold text-[var(--ink)] truncate">{getApiBaseUrl()}</code>
                   </div>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[var(--mute)]">Extension Sync</span>
-                    <span className="text-[var(--body)]">Auto-syncs on load &amp; auto-refreshes</span>
+                    <span className="text-[var(--mute)]">Browser Sync</span>
+                    <span className="text-[var(--body)]">Automatic via web login</span>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button
-                    variant={copiedExt ? 'primary' : 'secondary'}
-                    size="sm"
-                    onClick={() => void handleCopyExtensionSession()}
-                  >
-                    {copiedExt
-                      ? '[x] Copied Session JSON!'
-                      : 'Copy Session JSON (Manual Fallback)'}
-                  </Button>
-                  <span className="text-xs text-[var(--mute)]">
-                    Usually automatic via browser sign-in; copy only for custom profiles.
-                  </span>
-                </div>
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-[var(--mute)] hover:text-[var(--ink)] font-medium">
+                    Manual pairing fallback
+                  </summary>
+                  <div className="mt-3 space-y-2">
+                    <Button
+                      variant={copiedExt ? 'primary' : 'secondary'}
+                      size="sm"
+                      onClick={() => void handleCopyExtensionSession()}
+                    >
+                      {copiedExt ? 'Copied Session JSON' : 'Copy Session JSON'}
+                    </Button>
+                    <p className="text-[var(--mute)]">
+                      Only needed for isolated Chrome profiles not signed into this site.
+                    </p>
+                  </div>
+                </details>
               </div>
 
               <div className="p-5 sm:p-6 space-y-3">
                 <div>
-                  <h2 className="text-base font-bold text-[var(--ink)]">
-                    [*] Appearance &amp; Color Scheme
-                  </h2>
+                  <h2 className="text-base font-bold text-[var(--ink)]">Appearance</h2>
                   <p className="text-xs text-[var(--mute)] mt-0.5">
-                    Follows your OS preference by default, or lock Light / Dark mode.
+                    Match your system theme or lock Light or Dark mode.
                   </p>
                 </div>
                 <ThemeSettingsControl />
@@ -752,18 +729,13 @@ export default function SettingsPage() {
             </div>
 
             {/* Right Column: Privacy, Data Portability & Danger Zone */}
-            <div className="border border-[var(--hairline)] bg-[var(--canvas)] divide-y divide-[var(--hairline)]">
+            <div className="border border-[var(--hairline)] bg-[var(--canvas)] divide-y divide-[var(--hairline)] flex flex-col justify-between">
               <div className="p-5 sm:p-6 space-y-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-base font-bold text-[var(--ink)]">
-                      [+] Privacy &amp; Data Portability
-                    </h2>
-                    <p className="text-xs text-[var(--mute)] mt-0.5">
-                      Protected by Supabase Postgres Row-Level Security. Export your full archive anytime.
-                    </p>
-                  </div>
-                  <Badge tone="success">RLS ACTIVE</Badge>
+                <div>
+                  <h2 className="text-base font-bold text-[var(--ink)]">Privacy &amp; Data</h2>
+                  <p className="text-xs text-[var(--mute)] mt-0.5">
+                    Your profile, resumes, and application history belong to your account.
+                  </p>
                 </div>
 
                 <label className="flex items-start gap-3 p-3 bg-[var(--surface-soft)] border border-[var(--hairline)] cursor-pointer">
@@ -775,31 +747,28 @@ export default function SettingsPage() {
                   />
                   <span className="text-xs text-[var(--body)] leading-relaxed">
                     <strong className="text-[var(--ink)] block">
-                      Allow anonymous diagnostic telemetry
+                      Share anonymous diagnostics
                     </strong>
-                    Off by default. Your personal token &amp; cost usage dashboard works regardless of this toggle.
+                    Off by default. Your personal token and cost ledger remains visible either way.
                   </span>
                 </label>
 
-                <div className="flex items-center justify-between gap-3 pt-1">
-                  <div className="text-xs text-[var(--mute)]">
-                    Includes Master Profile, Stories, Answers, Tailored Resumes &amp; Tracker history.
-                  </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                  <span className="text-xs text-[var(--mute)]">
+                    Download your complete account archive as JSON.
+                  </span>
                   <Button variant="secondary" size="sm" onClick={() => void handleExportData()}>
-                    Export JSON
+                    Export data
                   </Button>
                 </div>
               </div>
 
-              {/* Danger Zone */}
               <div className="p-5 sm:p-6 bg-[var(--danger-bg)]/40 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 className="text-sm font-bold text-[var(--danger-text)] uppercase tracking-wider">
-                      [!] Danger Zone — Delete Account
-                    </h2>
+                    <h2 className="text-sm font-bold text-[var(--danger-text)]">Delete Account</h2>
                     <p className="text-xs text-[var(--body)] mt-0.5">
-                      Permanently erases your profile, resumes, encrypted BYOK keys, and applications.
+                      Permanently remove your profile, resumes, keys, and applications.
                     </p>
                   </div>
                   <Button
@@ -807,7 +776,7 @@ export default function SettingsPage() {
                     size="sm"
                     onClick={() => setConfirmDeleteOpen(true)}
                   >
-                    Delete Account
+                    Delete account
                   </Button>
                 </div>
               </div>

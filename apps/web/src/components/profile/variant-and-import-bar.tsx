@@ -250,7 +250,7 @@ export function ProfileImportPanel({ onClose, onMergeCandidate }: ProfileImportP
         includeForks: false
       });
       hydrateCandidateSelection(res);
-      moToast(`[ok] Fetched ${res.projects.length} GitHub repos`);
+      moToast(`Fetched ${res.projects.length} GitHub repos`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'GitHub import failed.');
     } finally {
@@ -265,7 +265,7 @@ export function ProfileImportPanel({ onClose, onMergeCandidate }: ProfileImportP
     try {
       const res = await api.importLinkedinPdf(file);
       hydrateCandidateSelection(res);
-      moToast(`[ok] Parsed LinkedIn PDF (${res.stats.pagesParsed} pages)`);
+      moToast(`Parsed LinkedIn PDF (${res.stats.pagesParsed} pages)`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'LinkedIn PDF import failed.');
     } finally {
@@ -299,9 +299,8 @@ export function ProfileImportPanel({ onClose, onMergeCandidate }: ProfileImportP
 
   return (
     <SectionBlock
-      title="Import Studio — GitHub & LinkedIn PDF"
-      marker="[↓]"
-      description="Inspect parsed items before merging into the currently selected profile variant."
+      title="Import from GitHub or LinkedIn"
+      description="Inspect parsed items before merging into the selected profile variant."
       action={
         <Button type="button" size="sm" variant="ghost" onClick={onClose}>
           Close
@@ -442,7 +441,7 @@ export function ProfileImportPanel({ onClose, onMergeCandidate }: ProfileImportP
                   disabled={merging}
                   onClick={() => void handleMerge()}
                 >
-                  {merging ? 'Merging...' : '[+] Merge Selected into Variant'}
+                  {merging ? 'Merging...' : 'Merge selected'}
                 </Button>
               </div>
             </div>

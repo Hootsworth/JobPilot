@@ -95,10 +95,30 @@ export function ThemeQuickToggle() {
       aria-label={
         renderedScheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'
       }
-      className="min-h-[36px] px-2.5 py-1 text-xs font-medium border border-[var(--hairline)] rounded-[4px] bg-[var(--surface-soft)] text-[var(--ink)] hover:border-[var(--hairline-strong)] cursor-pointer"
-      title={`Theme: ${preference} (rendered ${renderedScheme})`}
+      className="h-9 px-2.5 text-xs font-medium whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 border border-[var(--hairline)] rounded-[4px] bg-[var(--canvas)] text-[var(--ink)] hover:bg-[var(--surface-card)] hover:border-[var(--hairline-strong)] cursor-pointer"
+      title={`Theme: ${preference} (${renderedScheme})`}
     >
-      [{renderedScheme === 'dark' ? 'DARK' : 'LIGHT'}]
+      {renderedScheme === 'dark' ? (
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M13.5 9.8A5.5 5.5 0 0 1 6.2 2.5a5.5 5.5 0 1 0 7.3 7.3Z"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ) : (
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="3" stroke="currentColor" strokeWidth="1.4" />
+          <path
+            d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
+      <span>{renderedScheme === 'dark' ? 'Dark' : 'Light'}</span>
     </button>
   );
 }
@@ -106,7 +126,7 @@ export function ThemeQuickToggle() {
 export function ThemeSettingsControl() {
   const { preference, systemDark, updatePreference } = useThemePreference();
   const options: Array<{ id: ThemePreference; label: string }> = [
-    { id: 'system', label: `System (${systemDark ? 'dark' : 'light'})` },
+    { id: 'system', label: `System (${systemDark ? 'Dark' : 'Light'})` },
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' }
   ];
@@ -122,13 +142,12 @@ export function ThemeSettingsControl() {
             role="radio"
             aria-checked={active}
             onClick={() => updatePreference(opt.id)}
-            className={`min-h-[38px] px-3 py-1.5 text-sm rounded-[4px] border cursor-pointer ${
+            className={`h-9 px-3.5 text-xs whitespace-nowrap shrink-0 rounded-[4px] border cursor-pointer transition-colors ${
               active
-                ? 'bg-[var(--ink)] text-[var(--on-primary)] border-[var(--ink)] font-medium'
+                ? 'bg-[var(--ink)] text-[var(--on-primary)] border-[var(--ink)] font-semibold'
                 : 'bg-[var(--surface-soft)] text-[var(--ink)] border-[var(--hairline)] hover:border-[var(--hairline-strong)]'
             }`}
           >
-            {active ? '[x] ' : '[ ] '}
             {opt.label}
           </button>
         );

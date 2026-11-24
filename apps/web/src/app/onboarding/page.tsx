@@ -221,16 +221,13 @@ export default function OnboardingPage() {
   };
 
   return (
-    <AppShell
-      title="Onboarding // Under 2 Minutes"
-      subtitle="Connect your AI provider, parse your PDF resume into JSON Resume, and confirm India/global eligibility details."
-    >
-      {/* Multi-step progress tracker per forms guide */}
+    <AppShell title="Get Started">
+      {/* Multi-step progress tracker */}
       <nav aria-label="Onboarding progress" className="grid grid-cols-3 gap-2">
         {[
-          { num: 1 as const, label: '1. AI Provider' },
+          { num: 1 as const, label: '1. Provider' },
           { num: 2 as const, label: '2. Parse Resume' },
-          { num: 3 as const, label: '3. India & Review' }
+          { num: 3 as const, label: '3. Preferences' }
         ].map((item) => {
           const active = step === item.num;
           const done = step > item.num;
@@ -244,11 +241,10 @@ export default function OnboardingPage() {
                 active
                   ? 'border-[var(--ink)] bg-[var(--surface-card)] font-bold text-[var(--ink)]'
                   : done
-                    ? 'border-[var(--success-text)]/40 bg-[var(--success-bg)] text-[var(--success-text)]'
+                    ? 'border-[var(--success-text)]/40 bg-[var(--success-bg)] text-[var(--success-text)] font-medium'
                     : 'border-[var(--hairline)] bg-[var(--surface-soft)] text-[var(--mute)]'
               }`}
             >
-              {done ? '[x] ' : active ? '[>] ' : '[ ] '}
               {item.label}
             </button>
           );
@@ -593,13 +589,12 @@ export default function OnboardingPage() {
                       type="button"
                       onClick={() => toggleCity(city)}
                       aria-pressed={selected}
-                      className={`px-2.5 py-1 text-xs rounded-[4px] border cursor-pointer ${
+                      className={`h-8 px-2.5 text-xs rounded-[4px] border cursor-pointer transition-colors ${
                         selected
                           ? 'bg-[var(--ink)] text-[var(--on-primary)] border-[var(--ink)] font-medium'
                           : 'bg-[var(--surface-soft)] text-[var(--body)] border-[var(--hairline)] hover:border-[var(--hairline-strong)]'
                       }`}
                     >
-                      {selected ? '[x] ' : '[+] '}
                       {city}
                     </button>
                   );
@@ -630,30 +625,21 @@ export default function OnboardingPage() {
 
             <div className="p-3.5 border border-[var(--hairline)] bg-[var(--surface-soft)] space-y-2 text-xs">
               <p className="font-bold uppercase tracking-wider text-[var(--ink)]">
-                [+] Under-2-Minute Readiness Summary
+                Setup Summary
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[var(--body)]">
                 <div>
-                  <span className="font-bold text-[var(--ink)]">
-                    {parsedPreview ? '[x]' : '[·]'}
-                  </span>{' '}
-                  Resume PDF:{' '}
+                  <span className="font-bold text-[var(--ink)]">Resume:</span>{' '}
                   {parsedPreview
                     ? `${parsedPreview.jsonResume.work.length} roles, ${parsedPreview.jsonResume.projects.length} projects`
                     : 'Manual entry'}
                 </div>
                 <div>
-                  <span className="font-bold text-[var(--ink)]">
-                    {india.expectedCtcLpa != null || india.cgpa != null ? '[x]' : '[·]'}
-                  </span>{' '}
-                  India Autofill: {india.expectedCtcLpa ?? '—'} LPA · CGPA {india.cgpa ?? '—'}/
-                  {india.cgpaScale}
+                  <span className="font-bold text-[var(--ink)]">Compensation &amp; GPA:</span>{' '}
+                  {india.expectedCtcLpa ?? '—'} LPA · CGPA {india.cgpa ?? '—'}/{india.cgpaScale}
                 </div>
                 <div>
-                  <span className="font-bold text-[var(--ink)]">
-                    {india.preferredCities.length > 0 ? '[x]' : '[·]'}
-                  </span>{' '}
-                  Preferred Hubs:{' '}
+                  <span className="font-bold text-[var(--ink)]">Locations:</span>{' '}
                   {india.preferredCities.length > 0
                     ? india.preferredCities.slice(0, 3).join(', ')
                     : 'Any / Global'}

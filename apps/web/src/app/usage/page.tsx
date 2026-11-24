@@ -12,6 +12,7 @@ import {
   SkeletonBlock
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
+import { formatTaskLabel } from '@/lib/format';
 
 export default function UsagePage() {
   const [summary, setSummary] = useState<LlmUsageSummary | null>(null);
@@ -25,7 +26,7 @@ export default function UsagePage() {
       const data = await api.getUsage();
       setSummary(data);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to load LLM usage logs.');
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to load usage logs.');
     } finally {
       setLoading(false);
     }
@@ -37,11 +38,10 @@ export default function UsagePage() {
 
   return (
     <AppShell
-      title="LLM Usage & Cost Ledger"
-      subtitle="Every LLM call logs provider, model, token usage, latency, retries/repairs, and best-effort cost estimate."
+      title="Usage"
       actions={
         <Button variant="secondary" size="sm" onClick={loadUsage} disabled={loading}>
-          Refresh
+          {loading ? 'Refreshing...' : 'Refresh'}
         </Button>
       }
     >
@@ -56,24 +56,24 @@ export default function UsagePage() {
         </div>
       ) : summary ? (
         <div className="space-y-6">
-          {/* KPI strip */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-4">
-              <p className="text-xs text-[var(--mute)]">TOTAL CALLS</p>
+          {/* Uniform Hairline KPI Strip */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-[var(--hairline)] border border-[var(--hairline)]">
+            <div className="bg-[var(--surface-soft)] p-4">
+              <p className="text-xs text-[var(--mute)]">Total calls</p>
               <p className="text-2xl font-bold tabular-nums mt-1">{summary.totalCalls}</p>
             </div>
-            <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-4">
-              <p className="text-xs text-[var(--mute)]">TOTAL TOKENS</p>
+            <div className="bg-[var(--surface-soft)] p-4">
+              <p className="text-xs text-[var(--mute)]">Total tokens</p>
               <p className="text-2xl font-bold tabular-nums mt-1">
                 {(summary.totalInputTokens + summary.totalOutputTokens).toLocaleString()}
               </p>
             </div>
-            <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-4">
-              <p className="text-xs text-[var(--mute)]">AVG LATENCY</p>
+            <div className="bg-[var(--surface-soft)] p-4">
+              <p className="text-xs text-[var(--mute)]">Avg latency</p>
               <p className="text-2xl font-bold tabular-nums mt-1">{summary.avgLatencyMs} ms</p>
             </div>
-            <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-4">
-              <p className="text-xs text-[var(--mute)]">EST. COST (USD)</p>
+            <div className="bg-[var(--surface-soft)] p-4">
+              <p className="text-xs text-[var(--mute)]">Est. cost</p>
               <p className="text-2xl font-bold tabular-nums mt-1">
                 ${summary.totalCostUsd.toFixed(4)}
               </p>
@@ -83,8 +83,8 @@ export default function UsagePage() {
           <SectionBlock title="Breakdown by Provider">
             {summary.byProvider.length === 0 ? (
               <EmptyState
-                title="No LLM calls logged yet"
-                description="Test a provider key in Settings or parse a PDF resume to see live metrics here."
+                title="No calls recorded yet"
+                description="Verify an API key in Settings or parse a resume PDF to view activity here."
               />
             ) : (
               <div className="overflow-x-auto">
@@ -101,7 +101,7 @@ export default function UsagePage() {
                   <tbody className="divide-y divide-[var(--hairline)]">
                     {summary.byProvider.map((row) => (
                       <tr key={row.provider}>
-                        <td className="py-2.5 pr-4 font-bold">{row.provider}</td>
+                        <td className="py-2.5 pr-4 font-bold capitalize">{row.provider}</td>
                         <td className="py-2.5 pr-4">{row.calls}</td>
                         <td className="py-2.5 pr-4">{row.tokens.toLocaleString()}</td>
                         <td className="py-2.5 pr-4">{row.avgLatencyMs} ms</td>
@@ -114,9 +114,9 @@ export default function UsagePage() {
             )}
           </SectionBlock>
 
-          <SectionBlock title="Recent Call Log">
+          <SectionBlock title="Recent Activity">
             {summary.recentLogs.length === 0 ? (
-              <p className="text-sm text-[var(--mute)]">No recent calls recorded.</p>
+              <p className="text-sm text-[var(--mute)]">No recent activity recorded.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs border-collapse tabular-nums">
@@ -135,8 +135,8 @@ export default function UsagePage() {
                   <tbody className="divide-y divide-[var(--hairline)]">
                     {summary.recentLogs.map((log) => (
                       <tr key={log.id}>
-                        <td className="py-2 pr-3 font-medium">{log.taskType}</td>
-                        <td className="py-2 pr-3">{log.provider}</td>
+                        <td className="py-2 pr-3 font-medium">{formatTaskLabel(log.taskType)}</td>
+                        <td className="py-2 pr-3 capitalize">{log.provider}</td>
                         <td className="py-2 pr-3 max-w-[180px] truncate">{log.model}</td>
                         <td className="py-2 pr-3">
                           {log.inputTokens} / {log.outputTokens}
@@ -144,11 +144,11 @@ export default function UsagePage() {
                         <td className="py-2 pr-3">{log.latencyMs} ms</td>
                         <td className="py-2 pr-3">
                           {log.retryCount}
-                          {log.usedRepair ? ' (+repair)' : ''}
+                          {log.usedRepair ? ' (repaired)' : ''}
                         </td>
                         <td className="py-2 pr-3">
                           <Badge tone={log.status === 'ok' ? 'success' : 'danger'}>
-                            {log.status}
+                            {log.status === 'ok' ? 'OK' : 'Error'}
                           </Badge>
                         </td>
                         <td className="py-2 text-[var(--mute)]">

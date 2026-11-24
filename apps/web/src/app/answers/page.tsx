@@ -7,6 +7,7 @@ import {
   type UpsertSavedAnswerRequest
 } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
+import { formatTemplateLabel } from '@/lib/format';
 import {
   AlertBanner,
   Badge,
@@ -138,14 +139,11 @@ export default function SavedAnswersPage() {
     : answers;
 
   return (
-    <AppShell
-      title="Saved Answers"
-      subtitle="Reusable responses for recurring India & global job application questions (CTC, notice period, relocation, motivation)."
-    >
+    <AppShell title="Saved Answers">
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
       {successMsg ? <AlertBanner tone="success" message={successMsg} /> : null}
 
-      <SectionBlock title="Quick-Start Question Templates" marker="[>]">
+      <SectionBlock title="Quick-Start Templates">
         <div className="flex flex-wrap gap-2">
           {COMMON_QUESTION_TEMPLATES.map((tpl) => (
             <Button
@@ -154,13 +152,13 @@ export default function SavedAnswersPage() {
               variant="secondary"
               onClick={() => applyTemplate(tpl)}
             >
-              [+] {tpl.questionKey}
+              {formatTemplateLabel(tpl.questionKey)}
             </Button>
           ))}
         </div>
       </SectionBlock>
 
-      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-stretch">
         <div className="xl:col-span-2">
           <SectionBlock title={editingId ? 'Edit Saved Answer' : 'New Saved Answer'}>
             <form onSubmit={handleSave} className="space-y-4">
@@ -245,7 +243,7 @@ export default function SavedAnswersPage() {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search questions or tags..."
-                  className="min-h-[36px] text-xs w-56"
+                  className="min-h-[36px] text-xs w-full sm:w-52"
                 />
               </search>
             }

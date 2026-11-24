@@ -153,14 +153,11 @@ export default function StoriesPage() {
     categoryFilter === 'all' ? stories : stories.filter((s) => s.category === categoryFilter);
 
   return (
-    <AppShell
-      title="Story Bank"
-      subtitle="Grounded STAR stories and verified numeric metrics used during resume tailoring and application form drafting."
-    >
+    <AppShell title="Stories">
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
       {successMsg ? <AlertBanner tone="success" message={successMsg} /> : null}
 
-      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-stretch">
         <div className="xl:col-span-2">
           <SectionBlock title={editingId ? 'Edit Story' : 'Add STAR Story'}>
             <form onSubmit={handleSave} className="space-y-4">
@@ -253,7 +250,7 @@ export default function StoriesPage() {
                     Quantified Metrics
                   </span>
                   <Button size="sm" variant="secondary" onClick={addMetricRow}>
-                    [+] Metric
+                    Add metric
                   </Button>
                 </div>
                 {form.metrics.map((metric, idx) => (
@@ -289,7 +286,7 @@ export default function StoriesPage() {
                         onClick={() => removeMetric(idx)}
                         aria-label={`Remove metric ${idx + 1}`}
                       >
-                        [x]
+                        Remove
                       </Button>
                     </div>
                   </div>
