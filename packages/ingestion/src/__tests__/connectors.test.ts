@@ -1,16 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createEmptyIndiaProfile, createEmptyJsonResume } from '@jobpilot/shared';
 import {
+  buildDiscoveryQueriesFromProfile,
   fetchAdzunaIndia,
   fetchArbeitnowFeed,
   fetchAshbyBoard,
   fetchGreenhouseBoard,
+  fetchHackerNewsHiringFeed,
+  fetchHimalayasFeed,
+  fetchJobicyFeed,
   fetchJoobleIndia,
   fetchJSearchOptional,
   fetchLeverBoard,
   fetchRemoteOkFeed,
   fetchRemotiveFeed,
+  fetchSmartRecruitersBoard,
+  fetchTheMuseFeed,
   fetchWorkableBoard,
-  PoliteHttpClient
+  PoliteHttpClient,
+  runDiscoverySync
 } from '../index.js';
 import { HostRateLimiter } from '../http/rate-limiter.js';
 
@@ -213,5 +221,193 @@ describe('@jobpilot/ingestion official connectors', () => {
 
     const jsEnabled = await fetchJSearchOptional({ rapidApiKey: 'rapid', http });
     expect(jsEnabled.jobs[0]?.city).toBe('Chennai');
+  });
+
+  it('parses Himalayas, Jobicy (with untagged fallback), The Muse, Hacker News & SmartRecruiters and runs quick discovery sync', async () => {
+    const http = createMockHttp({
+      'himalayas.app': {
+        jobs: [
+          {
+            guid: 'https://himalayas.app/jobs/h-1',
+            title: 'Backend Engineer',
+            companyName: 'CloudScale',
+            applicationLink: 'https://himalayas.app/jobs/h-1/apply',
+            locationRestrictions: ['India', 'Worldwide'],
+            minSalary: 120_000,
+            maxSalary: 150_000,
+            currency: 'USD',
+            categories: ['Backend'],
+            description: '<p>Node.js, TypeScript, PostgreSQL</p>',
+            pubDate: Math.floor(Date.now() / 1000)
+          }
+        ]
+      },
+      'remotive.com': {
+        jobs: [
+          {
+            id: 88,
+            url: 'https://remotive.com/remote-jobs/88',
+            title: 'Python Data Engineer',
+            company_name: 'DataFlow',
+            candidate_required_location: 'Worldwide',
+            tags: ['Python', 'SQL'],
+            description: 'Build data pipelines.'
+          }
+        ]
+      },
+      'jobicy.com/api/v2/remote-jobs?count=50&tag=python': {
+        jobs: []
+      },
+      'jobicy.com/api/v2/remote-jobs?count=50': {
+        jobs: [
+          {
+            id: 77,
+            url: 'https://jobicy.com/jobs/77',
+            jobTitle: 'Full Stack Developer',
+            companyName: 'RemoteWorks',
+            jobGeo: 'Worldwide',
+            jobIndustry: ['Engineering'],
+            annualSalaryMin: '90000',
+            annualSalaryMax: '110000',
+            salaryCurrency: 'USD',
+            jobDescription: '<p>React and TypeScript</p>'
+          }
+        ]
+      },
+      'themuse.com/api/public/jobs': {
+        results: [
+          {
+            id: 'tm-1',
+            name: 'Software Engineer I',
+            company: { name: 'MuseLabs' },
+            locations: [{ name: 'Flexible / Remote' }],
+            levels: [{ name: 'Entry Level' }],
+            categories: [{ name: 'Software Engineering' }],
+            contents: '<p>TypeScript and Docker</p>',
+            publication_date: new Date().toISOString(),
+            refs: { landing_page: 'https://www.themuse.com/jobs/muselabs/tm-1' }
+          }
+        ]
+      },
+      'hn.algolia.com/api/v1/search_by_date?tags=story': {
+        hits: [{ objectID: '41000000', title: 'Ask HN: Who is hiring?' }]
+      },
+      'hn.algolia.com/api/v1/search_by_date?tags=comment': {
+        hits: [
+          {
+            objectID: '41000099',
+            parent_id: '41000000',
+            created_at: new Date().toISOString(),
+            comment_text:
+              'Acme AI | Backend Engineer | Remote / Bengaluru<p>Build Rust & TypeScript services. Apply at https://acme.ai/careers</p>'
+          },
+          {
+            objectID: '41000100',
+            parent_id: '41000001',
+            comment_text: 'Nested reply should be ignored'
+          }
+        ]
+      },
+      'api.smartrecruiters.com': {
+        content: [
+          {
+            id: 'sr-1',
+            name: 'Software Engineer',
+            releasedDate: new Date().toISOString(),
+            location: { city: 'Bengaluru', country: 'in', remote: false },
+            experienceLevel: { label: 'Entry' },
+            department: { label: 'Engineering' }
+          }
+        ]
+      },
+      'boards-api.greenhouse.io': {
+        jobs: [
+          {
+            id: 22,
+            title: 'Backend Engineer',
+            absolute_url: 'https://boards.greenhouse.io/razorpaysoftwareprivatelimited/jobs/22',
+            location: { name: 'Bengaluru, India' },
+            content: '<p>TypeScript and PostgreSQL microservices</p>'
+          }
+        ]
+      }
+    });
+
+    const him = await fetchHimalayasFeed({ http });
+    expect(him.jobs[0]).toMatchObject({ sourceType: 'himalayas', workMode: 'remote', salaryMinLpa: 100.8 });
+
+    const jobicy = await fetchJobicyFeed({ tag: 'python', http });
+    expect(jobicy.jobs).toHaveLength(1);
+    expect(jobicy.jobs[0]?.sourceType).toBe('jobicy');
+
+    const muse = await fetchTheMuseFeed({ http });
+    expect(muse.jobs[0]).toMatchObject({ sourceType: 'themuse', workMode: 'remote' });
+
+    const hn = await fetchHackerNewsHiringFeed({ http });
+    expect(hn.jobs).toHaveLength(1);
+    expect(hn.jobs[0]).toMatchObject({
+      sourceType: 'hackernews',
+      companyName: 'Acme AI',
+      applyUrl: 'https://acme.ai/careers'
+    });
+
+    const sr = await fetchSmartRecruitersBoard({ slug: 'Visa', companyName: 'Visa', http });
+    expect(sr.jobs[0]).toMatchObject({
+      sourceType: 'smartrecruiters',
+      city: 'Bengaluru',
+      countryCode: 'IN'
+    });
+
+    const jsonResume = createEmptyJsonResume();
+    jsonResume.basics.label = 'Python Backend Engineer';
+    jsonResume.skills = [{ name: 'Stack', level: '', keywords: ['Python', 'PostgreSQL'] }];
+    const profile = {
+      id: '11111111-1111-4111-8111-111111111111',
+      fullName: 'Dev',
+      email: null,
+      phone: null,
+      activeProfileVersion: 1,
+      jsonResume,
+      indiaProfile: createEmptyIndiaProfile(),
+      searchPreferences: {
+        targetRoles: ['Backend Engineer', 'ML Engineer'],
+        workModes: ['remote', 'hybrid', 'onsite'] as ('remote' | 'hybrid' | 'onsite')[],
+        seniorityLevels: ['intern', 'fresher', 'junior'] as ('intern' | 'fresher' | 'junior')[],
+        countries: ['IN'],
+        minSalaryLpa: null,
+        minExperienceYears: null,
+        maxExperienceYears: 2
+      },
+      sourceResumeStoragePath: null,
+      embeddingModel: null,
+      embeddingModelVersion: null,
+      embeddedAt: null,
+      telemetryOptIn: false,
+      onboardingCompletedAt: null,
+      updatedAt: new Date().toISOString()
+    };
+
+    const queries = buildDiscoveryQueriesFromProfile(profile);
+    expect(queries.jobicyTag).toBe('python');
+    expect(queries.remotiveCategories).toContain('data');
+    expect(queries.regionPriority).toBe('india');
+
+    const syncRes = await runDiscoverySync({
+      mode: 'quick',
+      boards: [
+        {
+          sourceType: 'greenhouse',
+          slug: 'razorpaysoftwareprivatelimited',
+          displayName: 'Razorpay',
+          regionFocus: 'india',
+          enabled: true
+        }
+      ],
+      profile,
+      http
+    });
+    expect(syncRes.bundles.length).toBeGreaterThanOrEqual(5);
+    expect(syncRes.stats.boardSuccess).toBe(1);
+    expect(syncRes.stats.aggregatorCount).toBeGreaterThanOrEqual(5);
   });
 });

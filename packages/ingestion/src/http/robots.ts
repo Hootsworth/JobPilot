@@ -101,15 +101,18 @@ export class RobotsGuard {
   private readonly botName: string;
   private readonly userAgent: string;
   private readonly fetchFn: RobotsFetchFn;
+  private readonly timeoutMs: number;
 
   constructor(options: {
     botName?: string;
     userAgent?: string;
     fetchFn?: RobotsFetchFn;
+    timeoutMs?: number;
   } = {}) {
     this.botName = options.botName ?? 'jobpilotbot';
     this.userAgent = options.userAgent ?? 'JobPilotBot/1.0 (+https://github.com/jobpilot)';
     this.fetchFn = options.fetchFn ?? fetch;
+    this.timeoutMs = options.timeoutMs ?? 3000;
   }
 
   async check(targetUrl: string): Promise<{ allowed: boolean; crawlDelayMs: number | null }> {
@@ -119,8 +122,13 @@ export class RobotsGuard {
 
     if (!policy) {
       try {
+        const signal =
+          this.timeoutMs > 0 && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+            ? AbortSignal.timeout(this.timeoutMs)
+            : undefined;
         const res = await this.fetchFn(`${origin}/robots.txt`, {
-          headers: { 'User-Agent': this.userAgent }
+          headers: { 'User-Agent': this.userAgent },
+          ...(signal ? { signal } : {})
         });
         if (res.ok) {
           const text = await res.text();

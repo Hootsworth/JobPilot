@@ -6,12 +6,17 @@ export const JobSourceTypeSchema = z.enum([
   'lever',
   'ashby',
   'workable',
+  'smartrecruiters',
   'workday',
   'adzuna',
   'jooble',
   'remotive',
   'arbeitnow',
   'remoteok',
+  'himalayas',
+  'jobicy',
+  'themuse',
+  'hackernews',
   'jsearch',
   'naukri',
   'foundit',
@@ -23,6 +28,32 @@ export const JobSourceTypeSchema = z.enum([
   'manual'
 ]);
 export type JobSourceType = z.infer<typeof JobSourceTypeSchema>;
+
+export const JobFeedBucketSchema = z.enum([
+  'all',
+  'for_you',
+  'fresh',
+  'remote',
+  'india',
+  'near_matches'
+]);
+export type JobFeedBucket = z.infer<typeof JobFeedBucketSchema>;
+
+export const DismissReasonSchema = z.enum([
+  'seniority',
+  'stack',
+  'company',
+  'location',
+  'salary',
+  'other'
+]);
+export type DismissReason = z.infer<typeof DismissReasonSchema>;
+
+export const DismissJobRequestSchema = z.object({
+  dismissed: z.boolean().default(true),
+  reason: DismissReasonSchema.optional()
+});
+export type DismissJobRequest = z.infer<typeof DismissJobRequestSchema>;
 
 export const JobWorkModeSchema = z.enum(['remote', 'hybrid', 'onsite', 'unknown']);
 export type JobWorkMode = z.infer<typeof JobWorkModeSchema>;
@@ -159,6 +190,8 @@ export const JobFeedQuerySchema = z.object({
     .union([z.boolean(), z.enum(['true', 'false'])])
     .transform((v) => (typeof v === 'string' ? v === 'true' : v))
     .optional(),
+  bucket: JobFeedBucketSchema.optional(),
+  freshHours: z.coerce.number().int().min(1).max(720).optional(),
   sortBy: z.enum(['match_score', 'recent', 'salary_lpa']).default('match_score'),
   limit: z.coerce.number().int().min(1).max(100).default(40),
   offset: z.coerce.number().int().min(0).default(0)
@@ -179,7 +212,7 @@ export const LlmMatchRerankOutputSchema = z.object({
 export type LlmMatchRerankOutput = z.infer<typeof LlmMatchRerankOutputSchema>;
 
 export const SeedBoardSchema = z.object({
-  sourceType: z.enum(['greenhouse', 'lever', 'ashby', 'workable']),
+  sourceType: z.enum(['greenhouse', 'lever', 'ashby', 'workable', 'smartrecruiters']),
   slug: z.string().min(1),
   displayName: z.string().min(1),
   regionFocus: z.enum(['india', 'global', 'hybrid']),
@@ -216,3 +249,50 @@ export const RefreshMatchesRequestSchema = z.object({
   forceRecompute: z.boolean().default(false)
 });
 export type RefreshMatchesRequest = z.infer<typeof RefreshMatchesRequestSchema>;
+
+export const SyncJobsRequestSchema = z.object({
+  mode: z.enum(['quick', 'full']).default('quick'),
+  force: z.boolean().default(false),
+  includeLlm: z.boolean().default(false)
+});
+export type SyncJobsRequest = z.infer<typeof SyncJobsRequestSchema>;
+
+export const JobSyncStatusSchema = z.object({
+  status: z.enum(['idle', 'running']),
+  isStale: z.boolean(),
+  totalActiveJobs: z.number().int().min(0),
+  activeSourcesCount: z.number().int().min(0),
+  lastSyncedAt: z.string().nullable(),
+  lastRun: CrawlRunSummarySchema.nullable(),
+  sourceBreakdown: z.record(z.number().int()).default({})
+});
+export type JobSyncStatus = z.infer<typeof JobSyncStatusSchema>;
+
+export const RecommendationsResponseSchema = z.object({
+  buckets: z.object({
+    forYou: z.array(JobFeedItemSchema),
+    fresh: z.array(JobFeedItemSchema),
+    india: z.array(JobFeedItemSchema),
+    remote: z.array(JobFeedItemSchema),
+    nearMatches: z.array(JobFeedItemSchema)
+  }),
+  counts: z.object({
+    forYou: z.number().int().min(0),
+    fresh: z.number().int().min(0),
+    india: z.number().int().min(0),
+    remote: z.number().int().min(0),
+    nearMatches: z.number().int().min(0),
+    totalActiveCatalog: z.number().int().min(0)
+  }),
+  syncStatus: JobSyncStatusSchema,
+  profileSignals: z.object({
+    targetRoles: z.array(z.string()),
+    topSkills: z.array(z.string()),
+    countries: z.array(z.string()),
+    preferredCities: z.array(z.string()),
+    isFresher: z.boolean(),
+    hasProfileData: z.boolean()
+  }),
+  autoMatchedCount: z.number().int().min(0)
+});
+export type RecommendationsResponse = z.infer<typeof RecommendationsResponseSchema>;

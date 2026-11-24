@@ -62,7 +62,7 @@ function AuthCallbackInner() {
         if (!profile.onboardingCompletedAt) {
           router.replace('/onboarding');
         } else {
-          router.replace('/profile');
+          router.replace('/');
         }
       } catch {
         if (active) {

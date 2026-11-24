@@ -5,5 +5,8 @@ export * from './normalize/html-clean.js';
 export * from './normalize/extractors.js';
 export * from './normalize/dedupe.js';
 export * from './connectors/index.js';
+export * from './discovery/profile-queries.js';
+export * from './discovery/seed-boards.js';
+export * from './discovery/sync-runner.js';
 export * from './matching/hard-filter.js';
 export * from './matching/matcher.js';

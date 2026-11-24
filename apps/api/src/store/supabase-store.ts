@@ -30,6 +30,7 @@ import {
   type CrawlRunSummary,
   type CreateManualApplicationRequest,
   type CreateProfileVariantRequest,
+  type DismissReason,
   type JdRequirements,
   type JobFeedItem,
   type JobFeedQuery,
@@ -51,9 +52,18 @@ import {
   type UpsertStoryRequest,
   type VerifierReport
 } from '@jobpilot/shared';
-import type { JobForMatching } from '@jobpilot/ingestion';
+import type {
+  DedupedJobBundle,
+  JobForMatching,
+  SourceCacheEntry
+} from '@jobpilot/ingestion';
 import type { LlmCallLogEntry } from '@jobpilot/llm';
-import { buildUsageSummary, slugifyVariantName } from './memory-store.js';
+import {
+  buildUsageSummary,
+  matchesFeedBucket,
+  mergeDismissReason,
+  slugifyVariantName
+} from './memory-store.js';
 import type {
   AccountExportPayload,
   AuthUser,
@@ -63,7 +73,8 @@ import type {
   LlmSettingPatch,
   ProfilePatch,
   StoredLlmSetting,
-  UpdateCoverLetterPatch
+  UpdateCoverLetterPatch,
+  UpsertJobSourceStatusInput
 } from './types.js';
 
 function mapProfileRow(row: Record<string, unknown>): MasterProfile {
@@ -750,11 +761,7 @@ export class SupabaseDataStore implements DataStore {
     };
   }
 
-  async listJobsFeed(
-    userId: string,
-    profileVersion: number,
-    query: JobFeedQuery
-  ): Promise<{ items: JobFeedItem[]; total: number }> {
+  private buildFilteredJobsQuery(userId: string, query: JobFeedQuery) {
     let q = this.client
       .from('jobs')
       .select('*')
@@ -776,14 +783,68 @@ export class SupabaseDataStore implements DataStore {
       const safe = query.q.trim().replace(/[,()]/g, ' ');
       q = q.or(`title.ilike.%${safe}%,company_name.ilike.%${safe}%,location_raw.ilike.%${safe}%`);
     }
+    return q;
+  }
 
-    const { data: jobsData, error: jobsErr } = await q
-      .order('posted_at', { ascending: false, nullsFirst: false })
-      .limit(300);
+  async listJobsFeed(
+    userId: string,
+    profileVersion: number,
+    query: JobFeedQuery
+  ): Promise<{ items: JobFeedItem[]; total: number }> {
+    const useMatchWindow = !query.q?.trim() && query.sortBy === 'match_score';
+    let jobRows: Array<Record<string, unknown>> = [];
 
-    if (jobsErr) throw new Error(`Failed to list jobs feed: ${jobsErr.message}`);
+    if (useMatchWindow) {
+      const [topMatchRes, newestRes] = await Promise.all([
+        this.client
+          .from('job_matches')
+          .select('job_id')
+          .eq('user_id', userId)
+          .eq('profile_version', profileVersion)
+          .eq('dismissed', false)
+          .order('hard_filter_passed', { ascending: false })
+          .order('llm_score', { ascending: false, nullsFirst: false })
+          .limit(250),
+        this.buildFilteredJobsQuery(userId, query)
+          .order('posted_at', { ascending: false, nullsFirst: false })
+          .limit(250)
+      ]);
 
-    const jobRows = (jobsData ?? []) as Array<Record<string, unknown>>;
+      if (newestRes.error) {
+        throw new Error(`Failed to list jobs feed: ${newestRes.error.message}`);
+      }
+
+      const newestRows = (newestRes.data ?? []) as Array<Record<string, unknown>>;
+      const seenIds = new Set(newestRows.map((r) => String(r['id'])));
+      const missingMatchedIds = ((topMatchRes.data ?? []) as Array<Record<string, unknown>>)
+        .map((r) => String(r['job_id']))
+        .filter((id) => !seenIds.has(id));
+
+      jobRows = [...newestRows];
+      if (missingMatchedIds.length > 0) {
+        const extraRes = await this.buildFilteredJobsQuery(userId, query).in(
+          'id',
+          missingMatchedIds.slice(0, 200)
+        );
+        if (!extraRes.error && extraRes.data) {
+          for (const row of extraRes.data as Array<Record<string, unknown>>) {
+            const id = String(row['id']);
+            if (!seenIds.has(id)) {
+              seenIds.add(id);
+              jobRows.push(row);
+            }
+          }
+        }
+      }
+    } else {
+      const { data: jobsData, error: jobsErr } = await this.buildFilteredJobsQuery(userId, query)
+        .order('posted_at', { ascending: false, nullsFirst: false })
+        .limit(300);
+
+      if (jobsErr) throw new Error(`Failed to list jobs feed: ${jobsErr.message}`);
+      jobRows = (jobsData ?? []) as Array<Record<string, unknown>>;
+    }
+
     const jobIds = jobRows.map((r) => String(r['id']));
     if (jobIds.length === 0) return { items: [], total: 0 };
 
@@ -817,12 +878,16 @@ export class SupabaseDataStore implements DataStore {
       const job = mapJobRow(r);
       const match = matchMap.get(job.id) ?? null;
       if (!query.includeDismissed && match?.dismissed) continue;
-      if (query.onlyPassed && match && !match.hardFilterPassed) continue;
-      combined.push({
+      if (query.onlyPassed && query.bucket !== 'near_matches' && match && !match.hardFilterPassed) {
+        continue;
+      }
+      const candidateItem: JobFeedItem = {
         job,
         match,
         applicationStatus: appMap.get(job.id) ?? null
-      });
+      };
+      if (!matchesFeedBucket(candidateItem, query.bucket, query.freshHours)) continue;
+      combined.push(candidateItem);
     }
 
     combined.sort((a, b) => {
@@ -897,7 +962,7 @@ export class SupabaseDataStore implements DataStore {
     };
   }
 
-  async listActiveJobsForMatching(userId: string, limit: number = 200): Promise<JobForMatching[]> {
+  async listActiveJobsForMatching(userId: string, limit: number = 600): Promise<JobForMatching[]> {
     const { data, error } = await this.client
       .from('jobs')
       .select('*')
@@ -954,8 +1019,37 @@ export class SupabaseDataStore implements DataStore {
     userId: string,
     jobId: string,
     profileVersion: number,
-    dismissed: boolean
+    dismissed: boolean,
+    reason?: DismissReason
   ): Promise<boolean> {
+    if (reason) {
+      const { data: existing } = await this.client
+        .from('job_matches')
+        .select('hard_filter_reasons')
+        .eq('user_id', userId)
+        .eq('job_id', jobId)
+        .eq('profile_version', profileVersion)
+        .maybeSingle();
+
+      const existingReasons = Array.isArray((existing as Record<string, unknown> | null)?.['hard_filter_reasons'])
+        ? ((existing as Record<string, unknown>)['hard_filter_reasons'] as string[])
+        : [];
+      const nextReasons = mergeDismissReason(existingReasons, reason);
+
+      const { error } = await this.client.from('job_matches').upsert(
+        {
+          user_id: userId,
+          job_id: jobId,
+          profile_version: profileVersion,
+          dismissed,
+          hard_filter_reasons: nextReasons,
+          computed_at: new Date().toISOString()
+        },
+        { onConflict: 'user_id,job_id,profile_version' }
+      );
+      return !error;
+    }
+
     const { error } = await this.client.from('job_matches').upsert(
       {
         user_id: userId,
@@ -1026,7 +1120,7 @@ export class SupabaseDataStore implements DataStore {
         .from('job_sources')
         .select('*')
         .order('last_crawled_at', { ascending: false, nullsFirst: false })
-        .limit(60),
+        .limit(150),
       this.client
         .from('crawl_runs')
         .select('*')
@@ -1060,6 +1154,157 @@ export class SupabaseDataStore implements DataStore {
     );
 
     return { sources, recentRuns };
+  }
+
+  async listJobSourceCache(): Promise<Map<string, SourceCacheEntry>> {
+    const { data } = await this.client
+      .from('job_sources')
+      .select('source_type, slug, etag, last_modified, last_crawled_at, consecutive_failures')
+      .limit(200);
+    const cache = new Map<string, SourceCacheEntry>();
+    for (const s of (data ?? []) as Array<Record<string, unknown>>) {
+      cache.set(`${s['source_type']}:${s['slug']}`, {
+        etag: (s['etag'] as string | null) ?? null,
+        lastModified: (s['last_modified'] as string | null) ?? null,
+        lastCrawledAt: (s['last_crawled_at'] as string | null) ?? null,
+        consecutiveFailures: Number(s['consecutive_failures'] ?? 0)
+      });
+    }
+    return cache;
+  }
+
+  async upsertPublicJobsBatch(
+    bundles: DedupedJobBundle[]
+  ): Promise<{ insertedCount: number; updatedCount: number }> {
+    let insertedCount = 0;
+    let updatedCount = 0;
+    const CHUNK_SIZE = 10;
+
+    for (let i = 0; i < bundles.length; i += CHUNK_SIZE) {
+      const chunk = bundles.slice(i, i + CHUNK_SIZE);
+      await Promise.all(
+        chunk.map(async (bundle) => {
+          const j = bundle.canonical;
+          const { data, error } = await this.client.rpc('upsert_public_job', {
+            p_dedupe_fingerprint: bundle.fingerprint,
+            p_source_type: j.sourceType,
+            p_external_id: j.externalId,
+            p_source_url: j.sourceUrl,
+            p_apply_url: j.applyUrl,
+            p_company_name: j.companyName,
+            p_company_domain: j.companyDomain,
+            p_company_logo_url: j.companyLogoUrl,
+            p_title: j.title,
+            p_normalized_title: j.normalizedTitle,
+            p_location_raw: j.locationRaw,
+            p_city: j.city,
+            p_country_code: j.countryCode,
+            p_work_mode: j.workMode,
+            p_seniority: j.seniority,
+            p_experience_min_years: j.experienceMinYears,
+            p_experience_max_years: j.experienceMaxYears,
+            p_salary_min: j.salaryMin,
+            p_salary_max: j.salaryMax,
+            p_salary_currency: j.salaryCurrency,
+            p_salary_period: j.salaryPeriod,
+            p_salary_min_lpa: j.salaryMinLpa,
+            p_salary_max_lpa: j.salaryMaxLpa,
+            p_description_raw: j.descriptionRaw,
+            p_description_clean: j.descriptionClean,
+            p_extracted_skills: j.extractedSkills,
+            p_posted_at: j.postedAt,
+            p_raw_payload: j.rawPayload ?? null
+          });
+
+          if (!error && Array.isArray(data) && data[0]) {
+            const row = data[0] as { job_id: string; is_new: boolean };
+            if (row.is_new) insertedCount++;
+            else updatedCount++;
+
+            if (bundle.sightings.length > 1) {
+              await this.client.from('job_sightings').upsert(
+                bundle.sightings.slice(1).map((s) => ({
+                  job_id: row.job_id,
+                  source_type: s.sourceType,
+                  external_id: s.externalId,
+                  source_url: s.sourceUrl,
+                  seen_at: s.seenAt
+                })),
+                { onConflict: 'job_id,source_type,external_id' }
+              );
+            }
+          }
+        })
+      );
+    }
+
+    return { insertedCount, updatedCount };
+  }
+
+  async upsertJobSourceStatus(input: UpsertJobSourceStatusInput): Promise<void> {
+    await this.client.from('job_sources').upsert(
+      {
+        source_type: input.sourceType,
+        slug: input.slug,
+        display_name: input.displayName,
+        region_focus: input.regionFocus,
+        enabled: input.enabled,
+        etag: input.etag,
+        last_modified: input.lastModified,
+        last_crawled_at: input.lastCrawledAt,
+        last_status: input.lastStatus,
+        consecutive_failures: input.consecutiveFailures
+      },
+      { onConflict: 'source_type,slug' }
+    );
+  }
+
+  async startCrawlRun(jobName: string): Promise<string> {
+    const { data, error } = await this.client
+      .from('crawl_runs')
+      .insert({ job_name: jobName, status: 'running' })
+      .select('id')
+      .single();
+    if (error || !data) {
+      throw new Error(`Failed to start crawl run: ${error?.message ?? 'unknown error'}`);
+    }
+    return String((data as Record<string, unknown>)['id']);
+  }
+
+  async finishCrawlRun(
+    runId: string,
+    status: 'ok' | 'error',
+    stats: Record<string, unknown>
+  ): Promise<void> {
+    await this.client
+      .from('crawl_runs')
+      .update({
+        finished_at: new Date().toISOString(),
+        status,
+        stats
+      })
+      .eq('id', runId);
+  }
+
+  async countActiveJobs(userId: string): Promise<{ total: number; bySource: Record<string, number> }> {
+    const { data, error } = await this.client
+      .from('jobs')
+      .select('source_type')
+      .eq('is_active', true)
+      .or(`owner_user_id.is.null,owner_user_id.eq.${userId}`)
+      .limit(5000);
+
+    if (error) {
+      return { total: 0, bySource: {} };
+    }
+    const bySource: Record<string, number> = {};
+    let total = 0;
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      const src = String(r['source_type'] ?? 'manual');
+      total++;
+      bySource[src] = (bySource[src] ?? 0) + 1;
+    }
+    return { total, bySource };
   }
 
   async getJobForTailoring(

@@ -10,6 +10,7 @@ import type {
   CrawlRunSummary,
   CreateManualApplicationRequest,
   CreateProfileVariantRequest,
+  DismissReason,
   IndiaProfile,
   JdRequirements,
   JobFeedItem,
@@ -37,7 +38,12 @@ import type {
   UpsertStoryRequest,
   VerifierReport
 } from '@jobpilot/shared';
-import type { JobForMatching } from '@jobpilot/ingestion';
+import type {
+  DedupedJobBundle,
+  DiscoverySourceUpdate,
+  JobForMatching,
+  SourceCacheEntry
+} from '@jobpilot/ingestion';
 import type { LlmCallLogEntry } from '@jobpilot/llm';
 
 export interface AuthUser {
@@ -135,6 +141,8 @@ export interface CreateCoverLetterInput {
   model: string | null;
 }
 
+export interface UpsertJobSourceStatusInput extends DiscoverySourceUpdate {}
+
 export interface UpdateCoverLetterPatch {
   label?: string;
   content?: CoverLetterContent;
@@ -203,7 +211,8 @@ export interface DataStore {
     userId: string,
     jobId: string,
     profileVersion: number,
-    dismissed: boolean
+    dismissed: boolean,
+    reason?: DismissReason
   ): Promise<boolean>;
   saveJobApplication(
     userId: string,
@@ -214,6 +223,18 @@ export interface DataStore {
     sources: JobSourceStatus[];
     recentRuns: CrawlRunSummary[];
   }>;
+  listJobSourceCache(): Promise<Map<string, SourceCacheEntry>>;
+  upsertPublicJobsBatch(
+    bundles: DedupedJobBundle[]
+  ): Promise<{ insertedCount: number; updatedCount: number }>;
+  upsertJobSourceStatus(input: UpsertJobSourceStatusInput): Promise<void>;
+  startCrawlRun(jobName: string): Promise<string>;
+  finishCrawlRun(
+    runId: string,
+    status: 'ok' | 'error',
+    stats: Record<string, unknown>
+  ): Promise<void>;
+  countActiveJobs(userId: string): Promise<{ total: number; bySource: Record<string, number> }>;
 
   getJobForTailoring(
     userId: string,

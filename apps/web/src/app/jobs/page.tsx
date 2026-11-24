@@ -9,6 +9,7 @@ import {
   type JobSourceStatus
 } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
+import { MoSpinner } from '@/components/ui/mo';
 import {
   AlertBanner,
   Badge,
@@ -34,6 +35,7 @@ export default function JobsFeedPage() {
   const [total, setTotal] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [matching, setMatching] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -45,11 +47,13 @@ export default function JobsFeedPage() {
   const [country, setCountry] = useState('');
   const [workMode, setWorkMode] = useState('');
   const [seniority, setSeniority] = useState('');
+  const [source, setSource] = useState('');
   const [minSalaryLpa, setMinSalaryLpa] = useState('');
   const [sortBy, setSortBy] = useState<'match_score' | 'recent' | 'salary_lpa'>('match_score');
   const [onlyPassed, setOnlyPassed] = useState(true);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const autoSyncTriggeredRef = useRef(false);
 
   const loadJobs = useCallback(async () => {
     setLoading(true);
@@ -61,6 +65,7 @@ export default function JobsFeedPage() {
           country: country || undefined,
           workMode: workMode || undefined,
           seniority: seniority || undefined,
+          source: source || undefined,
           minSalaryLpa: minSalaryLpa ? Number(minSalaryLpa) : undefined,
           sortBy,
           onlyPassed,
@@ -82,11 +87,53 @@ export default function JobsFeedPage() {
     } finally {
       setLoading(false);
     }
-  }, [q, country, workMode, seniority, minSalaryLpa, sortBy, onlyPassed]);
+  }, [q, country, workMode, seniority, source, minSalaryLpa, sortBy, onlyPassed]);
 
   useEffect(() => {
     void loadJobs();
   }, [loadJobs]);
+
+  const handleSyncSources = useCallback(
+    async (force: boolean) => {
+      setSyncing(true);
+      setErrorMsg(null);
+      try {
+        const res = await api.syncJobs({ mode: 'quick', force });
+        if (!res.skipped) {
+          setStatusMsg(
+            `Synced ${res.boardSuccess} company boards & ${res.aggregatorCount} job feeds (+${res.insertedCount} new, ${res.updatedCount} refreshed).`
+          );
+        }
+        await loadJobs();
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : 'Failed to sync job sources.');
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [loadJobs]
+  );
+
+  useEffect(() => {
+    let active = true;
+    async function checkAndAutoSync() {
+      if (autoSyncTriggeredRef.current) return;
+      try {
+        const status = await api.getJobSyncStatus();
+        if (!active || autoSyncTriggeredRef.current) return;
+        if (status.isStale || status.totalActiveJobs === 0) {
+          autoSyncTriggeredRef.current = true;
+          await handleSyncSources(false);
+        }
+      } catch {
+        // ignore initial status probe failure; user can click Sync Sources manually
+      }
+    }
+    void checkAndAutoSync();
+    return () => {
+      active = false;
+    };
+  }, [handleSyncSources]);
 
   const selectedItem = items.find((i) => i.job.id === selectedId) ?? items[0] ?? null;
 
@@ -182,12 +229,32 @@ export default function JobsFeedPage() {
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="neutral">{total} jobs</Badge>
-          <Button variant="primary" onClick={handleRefreshMatches} disabled={matching}>
-            {matching ? 'Scoring matches...' : 'Run 3-Stage Match'}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void handleSyncSources(true)}
+            disabled={syncing}
+          >
+            {syncing ? 'Syncing...' : 'Sync Sources'}
+          </Button>
+          <Button variant="primary" size="sm" onClick={handleRefreshMatches} disabled={matching}>
+            {matching ? 'Scoring matches...' : 'AI Deep Rank'}
           </Button>
         </div>
       }
     >
+      {syncing ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="border border-[var(--hairline-strong)] bg-[var(--surface-soft)] px-4 py-3 text-xs flex items-center gap-3"
+        >
+          <MoSpinner name="braille" className="text-[var(--accent)] font-bold" />
+          <span>
+            Syncing official ATS boards &amp; public job feeds into your catalog...
+          </span>
+        </div>
+      ) : null}
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
       {statusMsg ? <AlertBanner tone="success" message={statusMsg} /> : null}
 
@@ -199,7 +266,7 @@ export default function JobsFeedPage() {
               e.preventDefault();
               void loadJobs();
             }}
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end"
           >
             <div className="lg:col-span-2 flex flex-col gap-1">
               <label htmlFor="feed-search" className="text-xs text-[var(--mute)]">
@@ -285,7 +352,35 @@ export default function JobsFeedPage() {
               />
             </div>
 
-            <div className="lg:col-span-6 flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[var(--hairline)]">
+            <div className="flex flex-col gap-1">
+              <label htmlFor="feed-source" className="text-xs text-[var(--mute)]">
+                Source
+              </label>
+              <Select
+                id="feed-source"
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+              >
+                <option value="">All sources</option>
+                <option value="greenhouse">Greenhouse</option>
+                <option value="lever">Lever</option>
+                <option value="ashby">Ashby</option>
+                <option value="workable">Workable</option>
+                <option value="smartrecruiters">SmartRecruiters</option>
+                <option value="himalayas">Himalayas</option>
+                <option value="jobicy">Jobicy</option>
+                <option value="themuse">The Muse</option>
+                <option value="hackernews">Hacker News</option>
+                <option value="remotive">Remotive</option>
+                <option value="arbeitnow">Arbeitnow</option>
+                <option value="remoteok">RemoteOK</option>
+                <option value="adzuna">Adzuna</option>
+                <option value="jooble">Jooble</option>
+                <option value="jsearch">JSearch</option>
+              </Select>
+            </div>
+
+            <div className="lg:col-span-7 flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[var(--hairline)]">
               <div className="flex flex-wrap items-center gap-4 text-xs">
                 <label className="inline-flex items-center gap-2 cursor-pointer">
                   <input
@@ -345,12 +440,23 @@ export default function JobsFeedPage() {
         </div>
       ) : items.length === 0 ? (
         <EmptyState
-          title="No matching jobs in catalog yet"
-          description="Run the official ATS + India feed crawler locally (`npm run crawl --workspace=@jobpilot/ingestion && npm run embed --workspace=@jobpilot/ingestion`) or trigger the Crawl GitHub Action, then click Run 3-Stage Match."
+          title={syncing ? 'Syncing live job feeds...' : 'No matching jobs for current filters'}
+          description="Sync live official ATS boards and public tech feeds now, or include near matches outside strict filters."
           action={
-            <Button variant="secondary" onClick={() => setOnlyPassed(false)}>
-              Show all jobs (including filtered)
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="primary"
+                onClick={() => void handleSyncSources(true)}
+                disabled={syncing}
+              >
+                {syncing ? 'Syncing...' : 'Sync Live Sources Now'}
+              </Button>
+              {onlyPassed ? (
+                <Button variant="secondary" onClick={() => setOnlyPassed(false)}>
+                  Show Near Matches
+                </Button>
+              ) : null}
+            </div>
           }
         />
       ) : (

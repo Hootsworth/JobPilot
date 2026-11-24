@@ -11,7 +11,13 @@ import {
   type JobMatch,
   type MasterProfile
 } from '@jobpilot/shared';
-import { evaluateHardFilters, runThreeStageMatching, type JobForMatching } from '../index.js';
+import {
+  computeRoleTitleRelevance,
+  computeStretchScore,
+  evaluateHardFilters,
+  runThreeStageMatching,
+  type JobForMatching
+} from '../index.js';
 
 function makeProfile(overrides: Partial<MasterProfile> = {}): MasterProfile {
   const jsonResume = createEmptyJsonResume();
@@ -204,5 +210,100 @@ describe('@jobpilot/ingestion 3-stage matching', () => {
     const j1Match = result.matches.find((m) => m.jobId === job1.id);
     expect(j1Match?.llmScore).toBe(92);
     expect(j1Match?.skillGaps).toEqual(['Kafka']);
+  });
+
+  it('scores without embeddings using role relevance, produces non-zero stretch scores, upgrades heuristic matches with LLM, and preserves company dismiss penalties', async () => {
+    const profile = makeProfile();
+    const roleMatchJob = makeJob('00000000-0000-4000-8000-000000000011', {
+      title: 'Server Software Engineer (SDE-1)',
+      companyName: 'DismissedCorp',
+      embedding: null
+    });
+    const stretchJob = makeJob('00000000-0000-4000-8000-000000000012', {
+      title: 'Backend Engineer',
+      city: 'Chennai',
+      workMode: 'onsite',
+      embedding: null
+    });
+
+    expect(computeRoleTitleRelevance(profile, roleMatchJob)).toBeGreaterThan(0.5);
+    expect(computeStretchScore(0.6, ['City mismatch'])).toBeGreaterThan(20);
+
+    // Day-1 auto-match without embeddings & without LLM
+    const heuristicRun = await runThreeStageMatching({
+      profile,
+      jobs: [roleMatchJob, stretchJob],
+      profileEmbedding: null,
+      existingMatchesByJobId: new Map([
+        [
+          roleMatchJob.id,
+          {
+            jobId: roleMatchJob.id,
+            profileVersion: 3,
+            hardFilterPassed: true,
+            hardFilterReasons: ['dismiss_reason:company'],
+            vectorSimilarity: null,
+            llmScore: null,
+            matchReason: null,
+            matchedSkills: [],
+            skillGaps: [],
+            provider: null,
+            model: null,
+            dismissed: true,
+            computedAt: new Date().toISOString()
+          }
+        ]
+      ]),
+      dismissedCompanies: new Set(['dismissedcorp'])
+    });
+
+    const autoMatch = heuristicRun.matches.find((m) => m.jobId === roleMatchJob.id)!;
+    const stretchMatch = heuristicRun.matches.find((m) => m.jobId === stretchJob.id)!;
+    expect(autoMatch.provider).toBeNull();
+    expect(autoMatch.llmScore).toBeGreaterThanOrEqual(15);
+    expect(autoMatch.hardFilterReasons).toContain('dismiss_reason:company');
+    expect(stretchMatch.hardFilterPassed).toBe(false);
+    expect(stretchMatch.llmScore).toBeGreaterThan(0);
+    expect(stretchMatch.llmScore).toBeLessThanOrEqual(68);
+
+    // Heuristic-only match gets upgraded when LLM provider is supplied
+    const generateStructured = vi.fn(async () => ({
+      data: {
+        results: [
+          {
+            jobId: roleMatchJob.id,
+            score: 88,
+            oneLineReason: 'Upgraded by LLM.',
+            matchedSkills: ['TypeScript'],
+            skillGaps: []
+          }
+        ]
+      },
+      provider: 'gemini' as const,
+      model: 'gemini-live',
+      inputTokens: 50,
+      outputTokens: 30,
+      latencyMs: 60,
+      estimatedCostUsd: 0.0001,
+      retryCount: 0,
+      usedRepair: false
+    }));
+
+    const llmUpgradeRun = await runThreeStageMatching({
+      profile,
+      jobs: [roleMatchJob],
+      profileEmbedding: null,
+      existingMatchesByJobId: new Map([[roleMatchJob.id, autoMatch]]),
+      llmProvider: {
+        providerId: 'gemini',
+        generateStructured
+      } as unknown as LlmProvider
+    });
+
+    expect(generateStructured).toHaveBeenCalledTimes(1);
+    const upgraded = llmUpgradeRun.matches.find((m) => m.jobId === roleMatchJob.id)!;
+    expect(upgraded.provider).toBe('gemini');
+    expect(upgraded.llmScore).toBe(88);
+    expect(upgraded.hardFilterReasons).toContain('dismiss_reason:company');
   });
 });

@@ -48,7 +48,7 @@ function LoginInner() {
     if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) {
-        router.replace('/jobs');
+        router.replace('/');
       }
     });
   }, [router]);
@@ -125,7 +125,7 @@ function LoginInner() {
           password
         });
         if (error) throw error;
-        router.replace('/jobs');
+        router.replace('/');
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Authentication failed.');

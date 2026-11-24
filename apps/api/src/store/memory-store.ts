@@ -15,10 +15,13 @@ import {
   type CrawlRunSummary,
   type CreateManualApplicationRequest,
   type CreateProfileVariantRequest,
+  type DismissReason,
   type JdRequirements,
+  type JobFeedBucket,
   type JobFeedItem,
   type JobFeedQuery,
   type JobMatch,
+  type JobRecord,
   type JobSighting,
   type JobSourceStatus,
   type LlmProviderId,
@@ -35,7 +38,11 @@ import {
   type UpsertStoryRequest,
   type VerifierReport
 } from '@jobpilot/shared';
-import type { JobForMatching } from '@jobpilot/ingestion';
+import type {
+  DedupedJobBundle,
+  JobForMatching,
+  SourceCacheEntry
+} from '@jobpilot/ingestion';
 import type { LlmCallLogEntry } from '@jobpilot/llm';
 import type {
   AccountExportPayload,
@@ -46,8 +53,47 @@ import type {
   LlmSettingPatch,
   ProfilePatch,
   StoredLlmSetting,
-  UpdateCoverLetterPatch
+  UpdateCoverLetterPatch,
+  UpsertJobSourceStatusInput
 } from './types.js';
+
+export function isIndiaJob(job: Pick<JobRecord, 'countryCode' | 'locationRaw'>): boolean {
+  if (job.countryCode?.toUpperCase() === 'IN') return true;
+  return /\b(india|bengaluru|bangalore|hyderabad|pune|gurugram|gurgaon|noida|delhi|mumbai|chennai|kolkata)\b/i.test(
+    job.locationRaw ?? ''
+  );
+}
+
+export function isFreshJob(
+  job: Pick<JobRecord, 'postedAt' | 'lastSeenAt'>,
+  hours: number = 48
+): boolean {
+  const ts = Date.parse(job.postedAt ?? job.lastSeenAt);
+  if (!Number.isFinite(ts)) return false;
+  return Date.now() - ts <= hours * 3600 * 1000;
+}
+
+export function matchesFeedBucket(
+  item: JobFeedItem,
+  bucket?: JobFeedBucket,
+  freshHours?: number
+): boolean {
+  if (freshHours != null && !isFreshJob(item.job, freshHours)) return false;
+  if (!bucket || bucket === 'all') return true;
+  const passedOrUnscored = !item.match || item.match.hardFilterPassed;
+  if (bucket === 'near_matches') return Boolean(item.match && !item.match.hardFilterPassed);
+  if (bucket === 'for_you') return passedOrUnscored;
+  if (bucket === 'fresh') return passedOrUnscored && isFreshJob(item.job, freshHours ?? 48);
+  if (bucket === 'india') return passedOrUnscored && isIndiaJob(item.job);
+  if (bucket === 'remote') return passedOrUnscored && item.job.workMode === 'remote';
+  return true;
+}
+
+export function mergeDismissReason(existingReasons: string[], reason?: DismissReason): string[] {
+  if (!reason) return existingReasons;
+  const filtered = existingReasons.filter((r) => !r.startsWith('dismiss_reason:'));
+  return [...filtered, `dismiss_reason:${reason}`];
+}
 
 export function slugifyVariantName(name: string, existingSlugs: Set<string>): string {
   const base =
@@ -148,6 +194,7 @@ export class MemoryDataStore implements DataStore {
   >();
   private applicationEvents = new Map<string, ApplicationEventRecord[]>();
   private sources: JobSourceStatus[] = [];
+  private sourceCacheMeta = new Map<string, SourceCacheEntry>();
   private crawlRuns: CrawlRunSummary[] = [];
   private jobParsedReqs = new Map<string, JdRequirements>();
   private renderedPdfs = new Map<string, Buffer>();
@@ -574,9 +621,17 @@ export class MemoryDataStore implements DataStore {
           const hay = `${job.title} ${job.companyName} ${job.locationRaw ?? ''} ${job.extractedSkills.join(' ')}`.toLowerCase();
           if (!hay.includes(needle)) return false;
         }
-        const match = matchByJob.get(job.id);
+        const match = matchByJob.get(job.id) ?? null;
         if (!query.includeDismissed && match?.dismissed) return false;
-        if (query.onlyPassed && match && !match.hardFilterPassed) return false;
+        if (query.onlyPassed && query.bucket !== 'near_matches' && match && !match.hardFilterPassed) {
+          return false;
+        }
+        const tempItem: JobFeedItem = {
+          job,
+          match,
+          applicationStatus: appsByJob.get(job.id)?.status ?? null
+        };
+        if (!matchesFeedBucket(tempItem, query.bucket, query.freshHours)) return false;
         return true;
       })
       .map<JobFeedItem>((job) => {
@@ -642,7 +697,7 @@ export class MemoryDataStore implements DataStore {
     };
   }
 
-  async listActiveJobsForMatching(userId: string, limit: number = 200): Promise<JobForMatching[]> {
+  async listActiveJobsForMatching(userId: string, limit: number = 600): Promise<JobForMatching[]> {
     return structuredClone(
       this.jobs
         .filter((j) => j.isActive && (!j.ownerUserId || j.ownerUserId === userId))
@@ -673,12 +728,17 @@ export class MemoryDataStore implements DataStore {
     userId: string,
     jobId: string,
     profileVersion: number,
-    dismissed: boolean
+    dismissed: boolean,
+    reason?: DismissReason
   ): Promise<boolean> {
     const list = this.jobMatchesByUser.get(userId) ?? [];
     const idx = list.findIndex((m) => m.jobId === jobId && m.profileVersion === profileVersion);
     if (idx >= 0) {
-      list[idx] = { ...list[idx]!, dismissed };
+      list[idx] = {
+        ...list[idx]!,
+        dismissed,
+        hardFilterReasons: mergeDismissReason(list[idx]!.hardFilterReasons, reason)
+      };
       return true;
     }
     const existsJob = this.jobs.some((j) => j.id === jobId);
@@ -687,7 +747,7 @@ export class MemoryDataStore implements DataStore {
       jobId,
       profileVersion,
       hardFilterPassed: true,
-      hardFilterReasons: [],
+      hardFilterReasons: mergeDismissReason([], reason),
       vectorSimilarity: null,
       llmScore: null,
       matchReason: null,
@@ -843,6 +903,163 @@ export class MemoryDataStore implements DataStore {
       sources: structuredClone(this.sources),
       recentRuns: structuredClone(this.crawlRuns)
     };
+  }
+
+  async listJobSourceCache(): Promise<Map<string, SourceCacheEntry>> {
+    return structuredClone(this.sourceCacheMeta);
+  }
+
+  async upsertPublicJobsBatch(
+    bundles: DedupedJobBundle[]
+  ): Promise<{ insertedCount: number; updatedCount: number }> {
+    let insertedCount = 0;
+    let updatedCount = 0;
+    const nowIso = new Date().toISOString();
+
+    for (const bundle of bundles) {
+      const c = bundle.canonical;
+      const idx = this.jobs.findIndex(
+        (j) => !j.ownerUserId && j.dedupeFingerprint === bundle.fingerprint
+      );
+      if (idx === -1) {
+        const jobId = randomUUID();
+        this.jobs.unshift({
+          id: jobId,
+          ownerUserId: null,
+          dedupeFingerprint: bundle.fingerprint,
+          sourceType: c.sourceType,
+          externalId: c.externalId,
+          sourceUrl: c.sourceUrl,
+          applyUrl: c.applyUrl ?? c.sourceUrl,
+          companyName: c.companyName,
+          companyDomain: c.companyDomain ?? null,
+          companyLogoUrl: c.companyLogoUrl ?? null,
+          title: c.title,
+          normalizedTitle: c.normalizedTitle,
+          locationRaw: c.locationRaw,
+          city: c.city,
+          countryCode: c.countryCode,
+          workMode: c.workMode,
+          seniority: c.seniority,
+          experienceMinYears: c.experienceMinYears,
+          experienceMaxYears: c.experienceMaxYears,
+          salaryMin: c.salaryMin,
+          salaryMax: c.salaryMax,
+          salaryCurrency: c.salaryCurrency,
+          salaryPeriod: c.salaryPeriod,
+          salaryMinLpa: c.salaryMinLpa,
+          salaryMaxLpa: c.salaryMaxLpa,
+          descriptionClean: c.descriptionClean,
+          extractedSkills: c.extractedSkills,
+          postedAt: c.postedAt,
+          isActive: true,
+          lastSeenAt: nowIso,
+          embeddingModel: null,
+          embeddingModelVersion: null,
+          embeddedAt: null,
+          sightingsCount: Math.max(1, bundle.sightings.length),
+          embedding: null
+        });
+        this.sightingsByJobId.set(jobId, structuredClone(bundle.sightings));
+        insertedCount++;
+      } else {
+        const prev = this.jobs[idx]!;
+        const existingSightings = this.sightingsByJobId.get(prev.id) ?? [];
+        const mergedSightings = [...existingSightings];
+        for (const s of bundle.sightings) {
+          if (!mergedSightings.some((m) => m.sourceType === s.sourceType && m.externalId === s.externalId)) {
+            mergedSightings.push(s);
+          }
+        }
+        this.jobs[idx] = {
+          ...prev,
+          isActive: true,
+          lastSeenAt: nowIso,
+          city: prev.city ?? c.city,
+          countryCode: prev.countryCode ?? c.countryCode,
+          salaryMinLpa: prev.salaryMinLpa ?? c.salaryMinLpa,
+          salaryMaxLpa: prev.salaryMaxLpa ?? c.salaryMaxLpa,
+          descriptionClean:
+            c.descriptionClean.length > prev.descriptionClean.length
+              ? c.descriptionClean
+              : prev.descriptionClean,
+          extractedSkills: Array.from(new Set([...prev.extractedSkills, ...c.extractedSkills])),
+          postedAt: prev.postedAt ?? c.postedAt,
+          sightingsCount: Math.max(1, mergedSightings.length)
+        };
+        this.sightingsByJobId.set(prev.id, mergedSightings);
+        updatedCount++;
+      }
+    }
+
+    return { insertedCount, updatedCount };
+  }
+
+  async upsertJobSourceStatus(input: UpsertJobSourceStatusInput): Promise<void> {
+    const key = `${input.sourceType}:${input.slug}`;
+    this.sourceCacheMeta.set(key, {
+      etag: input.etag,
+      lastModified: input.lastModified,
+      lastCrawledAt: input.lastCrawledAt,
+      consecutiveFailures: input.consecutiveFailures
+    });
+    const idx = this.sources.findIndex(
+      (s) => s.sourceType === input.sourceType && s.slug === input.slug
+    );
+    const next: JobSourceStatus = {
+      id: idx >= 0 ? this.sources[idx]!.id : randomUUID(),
+      sourceType: input.sourceType,
+      slug: input.slug,
+      displayName: input.displayName,
+      regionFocus: input.regionFocus,
+      enabled: input.enabled,
+      lastCrawledAt: input.lastCrawledAt,
+      lastStatus: input.lastStatus,
+      consecutiveFailures: input.consecutiveFailures
+    };
+    if (idx >= 0) this.sources[idx] = next;
+    else this.sources.push(next);
+  }
+
+  async startCrawlRun(jobName: string): Promise<string> {
+    const id = randomUUID();
+    this.crawlRuns.unshift({
+      id,
+      jobName,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      status: 'running',
+      stats: {}
+    });
+    return id;
+  }
+
+  async finishCrawlRun(
+    runId: string,
+    status: 'ok' | 'error',
+    stats: Record<string, unknown>
+  ): Promise<void> {
+    const idx = this.crawlRuns.findIndex((r) => r.id === runId);
+    if (idx >= 0) {
+      this.crawlRuns[idx] = {
+        ...this.crawlRuns[idx]!,
+        finishedAt: new Date().toISOString(),
+        status,
+        stats
+      };
+    }
+  }
+
+  async countActiveJobs(userId: string): Promise<{ total: number; bySource: Record<string, number> }> {
+    const bySource: Record<string, number> = {};
+    let total = 0;
+    for (const j of this.jobs) {
+      if (!j.isActive) continue;
+      if (j.ownerUserId && j.ownerUserId !== userId) continue;
+      total++;
+      bySource[j.sourceType] = (bySource[j.sourceType] ?? 0) + 1;
+    }
+    return { total, bySource };
   }
 
   async getJobForTailoring(

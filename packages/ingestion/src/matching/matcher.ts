@@ -32,6 +32,7 @@ export interface RunThreeStageMatchingParams {
   topKVector?: number;
   topKLlm?: number;
   forceRecompute?: boolean;
+  dismissedCompanies?: Set<string>;
 }
 
 export interface MatchingRunResult {
@@ -44,6 +45,97 @@ export interface MatchingRunResult {
     llmScored: number;
     heuristicScored: number;
   };
+}
+
+const ROLE_ALIAS_GROUPS: Array<[string, RegExp]> = [
+  ['software', /\b(sde|swe|software|developer|programmer|engineer)\b/i],
+  ['backend', /\b(backend|back-end|back end|api|server|distributed|systems)\b/i],
+  ['frontend', /\b(frontend|front-end|front end|ui|react|next\.js|angular|vue)\b/i],
+  ['fullstack', /\b(fullstack|full-stack|full stack)\b/i],
+  ['ml_ai', /\b(ml|ai|machine learning|deep learning|llm|nlp|genai)\b/i],
+  ['data', /\b(data|analytics|etl|warehouse|spark|bi)\b/i],
+  ['devops', /\b(devops|sre|platform|cloud|infra|infrastructure|kubernetes)\b/i],
+  ['mobile', /\b(mobile|android|ios|flutter|react native)\b/i],
+  ['product', /\b(product manager|product management|\bpm\b|product owner)\b/i],
+  ['design', /\b(design|designer|ux|ui\/ux|figma)\b/i]
+];
+
+export function computeRoleTitleRelevance(
+  profile: MasterProfile,
+  job: Pick<JobRecord, 'title' | 'normalizedTitle' | 'descriptionClean'>
+): number {
+  const candidatePhrases = [
+    ...profile.searchPreferences.targetRoles,
+    profile.jsonResume.basics.label,
+    ...profile.jsonResume.work.slice(0, 2).map((w) => w.position)
+  ]
+    .map((p) => p?.trim())
+    .filter((p): p is string => Boolean(p));
+
+  if (candidatePhrases.length === 0) return 0.5;
+
+  const candText = candidatePhrases.join(' ').toLowerCase();
+  const jobTitleText = `${job.title} ${job.normalizedTitle ?? ''}`.toLowerCase();
+
+  const candGroups = new Set<string>();
+  const jobGroups = new Set<string>();
+  for (const [group, pattern] of ROLE_ALIAS_GROUPS) {
+    if (pattern.test(candText)) candGroups.add(group);
+    if (pattern.test(jobTitleText)) jobGroups.add(group);
+  }
+
+  let aliasScore = 0;
+  if (candGroups.size > 0 && jobGroups.size > 0) {
+    let hits = 0;
+    for (const g of candGroups) {
+      if (jobGroups.has(g)) hits++;
+    }
+    aliasScore = hits / candGroups.size;
+  }
+
+  const candTokens = Array.from(
+    new Set(
+      candText
+        .replace(/[^a-z0-9]+/g, ' ')
+        .split(/\s+/)
+        .filter((t) => t.length >= 2 && !['and', 'the', 'for', 'with'].includes(t))
+    )
+  );
+  let tokenHits = 0;
+  for (const tok of candTokens) {
+    if (jobTitleText.includes(tok)) tokenHits++;
+  }
+  const tokenScore = candTokens.length > 0 ? tokenHits / candTokens.length : 0;
+
+  return Math.round(Math.min(1, Math.max(aliasScore, tokenScore * 0.9 + aliasScore * 0.2)) * 1000) / 1000;
+}
+
+export function computeFreshnessBoost(postedAt: string | null | undefined): number {
+  if (!postedAt) return 0;
+  const ms = Date.parse(postedAt);
+  if (!Number.isFinite(ms)) return 0;
+  const ageHours = (Date.now() - ms) / (1000 * 60 * 60);
+  if (ageHours <= 48) return 5;
+  if (ageHours <= 24 * 7) return 3;
+  return 0;
+}
+
+export function computeStretchScore(similarity: number, reasons: string[]): number {
+  let score = Math.round(similarity * 68 + 10);
+  for (const reason of reasons) {
+    if (/\bstaff\b|\blead\b|\bmanager\b|exceeds max preference|requires\s+(?:[4-9]|\d{2})\+/i.test(reason)) {
+      score -= 24;
+    } else {
+      score -= 12;
+    }
+  }
+  return Math.max(5, Math.min(68, score));
+}
+
+export function preserveDismissReasonTags(reasons: string[], existing?: JobMatch): string[] {
+  const tags = (existing?.hardFilterReasons ?? []).filter((r) => r.startsWith('dismiss_reason:'));
+  if (tags.length === 0) return reasons;
+  return Array.from(new Set([...reasons, ...tags]));
 }
 
 export function extractProfileSkills(
@@ -154,7 +246,8 @@ export async function runThreeStageMatching(
     llmModel,
     topKVector = 30,
     topKLlm = 15,
-    forceRecompute = false
+    forceRecompute = false,
+    dismissedCompanies
   } = params;
 
   const nowIso = new Date().toISOString();
@@ -178,8 +271,12 @@ export async function runThreeStageMatching(
     const existing = existingMatchesByJobId.get(job.id);
     const hf = evaluateHardFilters(profile, job);
     const overlap = computeDeterministicSkillOverlap(candidateSkills, job);
+    const roleRelevance = computeRoleTitleRelevance(profile, job);
 
-    let similarity = overlap.similarity;
+    let similarity =
+      0.55 * overlap.similarity +
+      0.35 * roleRelevance +
+      0.1 * (job.extractedSkills.length > 0 ? 0.5 : 0.3);
     if (
       canCompareVectors &&
       profileEmbedding &&
@@ -188,18 +285,21 @@ export async function runThreeStageMatching(
       job.embeddingModelVersion === EMBEDDING_MODEL_VERSION
     ) {
       const vecSim = cosineSimilarity(profileEmbedding.vector, job.embedding);
-      // Blend vector similarity with explicit skill coverage for clean Stage 2 ranking
-      similarity = Math.round((0.8 * Math.max(0, vecSim) + 0.2 * overlap.similarity) * 1000) / 1000;
+      // Blend vector similarity with explicit skill coverage and role relevance
+      similarity =
+        0.65 * Math.max(0, vecSim) + 0.2 * overlap.similarity + 0.15 * roleRelevance;
     }
+    similarity = Math.round(Math.max(0, Math.min(1, similarity)) * 1000) / 1000;
 
     if (!hf.passed) {
+      const stretchScore = computeStretchScore(similarity, hf.reasons);
       failedMatches.push({
         jobId: job.id,
         profileVersion: profile.activeProfileVersion,
         hardFilterPassed: false,
-        hardFilterReasons: hf.reasons,
+        hardFilterReasons: preserveDismissReasonTags(hf.reasons, existing),
         vectorSimilarity: similarity,
-        llmScore: 0,
+        llmScore: stretchScore,
         matchReason: hf.reasons[0] ?? 'Filtered out by hard constraints.',
         matchedSkills: overlap.matchedSkills,
         skillGaps: overlap.skillGaps,
@@ -214,7 +314,7 @@ export async function runThreeStageMatching(
     passedJobs.push({ job, similarity, overlap });
   }
 
-  // Stage 2: Vector retrieval top-K
+  // Stage 2: Vector / deterministic retrieval top-K
   passedJobs.sort((a, b) => b.similarity - a.similarity);
   const vectorCandidates = passedJobs.slice(0, topKVector);
   const llmSlice = vectorCandidates.slice(0, topKLlm);
@@ -229,12 +329,14 @@ export async function runThreeStageMatching(
 
   for (const item of llmSlice) {
     const existing = existingMatchesByJobId.get(item.job.id);
+    const cacheHasLlm = !llmProvider || existing?.provider !== null;
     if (
       !forceRecompute &&
       existing &&
       existing.profileVersion === profile.activeProfileVersion &&
       existing.hardFilterPassed &&
-      existing.llmScore !== null
+      existing.llmScore !== null &&
+      cacheHasLlm
     ) {
       reusedFromCache++;
       finalPassedMatches.push({
@@ -294,7 +396,7 @@ export async function runThreeStageMatching(
               jobId: item.job.id,
               profileVersion: profile.activeProfileVersion,
               hardFilterPassed: true,
-              hardFilterReasons: [],
+              hardFilterReasons: preserveDismissReasonTags([], existing),
               vectorSimilarity: item.similarity,
               llmScore: scored.score,
               matchReason: scored.oneLineReason,
@@ -308,7 +410,14 @@ export async function runThreeStageMatching(
           } else {
             heuristicScored++;
             finalPassedMatches.push(
-              buildHeuristicMatch(item, profile.activeProfileVersion, existing?.dismissed ?? false, nowIso)
+              buildHeuristicMatch(
+                item,
+                profile.activeProfileVersion,
+                existing?.dismissed ?? false,
+                nowIso,
+                dismissedCompanies,
+                existing
+              )
             );
           }
         }
@@ -318,7 +427,14 @@ export async function runThreeStageMatching(
           const existing = existingMatchesByJobId.get(item.job.id);
           heuristicScored++;
           finalPassedMatches.push(
-            buildHeuristicMatch(item, profile.activeProfileVersion, existing?.dismissed ?? false, nowIso)
+            buildHeuristicMatch(
+              item,
+              profile.activeProfileVersion,
+              existing?.dismissed ?? false,
+              nowIso,
+              dismissedCompanies,
+              existing
+            )
           );
         }
       }
@@ -326,19 +442,61 @@ export async function runThreeStageMatching(
   } else {
     for (const item of uncachedForLlm) {
       const existing = existingMatchesByJobId.get(item.job.id);
-      heuristicScored++;
-      finalPassedMatches.push(
-        buildHeuristicMatch(item, profile.activeProfileVersion, existing?.dismissed ?? false, nowIso)
-      );
+      if (
+        !forceRecompute &&
+        existing &&
+        existing.profileVersion === profile.activeProfileVersion &&
+        existing.hardFilterPassed &&
+        existing.llmScore !== null
+      ) {
+        reusedFromCache++;
+        finalPassedMatches.push({
+          ...existing,
+          vectorSimilarity: item.similarity
+        });
+      } else {
+        heuristicScored++;
+        finalPassedMatches.push(
+          buildHeuristicMatch(
+            item,
+            profile.activeProfileVersion,
+            existing?.dismissed ?? false,
+            nowIso,
+            dismissedCompanies,
+            existing
+          )
+        );
+      }
     }
   }
 
   for (const item of remainderSlice) {
     const existing = existingMatchesByJobId.get(item.job.id);
-    heuristicScored++;
-    finalPassedMatches.push(
-      buildHeuristicMatch(item, profile.activeProfileVersion, existing?.dismissed ?? false, nowIso)
-    );
+    if (
+      !forceRecompute &&
+      existing &&
+      existing.profileVersion === profile.activeProfileVersion &&
+      existing.hardFilterPassed &&
+      existing.llmScore !== null
+    ) {
+      reusedFromCache++;
+      finalPassedMatches.push({
+        ...existing,
+        vectorSimilarity: item.similarity
+      });
+    } else {
+      heuristicScored++;
+      finalPassedMatches.push(
+        buildHeuristicMatch(
+          item,
+          profile.activeProfileVersion,
+          existing?.dismissed ?? false,
+          nowIso,
+          dismissedCompanies,
+          existing
+        )
+      );
+    }
   }
 
   return {
@@ -362,22 +520,31 @@ function buildHeuristicMatch(
   },
   profileVersion: number,
   dismissed: boolean,
-  computedAt: string
+  computedAt: string,
+  dismissedCompanies?: Set<string>,
+  existing?: JobMatch
 ): JobMatch {
-  const heuristicScore = Math.max(15, Math.min(96, Math.round(item.similarity * 85 + 12)));
+  const freshness = computeFreshnessBoost(item.job.postedAt);
+  const companyPenalty = dismissedCompanies?.has(item.job.companyName.trim().toLowerCase())
+    ? 15
+    : 0;
+  const heuristicScore = Math.max(
+    15,
+    Math.min(94, Math.round(item.similarity * 82 + 12) + freshness - companyPenalty)
+  );
   const matchedSummary =
     item.overlap.matchedSkills.length > 0
       ? `Matches ${item.overlap.matchedSkills.slice(0, 4).join(', ')}`
-      : 'Passed location, seniority, and salary filters';
+      : 'Matches target role, location, and eligibility filters';
 
   return {
     jobId: item.job.id,
     profileVersion,
     hardFilterPassed: true,
-    hardFilterReasons: [],
+    hardFilterReasons: preserveDismissReasonTags([], existing),
     vectorSimilarity: item.similarity,
     llmScore: heuristicScore,
-    matchReason: `${matchedSummary} (vector/skill baseline).`,
+    matchReason: `${matchedSummary} (auto-ranked).`,
     matchedSkills: item.overlap.matchedSkills,
     skillGaps: item.overlap.skillGaps,
     provider: null,

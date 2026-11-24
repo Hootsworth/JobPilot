@@ -21,6 +21,12 @@ export interface ApiConfig {
   geminiApiKey?: string;
   metaApiKey?: string;
   metaBaseUrl: string;
+  adzunaAppId?: string;
+  adzunaAppKey?: string;
+  joobleApiKey?: string;
+  jsearchRapidApiKey?: string;
+  jobSyncStaleHours: number;
+  autoSyncIntervalHours: number;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): ApiConfig {
@@ -41,6 +47,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     env['SUPABASE_SERVICE_ROLE_KEY']?.trim() ||
     '';
 
+  const rawAutoSync = Number.parseInt(env['AUTO_SYNC_INTERVAL_HOURS'] ?? '6', 10);
+  const rawStale = Number.parseInt(env['JOB_SYNC_STALE_HOURS'] ?? '6', 10);
+
   return {
     port: Number.isFinite(port) && port > 0 ? port : 4000,
     host: env['API_HOST'] ?? '0.0.0.0',
@@ -57,6 +66,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     openaiApiKey: env['OPENAI_API_KEY']?.trim() || undefined,
     geminiApiKey: env['GEMINI_API_KEY']?.trim() || undefined,
     metaApiKey: env['META_API_KEY']?.trim() || undefined,
-    metaBaseUrl: env['META_BASE_URL']?.trim() || 'https://api.llama.com/compat/v1/'
+    metaBaseUrl: env['META_BASE_URL']?.trim() || 'https://api.llama.com/compat/v1/',
+    adzunaAppId: env['ADZUNA_APP_ID']?.trim() || undefined,
+    adzunaAppKey: env['ADZUNA_APP_KEY']?.trim() || undefined,
+    joobleApiKey: env['JOOBLE_API_KEY']?.trim() || undefined,
+    jsearchRapidApiKey: env['JSEARCH_RAPIDAPI_KEY']?.trim() || undefined,
+    jobSyncStaleHours: Number.isFinite(rawStale) ? Math.max(1, rawStale) : 6,
+    autoSyncIntervalHours: Number.isFinite(rawAutoSync) ? Math.max(0, rawAutoSync) : 6
   };
 }

@@ -68,6 +68,7 @@ export interface PoliteHttpClientOptions {
   maxRetries?: number;
   baseBackoffMs?: number;
   respectRobots?: boolean;
+  timeoutMs?: number;
 }
 
 export class PoliteHttpClient {
@@ -78,6 +79,7 @@ export class PoliteHttpClient {
   private readonly maxRetries: number;
   private readonly baseBackoffMs: number;
   private readonly respectRobots: boolean;
+  private readonly timeoutMs: number;
   private readonly responseCache = new Map<string, HttpResponseEnvelope<unknown>>();
 
   constructor(options: PoliteHttpClientOptions = {}) {
@@ -90,6 +92,7 @@ export class PoliteHttpClient {
     this.maxRetries = options.maxRetries ?? 2;
     this.baseBackoffMs = options.baseBackoffMs ?? 500;
     this.respectRobots = options.respectRobots ?? true;
+    this.timeoutMs = options.timeoutMs ?? 8000;
   }
 
   async getJson<T>(
@@ -98,6 +101,7 @@ export class PoliteHttpClient {
       headers?: Record<string, string>;
       conditional?: HttpConditionalHeaders;
       skipCache?: boolean;
+      timeoutMs?: number;
     } = {}
   ): Promise<HttpResponseEnvelope<T>> {
     return this.requestJson<T>('GET', url, undefined, options);
@@ -109,6 +113,7 @@ export class PoliteHttpClient {
     options: {
       headers?: Record<string, string>;
       skipCache?: boolean;
+      timeoutMs?: number;
     } = {}
   ): Promise<HttpResponseEnvelope<T>> {
     return this.requestJson<T>('POST', url, body, options);
@@ -122,6 +127,7 @@ export class PoliteHttpClient {
       headers?: Record<string, string>;
       conditional?: HttpConditionalHeaders;
       skipCache?: boolean;
+      timeoutMs?: number;
     }
   ): Promise<HttpResponseEnvelope<T>> {
     const parsedUrl = assertHostAllowedForServerCrawl(url);
@@ -154,13 +160,33 @@ export class PoliteHttpClient {
       headers.set('If-Modified-Since', options.conditional.lastModified);
     }
 
+    const effectiveTimeout = options.timeoutMs ?? this.timeoutMs;
+
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       await this.rateLimiter.waitForSlot(parsedUrl.hostname, crawlDelayMs);
-      const res = await this.fetchFn(url, {
-        method,
-        headers,
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {})
-      });
+      const signal =
+        effectiveTimeout > 0 &&
+        typeof AbortSignal !== 'undefined' &&
+        typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(effectiveTimeout)
+          : undefined;
+
+      let res: Response;
+      try {
+        res = await this.fetchFn(url, {
+          method,
+          headers,
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+          ...(signal ? { signal } : {})
+        });
+      } catch (err) {
+        if (attempt < this.maxRetries) {
+          const delayMs = this.baseBackoffMs * Math.pow(2, attempt);
+          await this.rateLimiter.sleep(delayMs);
+          continue;
+        }
+        throw err instanceof Error ? err : new Error(String(err));
+      }
 
       const etag = res.headers.get('etag');
       const lastModified = res.headers.get('last-modified');

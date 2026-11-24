@@ -10,12 +10,14 @@ import type {
   CrawlRunSummary,
   CreateManualApplicationRequest,
   CreateProfileVariantRequest,
+  DismissReason,
   GenerateCoverLetterRequest,
   GithubImportRequest,
   ImportPreviewCandidate,
   JobFeedItem,
   JobSighting,
   JobSourceStatus,
+  JobSyncStatus,
   LlmProviderId,
   LlmSettingsItem,
   LlmUsageSummary,
@@ -24,9 +26,11 @@ import type {
   ParsedResumeOutput,
   ProfileStory,
   ProfileVariantRecord,
+  RecommendationsResponse,
   RefreshMatchesRequest,
   ResumeVersionRecord,
   SavedAnswer,
+  SyncJobsRequest,
   TailorResumeRequest,
   TestLlmKeyRequest,
   TestLlmKeyResult,
@@ -231,6 +235,25 @@ export const api = {
     apiFetch<{ item: JobFeedItem; sightings: JobSighting[] }>(`/api/jobs/${jobId}`),
   listJobSources: () =>
     apiFetch<{ sources: JobSourceStatus[]; recentRuns: CrawlRunSummary[] }>('/api/jobs/sources'),
+  getRecommendations: () => apiFetch<RecommendationsResponse>('/api/jobs/recommendations'),
+  getJobSyncStatus: () => apiFetch<JobSyncStatus>('/api/jobs/sync/status'),
+  syncJobs: (payload: Partial<SyncJobsRequest> = {}) =>
+    apiFetch<{
+      alreadyRunning: boolean;
+      skipped: boolean;
+      reason?: string;
+      insertedCount: number;
+      updatedCount: number;
+      rawJobsCount: number;
+      dedupedCount: number;
+      boardSuccess: number;
+      boardFailures: number;
+      aggregatorCount: number;
+      syncStatus: JobSyncStatus;
+    }>('/api/jobs/sync', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   refreshMatches: (payload: Partial<RefreshMatchesRequest> = {}) =>
     apiFetch<{
       profileVersion: number;
@@ -248,10 +271,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  dismissJob: (jobId: string, dismissed: boolean = true) =>
+  dismissJob: (jobId: string, dismissed: boolean = true, reason?: DismissReason) =>
     apiFetch<{ ok: boolean }>(`/api/jobs/${jobId}/dismiss`, {
       method: 'POST',
-      body: JSON.stringify({ dismissed })
+      body: JSON.stringify({ dismissed, ...(reason ? { reason } : {}) })
     }),
   saveJob: (jobId: string) =>
     apiFetch<{ id: string; status: string }>(`/api/jobs/${jobId}/save`, {

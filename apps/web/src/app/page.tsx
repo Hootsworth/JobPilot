@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { RecommendationsHome } from '@/components/home/recommendations-home';
 import { ThemeQuickToggle } from '@/components/theme-toggle';
 import { MoBar, MoDecode } from '@/components/ui/mo';
 import {
@@ -129,17 +130,47 @@ const FAQ_ITEMS = [
 ];
 
 export default function LandingPage() {
+  const [authChecked, setAuthChecked] = useState(false);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+  const [forceLanding, setForceLanding] = useState(false);
   const [activeStageId, setActiveStageId] = useState<TuiStageId>('parse');
   const [openFaqIdx, setOpenFaqIdx] = useState<number | null>(0);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      setForceLanding(params.get('view') === 'landing');
+    }
+
     const supabase = getSupabaseClient();
-    if (!supabase) return;
+    if (!supabase) {
+      setAuthChecked(true);
+      return;
+    }
     supabase.auth.getSession().then(({ data }) => {
       setSignedInEmail(data.session?.user?.email ?? null);
+      setAuthChecked(true);
     });
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+      setSignedInEmail(session?.user?.email ?? null);
+      setAuthChecked(true);
+    });
+    return () => {
+      sub.subscription.unsubscribe();
+    };
   }, []);
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-[var(--canvas)] text-[var(--ink)] flex items-center justify-center text-xs text-[var(--mute)]">
+        Loading workspace...
+      </div>
+    );
+  }
+
+  if (signedInEmail && !forceLanding) {
+    return <RecommendationsHome />;
+  }
 
   const activeStage = TUI_STAGES.find((s) => s.id === activeStageId) ?? TUI_STAGES[0]!;
 
@@ -167,9 +198,9 @@ export default function LandingPage() {
             </a>
             <ThemeQuickToggle />
             {signedInEmail ? (
-              <Link href="/jobs">
+              <Link href="/?view=home" onClick={() => setForceLanding(false)}>
                 <Button variant="primary" size="sm">
-                  Workspace -&gt;
+                  Recommendations -&gt;
                 </Button>
               </Link>
             ) : (
@@ -428,8 +459,12 @@ export default function LandingPage() {
 
           <div className="flex flex-wrap items-center gap-6">
             {signedInEmail ? (
-              <Link href="/jobs" className="text-[var(--ink)] no-underline hover:underline">
-                Open Workspace -&gt;
+              <Link
+                href="/"
+                onClick={() => setForceLanding(false)}
+                className="text-[var(--ink)] no-underline hover:underline"
+              >
+                Open Home Feed -&gt;
               </Link>
             ) : (
               <>

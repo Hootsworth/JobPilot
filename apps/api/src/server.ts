@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createSupabaseAuthVerifier } from './plugins/auth.js';
+import { JobSyncService } from './services/job-sync.js';
 import { SupabaseDataStore } from './store/supabase-store.js';
 
 function loadEnvIfPresent() {
@@ -59,14 +60,26 @@ async function main() {
 
   const store = new SupabaseDataStore(config.supabaseUrl, config.supabaseSecretKey);
   const authVerifier = createSupabaseAuthVerifier(config.supabaseUrl, config.supabasePublishableKey);
+  const jobSync = new JobSyncService({ store, config });
 
   const app = await buildApp({
     config,
     store,
-    authVerifier
+    authVerifier,
+    jobSync
   });
 
   await app.listen({ port: config.port, host: config.host });
+
+  if (config.autoSyncIntervalHours > 0) {
+    const intervalMs = config.autoSyncIntervalHours * 60 * 60 * 1000;
+    const timer = setInterval(() => {
+      void jobSync.syncNow({ mode: 'full', force: false }).catch((err) => {
+        console.warn('Scheduled background job sync failed:', err);
+      });
+    }, intervalMs);
+    timer.unref();
+  }
 }
 
 main().catch((err) => {

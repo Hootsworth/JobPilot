@@ -17,7 +17,7 @@ const TRACKING_PARAMS = new Set([
   'gclid'
 ]);
 
-const ATS_SOURCES = new Set(['greenhouse', 'lever', 'ashby', 'workable']);
+const ATS_SOURCES = new Set(['greenhouse', 'lever', 'ashby', 'workable', 'smartrecruiters']);
 
 export function canonicalizeUrl(
   rawUrl: string,

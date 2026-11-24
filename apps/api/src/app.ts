@@ -9,6 +9,7 @@ import {
   CaptureExtensionJobRequestSchema,
   CreateManualApplicationRequestSchema,
   CreateProfileVariantRequestSchema,
+  DismissJobRequestSchema,
   DraftAnswersRequestSchema,
   FallbackFillRequestSchema,
   GenerateCoverLetterRequestSchema,
@@ -17,6 +18,7 @@ import {
   JobFeedQuerySchema,
   LlmProviderIdSchema,
   RefreshMatchesRequestSchema,
+  SyncJobsRequestSchema,
   TailorResumeRequestSchema,
   TestLlmKeyRequestSchema,
   UpdateApplicationRequestSchema,
@@ -26,11 +28,18 @@ import {
   UpsertLlmSettingsSchema,
   UpsertSavedAnswerRequestSchema,
   UpsertStoryRequestSchema,
+  type JobFeedItem,
+  type JobMatch,
   type LlmProviderId,
   type LlmSettingsItem,
-  type MasterProfile
+  type MasterProfile,
+  type RecommendationsResponse
 } from '@jobpilot/shared';
-import { runThreeStageMatching } from '@jobpilot/ingestion';
+import {
+  runDiscoverySync,
+  runThreeStageMatching,
+  type JobForMatching
+} from '@jobpilot/ingestion';
 import { resolveMetaBaseUrl, type LlmProvider } from '@jobpilot/llm';
 import {
   formatCoverLetterPlainText,
@@ -61,6 +70,8 @@ import {
   parseResumePdfWithLlm,
   ResumeParseError
 } from './services/resume-parser.js';
+import { JobSyncService } from './services/job-sync.js';
+import { matchesFeedBucket } from './store/memory-store.js';
 import type { AuthUser, DataStore } from './store/types.js';
 
 export interface BuildAppDeps {
@@ -70,12 +81,21 @@ export interface BuildAppDeps {
   providerFactory?: LlmProviderFactory;
   fetchImpl?: typeof fetch;
   enableLogger?: boolean;
+  syncRunner?: typeof runDiscoverySync;
+  jobSync?: JobSyncService;
 }
 
 const ALL_PROVIDERS: LlmProviderId[] = ['openai', 'gemini', 'meta'];
 
 export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
   const { config, store, authVerifier, providerFactory } = deps;
+  const jobSync =
+    deps.jobSync ??
+    new JobSyncService({
+      store,
+      config,
+      syncRunner: deps.syncRunner
+    });
 
   const app = Fastify({
     logger:
@@ -620,7 +640,86 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
     }
   });
 
-  // --- Jobs Feed & 3-Stage Matching ---
+  function collectDismissedCompanies(
+    matches: JobMatch[],
+    jobsById: Map<string, JobForMatching>
+  ): Set<string> {
+    const companies = new Set<string>();
+    for (const m of matches) {
+      if (m.dismissed && m.hardFilterReasons.includes('dismiss_reason:company')) {
+        const job = jobsById.get(m.jobId);
+        if (job?.companyName.trim()) {
+          companies.add(job.companyName.trim().toLowerCase());
+        }
+      }
+    }
+    return companies;
+  }
+
+  async function computeUserMatches(opts: {
+    user: AuthUser;
+    useLlm: boolean;
+    topKVector: number;
+    topKLlm: number;
+    forceRecompute: boolean;
+  }) {
+    const [profile, stories, profileEmbedding, jobs] = await Promise.all([
+      store.getOrCreateProfile(opts.user),
+      store.listStories(opts.user.id),
+      store.getProfileEmbedding(opts.user.id),
+      store.listActiveJobsForMatching(opts.user.id, 600)
+    ]);
+
+    const existingMatches = await store.listMatchesForProfileVersion(
+      opts.user.id,
+      profile.activeProfileVersion
+    );
+    const existingByJobId = new Map(existingMatches.map((m) => [m.jobId, m]));
+    const jobsById = new Map(jobs.map((j) => [j.id, j]));
+    const dismissedCompanies = collectDismissedCompanies(existingMatches, jobsById);
+
+    let llmProvider: LlmProvider | null = null;
+    if (opts.useLlm) {
+      try {
+        const resolved = await resolveUserLlmProvider({
+          userId: opts.user.id,
+          config,
+          store,
+          providerFactory
+        });
+        llmProvider = resolved.provider;
+      } catch {
+        // No LLM key configured yet — run Stage 1 (hard filters) + Stage 2 (vector/skill/role baseline)
+        llmProvider = null;
+      }
+    }
+
+    const result = await runThreeStageMatching({
+      profile,
+      stories,
+      jobs,
+      profileEmbedding,
+      existingMatchesByJobId: existingByJobId,
+      llmProvider,
+      topKVector: opts.topKVector,
+      topKLlm: opts.topKLlm,
+      forceRecompute: opts.forceRecompute,
+      dismissedCompanies
+    });
+
+    await store.upsertJobMatches(opts.user.id, result.matches);
+
+    return {
+      profile,
+      jobs,
+      matches: result.matches,
+      stats: result.stats,
+      usedLlm: Boolean(llmProvider),
+      dismissedCompanies
+    };
+  }
+
+  // --- Jobs Feed, Auto Sync & Recommendations ---
   app.get('/api/jobs', { preHandler: requireAuth }, async (request, reply) => {
     const queryCheck = JobFeedQuerySchema.safeParse(request.query);
     if (!queryCheck.success) {
@@ -634,6 +733,173 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
 
   app.get('/api/jobs/sources', { preHandler: requireAuth }, async () => {
     return store.listJobSourcesAndRuns();
+  });
+
+  app.get('/api/jobs/sync/status', { preHandler: requireAuth }, async (request) => {
+    return jobSync.getStatus(request.authUser!.id);
+  });
+
+  app.post('/api/jobs/sync', { preHandler: requireAuth }, async (request, reply) => {
+    const parsedBody = SyncJobsRequestSchema.safeParse(request.body ?? {});
+    if (!parsedBody.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid sync request payload', issues: parsedBody.error.issues });
+    }
+
+    const user = request.authUser!;
+    const profile = await store.getOrCreateProfile(user);
+    const syncRes = await jobSync.syncNow({
+      userId: user.id,
+      profile,
+      mode: parsedBody.data.mode,
+      force: parsedBody.data.force
+    });
+
+    const matchOut = await computeUserMatches({
+      user,
+      useLlm: parsedBody.data.includeLlm,
+      topKVector: parsedBody.data.includeLlm ? 150 : 600,
+      topKLlm: parsedBody.data.includeLlm ? 15 : 0,
+      forceRecompute: false
+    });
+
+    const syncStatus = await jobSync.getStatus(user.id);
+    return {
+      alreadyRunning: syncRes.alreadyRunning,
+      skipped: syncRes.skipped,
+      reason: syncRes.reason,
+      insertedCount: syncRes.insertedCount,
+      updatedCount: syncRes.updatedCount,
+      rawJobsCount: syncRes.rawJobsCount,
+      dedupedCount: syncRes.dedupedCount,
+      boardSuccess: syncRes.boardSuccess,
+      boardFailures: syncRes.boardFailures,
+      aggregatorCount: syncRes.aggregatorCount,
+      matchStats: matchOut.stats,
+      syncStatus
+    };
+  });
+
+  app.get('/api/jobs/recommendations', { preHandler: requireAuth }, async (request) => {
+    const user = request.authUser!;
+    let [profile, activeJobs, existingMatches, apps] = await Promise.all([
+      store.getOrCreateProfile(user),
+      store.listActiveJobsForMatching(user.id, 600),
+      Promise.resolve([] as JobMatch[]),
+      store.listApplications(user.id)
+    ]);
+
+    existingMatches = await store.listMatchesForProfileVersion(
+      user.id,
+      profile.activeProfileVersion
+    );
+
+    const existingByJobId = new Map(existingMatches.map((m) => [m.jobId, m]));
+    const unscoredCount = activeJobs.filter((j) => !existingByJobId.has(j.id)).length;
+    let autoMatchedCount = 0;
+
+    if (activeJobs.length > 0 && unscoredCount > 0) {
+      const matched = await computeUserMatches({
+        user,
+        useLlm: false,
+        topKVector: Math.max(200, activeJobs.length),
+        topKLlm: 0,
+        forceRecompute: false
+      });
+      activeJobs = matched.jobs;
+      existingMatches = matched.matches;
+      autoMatchedCount = matched.matches.length;
+    }
+
+    const matchByJob = new Map(existingMatches.map((m) => [m.jobId, m]));
+    const jobsById = new Map(activeJobs.map((j) => [j.id, j]));
+    const dismissedCompanies = collectDismissedCompanies(existingMatches, jobsById);
+    const appStatusByJob = new Map(apps.map((a) => [a.jobId, a.status]));
+
+    const feedItems: JobFeedItem[] = [];
+    for (const job of activeJobs) {
+      const match = matchByJob.get(job.id) ?? null;
+      if (match?.dismissed) continue;
+      const { embedding: _emb, ...cleanJob } = job;
+      feedItems.push({
+        job: cleanJob,
+        match,
+        applicationStatus: appStatusByJob.get(job.id) ?? null
+      });
+    }
+
+    const rankItem = (item: JobFeedItem): number => {
+      const base = item.match?.llmScore ?? 20;
+      const companyPenalty = dismissedCompanies.has(item.job.companyName.trim().toLowerCase())
+        ? 15
+        : 0;
+      return base - companyPenalty;
+    };
+
+    feedItems.sort((a, b) => {
+      const scoreDiff = rankItem(b) - rankItem(a);
+      if (scoreDiff !== 0) return scoreDiff;
+      return (b.job.postedAt ?? b.job.lastSeenAt).localeCompare(a.job.postedAt ?? a.job.lastSeenAt);
+    });
+
+    const forYouAll = feedItems.filter((item) => matchesFeedBucket(item, 'for_you'));
+    const freshAll = [...feedItems]
+      .filter((item) => matchesFeedBucket(item, 'fresh', 48))
+      .sort((a, b) =>
+        (b.job.postedAt ?? b.job.lastSeenAt).localeCompare(a.job.postedAt ?? a.job.lastSeenAt)
+      );
+    const indiaAll = feedItems.filter((item) => matchesFeedBucket(item, 'india'));
+    const remoteAll = feedItems.filter((item) => matchesFeedBucket(item, 'remote'));
+    const nearAll = feedItems.filter((item) => matchesFeedBucket(item, 'near_matches'));
+
+    const syncStatus = await jobSync.getStatus(user.id);
+    const targetRoles =
+      profile.searchPreferences.targetRoles.length > 0
+        ? profile.searchPreferences.targetRoles
+        : profile.jsonResume.basics.label
+          ? [profile.jsonResume.basics.label]
+          : [];
+    const topSkills = Array.from(
+      new Set(profile.jsonResume.skills.flatMap((g) => g.keywords).filter(Boolean))
+    ).slice(0, 8);
+    const hasProfileData = Boolean(
+      profile.onboardingCompletedAt ||
+        topSkills.length > 0 ||
+        profile.jsonResume.work.length > 0 ||
+        profile.jsonResume.projects.length > 0 ||
+        targetRoles.length > 0
+    );
+
+    const payload: RecommendationsResponse = {
+      buckets: {
+        forYou: forYouAll.slice(0, 30),
+        fresh: freshAll.slice(0, 30),
+        india: indiaAll.slice(0, 30),
+        remote: remoteAll.slice(0, 30),
+        nearMatches: nearAll.slice(0, 30)
+      },
+      counts: {
+        forYou: forYouAll.length,
+        fresh: freshAll.length,
+        india: indiaAll.length,
+        remote: remoteAll.length,
+        nearMatches: nearAll.length,
+        totalActiveCatalog: syncStatus.totalActiveJobs
+      },
+      syncStatus,
+      profileSignals: {
+        targetRoles,
+        topSkills,
+        countries: profile.searchPreferences.countries,
+        preferredCities: profile.indiaProfile.preferredCities,
+        isFresher: profile.indiaProfile.isFresher,
+        hasProfileData
+      },
+      autoMatchedCount
+    };
+
+    return payload;
   });
 
   app.get('/api/jobs/:id', { preHandler: requireAuth }, async (request, reply) => {
@@ -652,65 +918,37 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
         .send({ error: 'Invalid match refresh payload', issues: parsedBody.error.issues });
     }
 
-    const user = request.authUser!;
-    const [profile, stories, profileEmbedding, jobs] = await Promise.all([
-      store.getOrCreateProfile(user),
-      store.listStories(user.id),
-      store.getProfileEmbedding(user.id),
-      store.listActiveJobsForMatching(user.id, 200)
-    ]);
-
-    const existingMatches = await store.listMatchesForProfileVersion(
-      user.id,
-      profile.activeProfileVersion
-    );
-    const existingByJobId = new Map(existingMatches.map((m) => [m.jobId, m]));
-
-    let llmProvider: LlmProvider | null = null;
-    try {
-      const resolved = await resolveUserLlmProvider({
-        userId: user.id,
-        config,
-        store,
-        providerFactory
-      });
-      llmProvider = resolved.provider;
-    } catch {
-      // No LLM key configured yet — run Stage 1 (hard filters) + Stage 2 (vector/skill baseline)
-      llmProvider = null;
-    }
-
-    const result = await runThreeStageMatching({
-      profile,
-      stories,
-      jobs,
-      profileEmbedding,
-      existingMatchesByJobId: existingByJobId,
-      llmProvider,
+    const out = await computeUserMatches({
+      user: request.authUser!,
+      useLlm: parsedBody.data.topKLlm > 0,
       topKVector: parsedBody.data.topKVector,
       topKLlm: parsedBody.data.topKLlm,
       forceRecompute: parsedBody.data.forceRecompute
     });
 
-    await store.upsertJobMatches(user.id, result.matches);
-
     return {
-      profileVersion: profile.activeProfileVersion,
-      usedLlm: Boolean(llmProvider),
-      stats: result.stats,
-      matchesCount: result.matches.length
+      profileVersion: out.profile.activeProfileVersion,
+      usedLlm: out.usedLlm,
+      stats: out.stats,
+      matchesCount: out.matches.length
     };
   });
 
   app.post('/api/jobs/:id/dismiss', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { dismissed?: boolean };
+    const parsedBody = DismissJobRequestSchema.safeParse(request.body ?? {});
+    if (!parsedBody.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid dismiss payload', issues: parsedBody.error.issues });
+    }
     const profile = await store.getOrCreateProfile(request.authUser!);
     const ok = await store.setMatchDismissed(
       request.authUser!.id,
       id,
       profile.activeProfileVersion,
-      body.dismissed ?? true
+      parsedBody.data.dismissed,
+      parsedBody.data.reason
     );
     if (!ok) return reply.code(404).send({ error: 'Job not found.' });
     return { ok: true };
