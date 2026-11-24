@@ -1,7 +1,9 @@
 import type {
+  AiQualityMode,
   ApplicationEventRecord,
   ApplicationRecord,
   ApplicationStatus,
+  BillingCurrency,
   CaptureExtensionJobRequest,
   CaptureExtensionJobResponse,
   CoverLetterContent,
@@ -10,6 +12,8 @@ import type {
   CrawlRunSummary,
   CreateManualApplicationRequest,
   CreateProfileVariantRequest,
+  CreditLedgerEntry,
+  CreditPackId,
   DismissReason,
   IndiaProfile,
   JdRequirements,
@@ -23,6 +27,8 @@ import type {
   LlmUsageLog,
   LlmUsageSummary,
   MasterProfile,
+  PaymentProvider,
+  PlanId,
   ProfileStory,
   ProfileVariantRecord,
   ProviderCapabilities,
@@ -32,10 +38,12 @@ import type {
   SavedAnswer,
   SearchPreferences,
   UpdateApplicationRequest,
+  UpdateBillingPreferencesRequest,
   UpdateProfileRequest,
   UpdateProfileVariantRequest,
   UpsertSavedAnswerRequest,
   UpsertStoryRequest,
+  UserSubscription,
   VerifierReport
 } from '@jobpilot/shared';
 import type {
@@ -99,7 +107,21 @@ export interface AccountExportPayload {
   resumeVersions: ResumeVersionRecord[];
   coverLetters: CoverLetterRecord[];
   applications: ApplicationRecord[];
+  subscription?: UserSubscription;
+  creditLedger?: CreditLedgerEntry[];
 }
+
+export type CreditDebitResult =
+  | {
+      ok: true;
+      subscription: UserSubscription;
+      debitedMonthly: number;
+      debitedTopup: number;
+    }
+  | {
+      ok: false;
+      subscription: UserSubscription;
+    };
 
 export interface CreateResumeVersionInput {
   id: string;
@@ -312,4 +334,50 @@ export interface DataStore {
     patch: UpdateApplicationRequest
   ): Promise<ApplicationRecord | null>;
   deleteApplication(userId: string, applicationId: string): Promise<boolean>;
+
+  getOrCreateSubscription(userId: string): Promise<UserSubscription>;
+  updateSubscriptionPreferences(
+    userId: string,
+    patch: UpdateBillingPreferencesRequest
+  ): Promise<UserSubscription>;
+  applyPlanChange(
+    userId: string,
+    params: {
+      planId: PlanId;
+      currency?: BillingCurrency;
+      paymentProvider?: PaymentProvider | null;
+      externalCustomerId?: string | null;
+      externalSubscriptionId?: string | null;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<UserSubscription>;
+  grantTopupCredits(
+    userId: string,
+    params: {
+      packId: CreditPackId;
+      credits: number;
+      paymentProvider?: PaymentProvider | null;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<UserSubscription>;
+  debitCredits(
+    userId: string,
+    params: {
+      amount: number;
+      reason: string;
+      aiMode: AiQualityMode;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<CreditDebitResult>;
+  refundCredits(
+    userId: string,
+    params: {
+      debitedMonthly: number;
+      debitedTopup: number;
+      reason: string;
+      aiMode: AiQualityMode;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<UserSubscription>;
+  listCreditLedger(userId: string, limit?: number): Promise<CreditLedgerEntry[]>;
 }

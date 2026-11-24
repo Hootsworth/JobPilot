@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AiQualityModeSchema } from './billing.js';
 import { JsonResumeSchema, ResumeSkillGroupSchema } from './json-resume.js';
 import { LlmProviderIdSchema } from './llm.js';
 
@@ -220,7 +221,8 @@ export const TailorResumeRequestSchema = z
       .optional(),
     label: z.string().trim().min(1).max(160).optional(),
     templateId: ResumeTemplateIdSchema.default('ats-classic'),
-    autoRepairFlagged: z.boolean().default(true)
+    autoRepairFlagged: z.boolean().default(true),
+    aiMode: AiQualityModeSchema.optional()
   })
   .refine((data) => Boolean(data.jobId || data.customJob), {
     message: 'Either jobId or customJob must be supplied.'

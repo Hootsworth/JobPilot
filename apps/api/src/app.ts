@@ -7,27 +7,34 @@ import {
   ApplicationStatusSchema,
   AtsScoreRequestSchema,
   CaptureExtensionJobRequestSchema,
+  CreateCheckoutRequestSchema,
   CreateManualApplicationRequestSchema,
   CreateProfileVariantRequestSchema,
+  CREDIT_PACKS,
   DismissJobRequestSchema,
   DraftAnswersRequestSchema,
   FallbackFillRequestSchema,
   GenerateCoverLetterRequestSchema,
+  getPlanEntitlements,
   GithubImportRequestSchema,
   JdRequirementsSchema,
   JobFeedQuerySchema,
   LlmProviderIdSchema,
+  PaymentProviderSchema,
+  PLAN_CATALOG,
   RefreshMatchesRequestSchema,
   SyncJobsRequestSchema,
   TailorResumeRequestSchema,
   TestLlmKeyRequestSchema,
   UpdateApplicationRequestSchema,
+  UpdateBillingPreferencesRequestSchema,
   UpdateCoverLetterRequestSchema,
   UpdateProfileRequestSchema,
   UpdateProfileVariantRequestSchema,
   UpsertLlmSettingsSchema,
   UpsertSavedAnswerRequestSchema,
   UpsertStoryRequestSchema,
+  type AiQualityMode,
   type JobFeedItem,
   type JobMatch,
   type LlmProviderId,
@@ -52,7 +59,18 @@ import {
 } from '@jobpilot/tailoring';
 import type { ApiConfig } from './config.js';
 import { createAuthPreHandler, type AuthVerifier } from './plugins/auth.js';
+import {
+  createBillingCheckout,
+  processVerifiedWebhookEvent,
+  verifyWebhookSignature
+} from './services/billing-gateway.js';
 import { encryptSecret } from './services/crypto.js';
+import {
+  acquireLlmForAction,
+  buildBillingSnapshot,
+  EntitlementError,
+  hasManagedServerKeys
+} from './services/entitlements.js';
 import { draftExtensionQuestionAnswers } from './services/extension-draft.js';
 import { runExtensionLlmFallbackFill } from './services/extension-fallback-fill.js';
 import {
@@ -160,12 +178,130 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
 
   const requireAuth = createAuthPreHandler(authVerifier);
 
+  function replyEntitlementError(reply: { code: (status: number) => { send: (body: unknown) => unknown } }, err: EntitlementError) {
+    return reply.code(err.statusCode).send(err.toJSON());
+  }
+
   app.get('/health', async () => ({
     ok: true,
     service: 'jobpilot-api',
     version: '0.1.0',
-    defaultProvider: config.llmProvider
+    defaultProvider: config.llmProvider,
+    billingMode: config.billingMode,
+    managedAiEnabled: hasManagedServerKeys(config)
   }));
+
+  // --- Billing, Plans & Unified Credits ---
+  app.get('/api/billing/plans', async () => ({
+    plans: Object.values(PLAN_CATALOG),
+    creditPacks: Object.values(CREDIT_PACKS)
+  }));
+
+  app.get('/api/billing/status', { preHandler: requireAuth }, async (request) => {
+    return buildBillingSnapshot(request.authUser!.id, config, store);
+  });
+
+  app.patch('/api/billing/preferences', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = UpdateBillingPreferencesRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid billing preferences payload', issues: parsed.error.issues });
+    }
+    const userId = request.authUser!.id;
+    const sub = await store.getOrCreateSubscription(userId);
+    const entitlements = getPlanEntitlements(sub.planId);
+
+    if (
+      parsed.data.aiModePreference &&
+      !entitlements.allowedAiModes.includes(parsed.data.aiModePreference) &&
+      !parsed.data.useByokOverride &&
+      !sub.useByokOverride
+    ) {
+      return replyEntitlementError(
+        reply,
+        new EntitlementError({
+          statusCode: 403,
+          code: 'PLAN_UPGRADE_REQUIRED',
+          requiredPlan: 'plus',
+          message: 'Precision frontier models require the Plus plan.'
+        })
+      );
+    }
+
+    await store.updateSubscriptionPreferences(userId, parsed.data);
+    return buildBillingSnapshot(userId, config, store);
+  });
+
+  app.post('/api/billing/checkout', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = CreateCheckoutRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid checkout payload', issues: parsed.error.issues });
+    }
+    try {
+      return await createBillingCheckout({
+        userId: request.authUser!.id,
+        userEmail: request.authUser!.email,
+        request: parsed.data,
+        config,
+        store,
+        fetchImpl: deps.fetchImpl
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Checkout failed.';
+      return reply.code(400).send({ error: message });
+    }
+  });
+
+  await app.register(async (webhookScope) => {
+    webhookScope.addContentTypeParser(
+      'application/json',
+      { parseAs: 'string' },
+      (_req, body, done) => {
+        done(null, body);
+      }
+    );
+
+    webhookScope.post('/api/billing/webhook/:provider', async (request, reply) => {
+      const { provider: rawProvider } = request.params as { provider: string };
+      const provCheck = PaymentProviderSchema.safeParse(rawProvider);
+      if (!provCheck.success || provCheck.data === 'manual') {
+        return reply.code(400).send({ error: 'Unsupported payment webhook provider.' });
+      }
+      const provider = provCheck.data;
+      const rawBody = typeof request.body === 'string' ? request.body : JSON.stringify(request.body ?? {});
+
+      const sigHeader =
+        provider === 'stripe'
+          ? (request.headers['stripe-signature'] as string | undefined)
+          : provider === 'razorpay'
+            ? (request.headers['x-razorpay-signature'] as string | undefined)
+            : (request.headers['webhook-signature'] as string | undefined) ??
+              (request.headers['x-dodo-signature'] as string | undefined);
+
+      const valid = verifyWebhookSignature({
+        provider,
+        rawBody,
+        signatureHeader: sigHeader,
+        config
+      });
+      if (!valid) {
+        return reply.code(401).send({ error: 'Invalid webhook signature.' });
+      }
+
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = JSON.parse(rawBody) as Record<string, unknown>;
+      } catch {
+        return reply.code(400).send({ error: 'Invalid JSON webhook body.' });
+      }
+
+      const result = await processVerifiedWebhookEvent({ provider, payload, store });
+      return { ok: true, ...result };
+    });
+  });
 
   // --- Master Profile ---
   app.get('/api/profile', { preHandler: requireAuth }, async (request) => {
@@ -207,20 +343,22 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       return reply.code(400).send({ error: 'Invalid provider override parameter.' });
     }
 
+    let acquired: Awaited<ReturnType<typeof acquireLlmForAction>> | null = null;
     try {
-      const { provider } = await resolveUserLlmProvider({
+      acquired = await acquireLlmForAction({
         userId: user.id,
-        config,
-        store,
+        action: 'resume_parse',
         providerOverride: providerCheck?.success ? providerCheck.data : undefined,
         modelOverride: query.model,
+        config,
+        store,
         providerFactory
       });
 
       const parseResult = await parseResumePdfWithLlm({
         buffer,
-        provider,
-        model: query.model
+        provider: acquired.provider,
+        model: query.model ?? acquired.model
       });
 
       const storagePath = await store.uploadRawResume(
@@ -282,6 +420,10 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
         ...(appliedProfile ? { appliedProfile } : {})
       };
     } catch (err) {
+      await acquired?.refund('parse_failed');
+      if (err instanceof EntitlementError) {
+        return replyEntitlementError(reply, err);
+      }
       if (err instanceof ResumeParseError) {
         return reply.code(err.statusCode).send({ error: err.message });
       }
@@ -302,7 +444,25 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
         .code(400)
         .send({ error: 'Invalid profile variant payload', issues: parsed.error.issues });
     }
-    const created = await store.createProfileVariant(request.authUser!.id, parsed.data);
+    const userId = request.authUser!.id;
+    const [existingVariants, sub] = await Promise.all([
+      store.listProfileVariants(userId),
+      store.getOrCreateSubscription(userId)
+    ]);
+    const entitlements = getPlanEntitlements(sub.planId);
+    if (existingVariants.length >= entitlements.maxProfileVariants) {
+      return replyEntitlementError(
+        reply,
+        new EntitlementError({
+          statusCode: 403,
+          code: 'PLAN_LIMIT_REACHED',
+          requiredPlan: existingVariants.length < 3 ? 'pro' : 'plus',
+          message: `Your ${PLAN_CATALOG[sub.planId].name} plan allows up to ${entitlements.maxProfileVariants} profile variant${entitlements.maxProfileVariants === 1 ? '' : 's'}. Upgrade to add more.`
+        })
+      );
+    }
+
+    const created = await store.createProfileVariant(userId, parsed.data);
     return reply.code(201).send(created);
   });
 
@@ -659,6 +819,7 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
   async function computeUserMatches(opts: {
     user: AuthUser;
     useLlm: boolean;
+    aiMode?: AiQualityMode;
     topKVector: number;
     topKLlm: number;
     forceRecompute: boolean;
@@ -679,44 +840,53 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
     const dismissedCompanies = collectDismissedCompanies(existingMatches, jobsById);
 
     let llmProvider: LlmProvider | null = null;
+    let acquired: Awaited<ReturnType<typeof acquireLlmForAction>> | null = null;
     if (opts.useLlm) {
       try {
-        const resolved = await resolveUserLlmProvider({
+        acquired = await acquireLlmForAction({
           userId: opts.user.id,
+          action: 'job_match_rerank',
+          requestedAiMode: opts.aiMode,
           config,
           store,
           providerFactory
         });
-        llmProvider = resolved.provider;
-      } catch {
+        llmProvider = acquired.provider;
+      } catch (err) {
+        if (err instanceof EntitlementError) throw err;
         // No LLM key configured yet — run Stage 1 (hard filters) + Stage 2 (vector/skill/role baseline)
         llmProvider = null;
       }
     }
 
-    const result = await runThreeStageMatching({
-      profile,
-      stories,
-      jobs,
-      profileEmbedding,
-      existingMatchesByJobId: existingByJobId,
-      llmProvider,
-      topKVector: opts.topKVector,
-      topKLlm: opts.topKLlm,
-      forceRecompute: opts.forceRecompute,
-      dismissedCompanies
-    });
+    try {
+      const result = await runThreeStageMatching({
+        profile,
+        stories,
+        jobs,
+        profileEmbedding,
+        existingMatchesByJobId: existingByJobId,
+        llmProvider,
+        topKVector: opts.topKVector,
+        topKLlm: opts.topKLlm,
+        forceRecompute: opts.forceRecompute,
+        dismissedCompanies
+      });
 
-    await store.upsertJobMatches(opts.user.id, result.matches);
+      await store.upsertJobMatches(opts.user.id, result.matches);
 
-    return {
-      profile,
-      jobs,
-      matches: result.matches,
-      stats: result.stats,
-      usedLlm: Boolean(llmProvider),
-      dismissedCompanies
-    };
+      return {
+        profile,
+        jobs,
+        matches: result.matches,
+        stats: result.stats,
+        usedLlm: Boolean(llmProvider),
+        dismissedCompanies
+      };
+    } catch (err) {
+      await acquired?.refund('match_rerank_failed');
+      throw err;
+    }
   }
 
   // --- Jobs Feed, Auto Sync & Recommendations ---
@@ -735,8 +905,14 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
     return store.listJobSourcesAndRuns();
   });
 
+  async function getUserSyncStaleHours(userId: string): Promise<number | undefined> {
+    const sub = await store.getOrCreateSubscription(userId);
+    return getPlanEntitlements(sub.planId).priorityJobSync ? 1 : undefined;
+  }
+
   app.get('/api/jobs/sync/status', { preHandler: requireAuth }, async (request) => {
-    return jobSync.getStatus(request.authUser!.id);
+    const staleOverride = await getUserSyncStaleHours(request.authUser!.id);
+    return jobSync.getStatus(request.authUser!.id, staleOverride);
   });
 
   app.post('/api/jobs/sync', { preHandler: requireAuth }, async (request, reply) => {
@@ -748,37 +924,48 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
     }
 
     const user = request.authUser!;
-    const profile = await store.getOrCreateProfile(user);
+    const [profile, staleHoursOverride] = await Promise.all([
+      store.getOrCreateProfile(user),
+      getUserSyncStaleHours(user.id)
+    ]);
     const syncRes = await jobSync.syncNow({
       userId: user.id,
       profile,
       mode: parsedBody.data.mode,
-      force: parsedBody.data.force
+      force: parsedBody.data.force,
+      staleHoursOverride
     });
 
-    const matchOut = await computeUserMatches({
-      user,
-      useLlm: parsedBody.data.includeLlm,
-      topKVector: parsedBody.data.includeLlm ? 150 : 600,
-      topKLlm: parsedBody.data.includeLlm ? 15 : 0,
-      forceRecompute: false
-    });
+    try {
+      const matchOut = await computeUserMatches({
+        user,
+        useLlm: parsedBody.data.includeLlm,
+        topKVector: parsedBody.data.includeLlm ? 150 : 600,
+        topKLlm: parsedBody.data.includeLlm ? 15 : 0,
+        forceRecompute: false
+      });
 
-    const syncStatus = await jobSync.getStatus(user.id);
-    return {
-      alreadyRunning: syncRes.alreadyRunning,
-      skipped: syncRes.skipped,
-      reason: syncRes.reason,
-      insertedCount: syncRes.insertedCount,
-      updatedCount: syncRes.updatedCount,
-      rawJobsCount: syncRes.rawJobsCount,
-      dedupedCount: syncRes.dedupedCount,
-      boardSuccess: syncRes.boardSuccess,
-      boardFailures: syncRes.boardFailures,
-      aggregatorCount: syncRes.aggregatorCount,
-      matchStats: matchOut.stats,
-      syncStatus
-    };
+      const syncStatus = await jobSync.getStatus(user.id, staleHoursOverride);
+      return {
+        alreadyRunning: syncRes.alreadyRunning,
+        skipped: syncRes.skipped,
+        reason: syncRes.reason,
+        insertedCount: syncRes.insertedCount,
+        updatedCount: syncRes.updatedCount,
+        rawJobsCount: syncRes.rawJobsCount,
+        dedupedCount: syncRes.dedupedCount,
+        boardSuccess: syncRes.boardSuccess,
+        boardFailures: syncRes.boardFailures,
+        aggregatorCount: syncRes.aggregatorCount,
+        matchStats: matchOut.stats,
+        syncStatus
+      };
+    } catch (err) {
+      if (err instanceof EntitlementError) {
+        return replyEntitlementError(reply, err);
+      }
+      throw err;
+    }
   });
 
   app.get('/api/jobs/recommendations', { preHandler: requireAuth }, async (request) => {
@@ -918,20 +1105,28 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
         .send({ error: 'Invalid match refresh payload', issues: parsedBody.error.issues });
     }
 
-    const out = await computeUserMatches({
-      user: request.authUser!,
-      useLlm: parsedBody.data.topKLlm > 0,
-      topKVector: parsedBody.data.topKVector,
-      topKLlm: parsedBody.data.topKLlm,
-      forceRecompute: parsedBody.data.forceRecompute
-    });
+    try {
+      const out = await computeUserMatches({
+        user: request.authUser!,
+        useLlm: parsedBody.data.topKLlm > 0,
+        aiMode: parsedBody.data.aiMode,
+        topKVector: parsedBody.data.topKVector,
+        topKLlm: parsedBody.data.topKLlm,
+        forceRecompute: parsedBody.data.forceRecompute
+      });
 
-    return {
-      profileVersion: out.profile.activeProfileVersion,
-      usedLlm: out.usedLlm,
-      stats: out.stats,
-      matchesCount: out.matches.length
-    };
+      return {
+        profileVersion: out.profile.activeProfileVersion,
+        usedLlm: out.usedLlm,
+        stats: out.stats,
+        matchesCount: out.matches.length
+      };
+    } catch (err) {
+      if (err instanceof EntitlementError) {
+        return replyEntitlementError(reply, err);
+      }
+      throw err;
+    }
   });
 
   app.post('/api/jobs/:id/dismiss', { preHandler: requireAuth }, async (request, reply) => {
@@ -995,9 +1190,12 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       cachedJdRequirements = job.parsedRequirements;
     }
 
+    let acquired: Awaited<ReturnType<typeof acquireLlmForAction>> | null = null;
     try {
-      const { provider, providerId } = await resolveUserLlmProvider({
+      acquired = await acquireLlmForAction({
         userId: user.id,
+        action: 'resume_tailor',
+        requestedAiMode: parsed.data.aiMode,
         config,
         store,
         providerFactory
@@ -1013,9 +1211,12 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
           description: targetDescription
         },
         cachedJdRequirements,
-        llmProvider: provider,
+        llmProvider: acquired.provider,
+        model: acquired.model,
         templateId: parsed.data.templateId,
-        autoRepairFlagged: parsed.data.autoRepairFlagged
+        autoRepairFlagged: parsed.data.autoRepairFlagged,
+        skipLlmVerifier:
+          acquired.executionMode === 'managed' && !acquired.entitlements.dualLlmVerifier
       });
 
       if (jobId && !result.jdFromCache) {
@@ -1045,12 +1246,16 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
         typstSource: result.typstSource,
         pdfStoragePath,
         pdfEngine: result.pdfEngine,
-        provider: providerId,
+        provider: acquired.providerId,
         model: result.modelUsed
       });
 
       return reply.code(201).send(version);
     } catch (err) {
+      await acquired?.refund('tailor_failed');
+      if (err instanceof EntitlementError) {
+        return replyEntitlementError(reply, err);
+      }
       const message = err instanceof Error ? err.message : 'Resume tailoring failed.';
       return reply.code(422).send({ error: message });
     }
@@ -1176,33 +1381,50 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
     const version = await store.getResumeVersion(user.id, id);
     if (!version) return reply.code(404).send({ error: 'Resume version not found.' });
 
-    const [profile, stories] = await Promise.all([
+    const [profile, stories, sub] = await Promise.all([
       store.getOrCreateProfile(user),
-      store.listStories(user.id)
+      store.listStories(user.id),
+      store.getOrCreateSubscription(user.id)
     ]);
+    const entitlements = getPlanEntitlements(sub.planId);
 
     let llmProvider: LlmProvider | null = null;
-    try {
-      const resolved = await resolveUserLlmProvider({
-        userId: user.id,
-        config,
-        store,
-        providerFactory
-      });
-      llmProvider = resolved.provider;
-    } catch {
-      llmProvider = null;
+    let model: string | undefined;
+    let acquired: Awaited<ReturnType<typeof acquireLlmForAction>> | null = null;
+    if (entitlements.dualLlmVerifier || sub.useByokOverride || !hasManagedServerKeys(config)) {
+      try {
+        acquired = await acquireLlmForAction({
+          userId: user.id,
+          action: 'resume_verify',
+          config,
+          store,
+          providerFactory
+        });
+        llmProvider = acquired.provider;
+        model = acquired.model;
+      } catch (err) {
+        if (err instanceof EntitlementError) {
+          return replyEntitlementError(reply, err);
+        }
+        llmProvider = null;
+      }
     }
 
-    const report = await runDualVerification({
-      masterProfile: profile,
-      stories,
-      tailoredResume: version.tailoredJsonResume,
-      llmProvider
-    });
+    try {
+      const report = await runDualVerification({
+        masterProfile: profile,
+        stories,
+        tailoredResume: version.tailoredJsonResume,
+        llmProvider,
+        model
+      });
 
-    const updated = await store.updateResumeVersionVerification(user.id, id, report);
-    return updated ?? version;
+      const updated = await store.updateResumeVersionVerification(user.id, id, report);
+      return updated ?? version;
+    } catch (err) {
+      await acquired?.refund('verify_failed');
+      throw err;
+    }
   });
 
   app.delete('/api/resumes/versions/:id', { preHandler: requireAuth }, async (request, reply) => {
@@ -1245,33 +1467,45 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       if (parsedReqs.success) cachedJdRequirements = parsedReqs.data;
     }
 
-    let llmProvider: LlmProvider | null = null;
-    let providerId: LlmProviderId | null = null;
+    let acquired: Awaited<ReturnType<typeof acquireLlmForAction>> | null = null;
     try {
-      const resolved = await resolveUserLlmProvider({
+      acquired = await acquireLlmForAction({
         userId: user.id,
+        action: 'cover_letter',
+        requestedAiMode: parsed.data.aiMode,
         config,
         store,
         providerFactory
       });
-      llmProvider = resolved.provider;
-      providerId = resolved.providerId;
-    } catch {
-      llmProvider = null;
+    } catch (err) {
+      if (err instanceof EntitlementError) {
+        return replyEntitlementError(reply, err);
+      }
+      acquired = null;
     }
 
-    const generated = await generateCoverLetterPipeline({
-      masterProfile: profile,
-      stories,
-      companyName,
-      roleTitle,
-      jdDescription,
-      cachedJdRequirements,
-      tone: parsed.data.tone,
-      customInstructions: parsed.data.customInstructions,
-      autoRepairFlagged: parsed.data.autoRepairFlagged,
-      llmProvider
-    });
+    const llmProvider = acquired?.provider ?? null;
+    const providerId = acquired?.providerId ?? null;
+
+    let generated: Awaited<ReturnType<typeof generateCoverLetterPipeline>>;
+    try {
+      generated = await generateCoverLetterPipeline({
+        masterProfile: profile,
+        stories,
+        companyName,
+        roleTitle,
+        jdDescription,
+        cachedJdRequirements,
+        tone: parsed.data.tone,
+        customInstructions: parsed.data.customInstructions,
+        autoRepairFlagged: parsed.data.autoRepairFlagged,
+        llmProvider,
+        model: acquired?.model
+      });
+    } catch (err) {
+      await acquired?.refund('cover_letter_failed');
+      throw err;
+    }
 
     if (jobId && llmProvider && !cachedJdRequirements) {
       await store.saveJobParsedRequirements(jobId, generated.jdRequirements);
@@ -1303,7 +1537,7 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       pdfStoragePath,
       pdfEngine: generated.pdfEngine,
       provider: generated.usedLlm ? providerId : null,
-      model: null
+      model: generated.usedLlm ? (acquired?.model ?? null) : null
     });
 
     return reply.code(201).send(record);
@@ -1471,15 +1705,36 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       store.listSavedAnswers(user.id)
     ]);
 
-    const llmProvider = await tryResolveOptionalLlm(user.id);
-    const result = await draftExtensionQuestionAnswers({
-      request: parsed.data,
-      profile,
-      stories,
-      savedAnswers,
-      llmProvider
-    });
-    return result;
+    let acquired: Awaited<ReturnType<typeof acquireLlmForAction>> | null = null;
+    try {
+      acquired = await acquireLlmForAction({
+        userId: user.id,
+        action: 'form_draft',
+        requestedAiMode: parsed.data.aiMode,
+        config,
+        store,
+        providerFactory
+      });
+    } catch (err) {
+      if (err instanceof EntitlementError) {
+        return replyEntitlementError(reply, err);
+      }
+      acquired = null;
+    }
+
+    try {
+      const result = await draftExtensionQuestionAnswers({
+        request: parsed.data,
+        profile,
+        stories,
+        savedAnswers,
+        llmProvider: acquired?.provider ?? null
+      });
+      return result;
+    } catch (err) {
+      await acquired?.refund('form_draft_failed');
+      throw err;
+    }
   });
 
   app.post('/api/extension/fallback-fill', { preHandler: requireAuth }, async (request, reply) => {
@@ -1497,14 +1752,35 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       store.listSavedAnswers(user.id)
     ]);
 
-    const llmProvider = await tryResolveOptionalLlm(user.id);
-    return runExtensionLlmFallbackFill({
-      request: parsed.data,
-      profile,
-      stories,
-      savedAnswers,
-      llmProvider
-    });
+    let acquired: Awaited<ReturnType<typeof acquireLlmForAction>> | null = null;
+    try {
+      acquired = await acquireLlmForAction({
+        userId: user.id,
+        action: 'fallback_fill',
+        requestedAiMode: parsed.data.aiMode,
+        config,
+        store,
+        providerFactory
+      });
+    } catch (err) {
+      if (err instanceof EntitlementError) {
+        return replyEntitlementError(reply, err);
+      }
+      acquired = null;
+    }
+
+    try {
+      return await runExtensionLlmFallbackFill({
+        request: parsed.data,
+        profile,
+        stories,
+        savedAnswers,
+        llmProvider: acquired?.provider ?? null
+      });
+    } catch (err) {
+      await acquired?.refund('fallback_fill_failed');
+      throw err;
+    }
   });
 
   async function resolveEffectiveProfile(
@@ -1526,20 +1802,6 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
         indiaProfile: variant.indiaProfile
       }
     };
-  }
-
-  async function tryResolveOptionalLlm(userId: string): Promise<LlmProvider | null> {
-    try {
-      const resolved = await resolveUserLlmProvider({
-        userId,
-        config,
-        store,
-        providerFactory
-      });
-      return resolved.provider;
-    } catch {
-      return null;
-    }
   }
 
   // --- Application Tracker (Phase 6) ---

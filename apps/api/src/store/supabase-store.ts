@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
+  AiQualityModeSchema,
   ApplicationStatusSchema,
+  BillingCurrencySchema,
   CoverLetterContentSchema,
   CoverLetterToneSchema,
   CrawlRunSummarySchema,
@@ -13,6 +15,9 @@ import {
   JobSourceStatusSchema,
   JsonResumeSchema,
   LlmProviderIdSchema,
+  PaymentProviderSchema,
+  PLAN_CATALOG,
+  PlanIdSchema,
   ProviderCapabilitiesSchema,
   ResumeDiffSummarySchema,
   ResumeTemplateIdSchema,
@@ -20,16 +25,21 @@ import {
   SearchPreferencesSchema,
   StoryCategorySchema,
   StoryMetricSchema,
+  SubscriptionStatusSchema,
   VerifierReportSchema,
+  type AiQualityMode,
   type ApplicationEventRecord,
   type ApplicationRecord,
   type ApplicationStatus,
+  type BillingCurrency,
   type CaptureExtensionJobRequest,
   type CaptureExtensionJobResponse,
   type CoverLetterRecord,
   type CrawlRunSummary,
   type CreateManualApplicationRequest,
   type CreateProfileVariantRequest,
+  type CreditLedgerEntry,
+  type CreditPackId,
   type DismissReason,
   type JdRequirements,
   type JobFeedItem,
@@ -42,14 +52,18 @@ import {
   type LlmUsageLog,
   type LlmUsageSummary,
   type MasterProfile,
+  type PaymentProvider,
+  type PlanId,
   type ProfileStory,
   type ProfileVariantRecord,
   type ResumeVersionRecord,
   type SavedAnswer,
   type UpdateApplicationRequest,
+  type UpdateBillingPreferencesRequest,
   type UpdateProfileVariantRequest,
   type UpsertSavedAnswerRequest,
   type UpsertStoryRequest,
+  type UserSubscription,
   type VerifierReport
 } from '@jobpilot/shared';
 import type {
@@ -69,6 +83,7 @@ import type {
   AuthUser,
   CreateCoverLetterInput,
   CreateResumeVersionInput,
+  CreditDebitResult,
   DataStore,
   LlmSettingPatch,
   ProfilePatch,
@@ -76,6 +91,46 @@ import type {
   UpdateCoverLetterPatch,
   UpsertJobSourceStatusInput
 } from './types.js';
+
+function mapSubscriptionRow(row: Record<string, unknown>): UserSubscription {
+  return {
+    userId: String(row['user_id']),
+    planId: PlanIdSchema.parse(row['plan_id'] ?? 'free'),
+    status: SubscriptionStatusSchema.parse(row['status'] ?? 'active'),
+    billingCurrency: BillingCurrencySchema.parse(row['billing_currency'] ?? 'INR'),
+    aiModePreference: AiQualityModeSchema.parse(row['ai_mode_preference'] ?? 'fast'),
+    useByokOverride: Boolean(row['use_byok_override'] ?? false),
+    monthlyCreditsRemaining: Number(row['monthly_credits_remaining'] ?? 0),
+    monthlyCreditsAllowance: Number(row['monthly_credits_allowance'] ?? 25),
+    topupCreditsRemaining: Number(row['topup_credits_remaining'] ?? 0),
+    currentPeriodStart: String(row['current_period_start']),
+    currentPeriodEnd: String(row['current_period_end']),
+    paymentProvider: row['payment_provider']
+      ? PaymentProviderSchema.parse(row['payment_provider'])
+      : null,
+    externalCustomerId: (row['external_customer_id'] as string | null) ?? null,
+    externalSubscriptionId: (row['external_subscription_id'] as string | null) ?? null,
+    createdAt: String(row['created_at']),
+    updatedAt: String(row['updated_at'])
+  };
+}
+
+function mapCreditLedgerRow(row: Record<string, unknown>): CreditLedgerEntry {
+  return {
+    id: String(row['id']),
+    userId: String(row['user_id']),
+    delta: Number(row['delta'] ?? 0),
+    bucket: row['bucket'] === 'topup' ? 'topup' : 'monthly',
+    reason: String(row['reason'] ?? ''),
+    aiMode: (row['ai_mode'] as CreditLedgerEntry['aiMode']) ?? null,
+    balanceAfter: Number(row['balance_after'] ?? 0),
+    metadata:
+      row['metadata'] && typeof row['metadata'] === 'object'
+        ? (row['metadata'] as Record<string, unknown>)
+        : {},
+    createdAt: String(row['created_at'])
+  };
+}
 
 function mapProfileRow(row: Record<string, unknown>): MasterProfile {
   return {
@@ -696,7 +751,9 @@ export class SupabaseDataStore implements DataStore {
       usageSummary,
       resumeVersions,
       coverLetters,
-      applications
+      applications,
+      subscription,
+      creditLedger
     ] = await Promise.all([
       this.getOrCreateProfile(user),
       this.listProfileVariants(user.id),
@@ -706,7 +763,9 @@ export class SupabaseDataStore implements DataStore {
       this.getUsageSummary(user.id, 500),
       this.listResumeVersions(user.id),
       this.listCoverLetters(user.id),
-      this.listApplications(user.id)
+      this.listApplications(user.id),
+      this.getOrCreateSubscription(user.id),
+      this.listCreditLedger(user.id, 100)
     ]);
 
     return {
@@ -724,7 +783,9 @@ export class SupabaseDataStore implements DataStore {
       usageLogs: usageSummary.recentLogs,
       resumeVersions,
       coverLetters,
-      applications
+      applications,
+      subscription,
+      creditLedger
     };
   }
 
@@ -2270,5 +2331,411 @@ export class SupabaseDataStore implements DataStore {
 
     if (error) throw new Error(`Failed to delete application: ${error.message}`);
     return Array.isArray(data) && data.length > 0;
+  }
+
+  private async insertCreditLedger(
+    userId: string,
+    entry: {
+      delta: number;
+      bucket: 'monthly' | 'topup';
+      reason: string;
+      aiMode: 'fast' | 'precision' | 'byok' | null;
+      balanceAfter: number;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<void> {
+    const { error } = await this.client.from('credit_ledger').insert({
+      user_id: userId,
+      delta: entry.delta,
+      bucket: entry.bucket,
+      reason: entry.reason,
+      ai_mode: entry.aiMode,
+      balance_after: Math.max(0, entry.balanceAfter),
+      metadata: entry.metadata ?? {}
+    });
+    if (error) {
+      throw new Error(`Failed to insert credit ledger row: ${error.message}`);
+    }
+  }
+
+  async getOrCreateSubscription(userId: string): Promise<UserSubscription> {
+    const { data: existing, error } = await this.client
+      .from('user_subscriptions')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) throw new Error(`Failed to fetch subscription: ${error.message}`);
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+
+    if (!existing) {
+      const freePlan = PLAN_CATALOG.free;
+      const periodEnd = new Date(
+        now.getTime() + freePlan.durationDays * 24 * 60 * 60 * 1000
+      ).toISOString();
+
+      const { data: inserted, error: insertErr } = await this.client
+        .from('user_subscriptions')
+        .upsert(
+          {
+            user_id: userId,
+            plan_id: 'free',
+            status: 'active',
+            billing_currency: 'INR',
+            ai_mode_preference: 'fast',
+            use_byok_override: false,
+            monthly_credits_remaining: freePlan.monthlyCredits,
+            monthly_credits_allowance: freePlan.monthlyCredits,
+            topup_credits_remaining: 0,
+            current_period_start: nowIso,
+            current_period_end: periodEnd
+          },
+          { onConflict: 'user_id' }
+        )
+        .select('*')
+        .single();
+
+      if (insertErr || !inserted) {
+        throw new Error(`Failed to provision subscription: ${insertErr?.message ?? 'unknown'}`);
+      }
+      await this.insertCreditLedger(userId, {
+        delta: freePlan.monthlyCredits,
+        bucket: 'monthly',
+        reason: 'plan_grant:free',
+        aiMode: null,
+        balanceAfter: freePlan.monthlyCredits,
+        metadata: { planId: 'free' }
+      });
+      return mapSubscriptionRow(inserted as Record<string, unknown>);
+    }
+
+    const sub = mapSubscriptionRow(existing as Record<string, unknown>);
+    if (Date.parse(sub.currentPeriodEnd) <= now.getTime()) {
+      if (sub.planId === 'sprint_90') {
+        const freePlan = PLAN_CATALOG.free;
+        const nextEnd = new Date(
+          now.getTime() + freePlan.durationDays * 24 * 60 * 60 * 1000
+        ).toISOString();
+        const { data: updated, error: upErr } = await this.client
+          .from('user_subscriptions')
+          .update({
+            plan_id: 'free',
+            status: 'active',
+            ai_mode_preference: 'fast',
+            monthly_credits_allowance: freePlan.monthlyCredits,
+            monthly_credits_remaining: freePlan.monthlyCredits,
+            current_period_start: nowIso,
+            current_period_end: nextEnd
+          })
+          .eq('user_id', userId)
+          .select('*')
+          .single();
+
+        if (upErr || !updated) {
+          throw new Error(`Failed to downgrade expired sprint pass: ${upErr?.message ?? 'unknown'}`);
+        }
+        const mapped = mapSubscriptionRow(updated as Record<string, unknown>);
+        await this.insertCreditLedger(userId, {
+          delta: freePlan.monthlyCredits,
+          bucket: 'monthly',
+          reason: 'sprint_90_expired_to_free',
+          aiMode: null,
+          balanceAfter: mapped.monthlyCreditsRemaining + mapped.topupCreditsRemaining,
+          metadata: { planId: 'free' }
+        });
+        return mapped;
+      }
+
+      if (sub.status === 'active') {
+        const plan = PLAN_CATALOG[sub.planId];
+        const nextEnd = new Date(
+          now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000
+        ).toISOString();
+        const { data: updated, error: upErr } = await this.client
+          .from('user_subscriptions')
+          .update({
+            monthly_credits_allowance: plan.monthlyCredits,
+            monthly_credits_remaining: plan.monthlyCredits,
+            current_period_start: nowIso,
+            current_period_end: nextEnd
+          })
+          .eq('user_id', userId)
+          .select('*')
+          .single();
+
+        if (upErr || !updated) {
+          throw new Error(`Failed to roll over billing period: ${upErr?.message ?? 'unknown'}`);
+        }
+        const mapped = mapSubscriptionRow(updated as Record<string, unknown>);
+        await this.insertCreditLedger(userId, {
+          delta: plan.monthlyCredits,
+          bucket: 'monthly',
+          reason: `period_renewal:${sub.planId}`,
+          aiMode: null,
+          balanceAfter: mapped.monthlyCreditsRemaining + mapped.topupCreditsRemaining,
+          metadata: { planId: sub.planId }
+        });
+        return mapped;
+      }
+    }
+
+    return sub;
+  }
+
+  async updateSubscriptionPreferences(
+    userId: string,
+    patch: UpdateBillingPreferencesRequest
+  ): Promise<UserSubscription> {
+    await this.getOrCreateSubscription(userId);
+    const updateRow: Record<string, unknown> = {};
+    if (patch.billingCurrency !== undefined) updateRow['billing_currency'] = patch.billingCurrency;
+    if (patch.aiModePreference !== undefined) updateRow['ai_mode_preference'] = patch.aiModePreference;
+    if (patch.useByokOverride !== undefined) updateRow['use_byok_override'] = patch.useByokOverride;
+
+    const { data, error } = await this.client
+      .from('user_subscriptions')
+      .update(updateRow)
+      .eq('user_id', userId)
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      throw new Error(`Failed to update subscription preferences: ${error?.message ?? 'unknown'}`);
+    }
+    return mapSubscriptionRow(data as Record<string, unknown>);
+  }
+
+  async applyPlanChange(
+    userId: string,
+    params: {
+      planId: PlanId;
+      currency?: BillingCurrency;
+      paymentProvider?: PaymentProvider | null;
+      externalCustomerId?: string | null;
+      externalSubscriptionId?: string | null;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<UserSubscription> {
+    const existing = await this.getOrCreateSubscription(userId);
+    const plan = PLAN_CATALOG[params.planId];
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const periodEnd = new Date(
+      now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000
+    ).toISOString();
+
+    const nextAiMode = plan.entitlements.allowedAiModes.includes(existing.aiModePreference)
+      ? existing.aiModePreference
+      : 'fast';
+
+    const updateRow: Record<string, unknown> = {
+      plan_id: params.planId,
+      status: 'active',
+      ai_mode_preference: nextAiMode,
+      monthly_credits_allowance: plan.monthlyCredits,
+      monthly_credits_remaining: plan.monthlyCredits,
+      current_period_start: nowIso,
+      current_period_end: periodEnd
+    };
+    if (params.currency) updateRow['billing_currency'] = params.currency;
+    if (params.paymentProvider !== undefined) updateRow['payment_provider'] = params.paymentProvider;
+    if (params.externalCustomerId !== undefined) {
+      updateRow['external_customer_id'] = params.externalCustomerId;
+    }
+    if (params.externalSubscriptionId !== undefined) {
+      updateRow['external_subscription_id'] = params.externalSubscriptionId;
+    }
+
+    const { data, error } = await this.client
+      .from('user_subscriptions')
+      .update(updateRow)
+      .eq('user_id', userId)
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      throw new Error(`Failed to apply plan change: ${error?.message ?? 'unknown'}`);
+    }
+    const mapped = mapSubscriptionRow(data as Record<string, unknown>);
+    await this.insertCreditLedger(userId, {
+      delta: plan.monthlyCredits,
+      bucket: 'monthly',
+      reason: `plan_activated:${params.planId}`,
+      aiMode: null,
+      balanceAfter: mapped.monthlyCreditsRemaining + mapped.topupCreditsRemaining,
+      metadata: { planId: params.planId, ...(params.metadata ?? {}) }
+    });
+    return mapped;
+  }
+
+  async grantTopupCredits(
+    userId: string,
+    params: {
+      packId: CreditPackId;
+      credits: number;
+      paymentProvider?: PaymentProvider | null;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<UserSubscription> {
+    const existing = await this.getOrCreateSubscription(userId);
+    const nextTopup = existing.topupCreditsRemaining + params.credits;
+
+    const { data, error } = await this.client
+      .from('user_subscriptions')
+      .update({ topup_credits_remaining: nextTopup })
+      .eq('user_id', userId)
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      throw new Error(`Failed to grant top-up credits: ${error?.message ?? 'unknown'}`);
+    }
+    const mapped = mapSubscriptionRow(data as Record<string, unknown>);
+    await this.insertCreditLedger(userId, {
+      delta: params.credits,
+      bucket: 'topup',
+      reason: `topup_purchased:${params.packId}`,
+      aiMode: null,
+      balanceAfter: mapped.monthlyCreditsRemaining + mapped.topupCreditsRemaining,
+      metadata: { packId: params.packId, ...(params.metadata ?? {}) }
+    });
+    return mapped;
+  }
+
+  async debitCredits(
+    userId: string,
+    params: {
+      amount: number;
+      reason: string;
+      aiMode: AiQualityMode;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<CreditDebitResult> {
+    const sub = await this.getOrCreateSubscription(userId);
+    if (params.amount <= 0) {
+      return { ok: true, subscription: sub, debitedMonthly: 0, debitedTopup: 0 };
+    }
+    const total = sub.monthlyCreditsRemaining + sub.topupCreditsRemaining;
+    if (total < params.amount) {
+      return { ok: false, subscription: sub };
+    }
+
+    const debitedMonthly = Math.min(sub.monthlyCreditsRemaining, params.amount);
+    const debitedTopup = params.amount - debitedMonthly;
+    const nextMonthly = sub.monthlyCreditsRemaining - debitedMonthly;
+    const nextTopup = sub.topupCreditsRemaining - debitedTopup;
+
+    const { data, error } = await this.client
+      .from('user_subscriptions')
+      .update({
+        monthly_credits_remaining: nextMonthly,
+        topup_credits_remaining: nextTopup
+      })
+      .eq('user_id', userId)
+      .eq('monthly_credits_remaining', sub.monthlyCreditsRemaining)
+      .eq('topup_credits_remaining', sub.topupCreditsRemaining)
+      .select('*')
+      .maybeSingle();
+
+    if (error) throw new Error(`Failed to debit credits: ${error.message}`);
+    if (!data) {
+      const fresh = await this.getOrCreateSubscription(userId);
+      return { ok: false, subscription: fresh };
+    }
+
+    const mapped = mapSubscriptionRow(data as Record<string, unknown>);
+    if (debitedMonthly > 0) {
+      await this.insertCreditLedger(userId, {
+        delta: -debitedMonthly,
+        bucket: 'monthly',
+        reason: params.reason,
+        aiMode: params.aiMode,
+        balanceAfter: mapped.monthlyCreditsRemaining + mapped.topupCreditsRemaining + debitedTopup,
+        metadata: params.metadata ?? {}
+      });
+    }
+    if (debitedTopup > 0) {
+      await this.insertCreditLedger(userId, {
+        delta: -debitedTopup,
+        bucket: 'topup',
+        reason: params.reason,
+        aiMode: params.aiMode,
+        balanceAfter: mapped.monthlyCreditsRemaining + mapped.topupCreditsRemaining,
+        metadata: params.metadata ?? {}
+      });
+    }
+
+    return {
+      ok: true,
+      subscription: mapped,
+      debitedMonthly,
+      debitedTopup
+    };
+  }
+
+  async refundCredits(
+    userId: string,
+    params: {
+      debitedMonthly: number;
+      debitedTopup: number;
+      reason: string;
+      aiMode: AiQualityMode;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<UserSubscription> {
+    const sub = await this.getOrCreateSubscription(userId);
+    const nextMonthly = sub.monthlyCreditsRemaining + Math.max(0, params.debitedMonthly);
+    const nextTopup = sub.topupCreditsRemaining + Math.max(0, params.debitedTopup);
+
+    const { data, error } = await this.client
+      .from('user_subscriptions')
+      .update({
+        monthly_credits_remaining: nextMonthly,
+        topup_credits_remaining: nextTopup
+      })
+      .eq('user_id', userId)
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      throw new Error(`Failed to refund credits: ${error?.message ?? 'unknown'}`);
+    }
+    const mapped = mapSubscriptionRow(data as Record<string, unknown>);
+
+    if (params.debitedMonthly > 0) {
+      await this.insertCreditLedger(userId, {
+        delta: params.debitedMonthly,
+        bucket: 'monthly',
+        reason: params.reason,
+        aiMode: params.aiMode,
+        balanceAfter: mapped.monthlyCreditsRemaining + mapped.topupCreditsRemaining - params.debitedTopup,
+        metadata: params.metadata ?? {}
+      });
+    }
+    if (params.debitedTopup > 0) {
+      await this.insertCreditLedger(userId, {
+        delta: params.debitedTopup,
+        bucket: 'topup',
+        reason: params.reason,
+        aiMode: params.aiMode,
+        balanceAfter: mapped.monthlyCreditsRemaining + mapped.topupCreditsRemaining,
+        metadata: params.metadata ?? {}
+      });
+    }
+    return mapped;
+  }
+
+  async listCreditLedger(userId: string, limit: number = 50): Promise<CreditLedgerEntry[]> {
+    const { data, error } = await this.client
+      .from('credit_ledger')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw new Error(`Failed to list credit ledger: ${error.message}`);
+    return (data ?? []).map((row) => mapCreditLedgerRow(row as Record<string, unknown>));
   }
 }

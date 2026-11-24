@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AiQualityModeSchema } from './billing.js';
 import { LlmProviderIdSchema } from './llm.js';
 import { JdRequirementsSchema, VerifierReportSchema } from './resume-tailor.js';
 
@@ -70,7 +71,8 @@ export const GenerateCoverLetterRequestSchema = z
     tone: CoverLetterToneSchema.default('concise-technical'),
     label: z.string().trim().min(1).max(160).optional(),
     customInstructions: z.string().max(600).optional(),
-    autoRepairFlagged: z.boolean().default(true)
+    autoRepairFlagged: z.boolean().default(true),
+    aiMode: AiQualityModeSchema.optional()
   })
   .refine((data) => Boolean(data.jobId || data.customJob), {
     message: 'Either jobId or customJob must be supplied.'

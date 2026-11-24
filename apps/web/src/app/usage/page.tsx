@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import type { LlmUsageSummary } from '@jobpilot/shared';
+import Link from 'next/link';
+import type { BillingSnapshot, LlmUsageSummary } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import {
   AlertBanner,
@@ -16,6 +17,7 @@ import { formatTaskLabel } from '@/lib/format';
 
 export default function UsagePage() {
   const [summary, setSummary] = useState<LlmUsageSummary | null>(null);
+  const [billing, setBilling] = useState<BillingSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -23,8 +25,12 @@ export default function UsagePage() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const data = await api.getUsage();
+      const [data, billingSnap] = await Promise.all([
+        api.getUsage(),
+        api.getBillingStatus().catch(() => null)
+      ]);
       setSummary(data);
+      setBilling(billingSnap);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to load usage logs.');
     } finally {
@@ -40,9 +46,16 @@ export default function UsagePage() {
     <AppShell
       title="Usage"
       actions={
-        <Button variant="secondary" size="sm" onClick={loadUsage} disabled={loading}>
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link href="/billing">
+            <Button variant="secondary" size="sm">
+              Plans &amp; Credits
+            </Button>
+          </Link>
+          <Button variant="secondary" size="sm" onClick={loadUsage} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </Button>
+        </div>
       }
     >
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
@@ -56,6 +69,27 @@ export default function UsagePage() {
         </div>
       ) : summary ? (
         <div className="space-y-6">
+          {billing ? (
+            <div className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <Badge tone={billing.subscription.planId === 'free' ? 'neutral' : 'dark'}>
+                  {billing.plan.name}
+                </Badge>
+                <span className="font-bold text-[var(--ink)] tabular-nums">
+                  {billing.totalCreditsRemaining} credits remaining
+                </span>
+                <span className="text-[var(--mute)]">
+                  ({billing.subscription.monthlyCreditsRemaining} plan +{' '}
+                  {billing.subscription.topupCreditsRemaining} top-up ·{' '}
+                  {billing.executionMode === 'byok' ? 'BYOK mode' : `${billing.subscription.aiModePreference} mode`})
+                </span>
+              </div>
+              <Link href="/billing" className="text-xs font-medium text-[var(--ink)] underline">
+                Manage plan &amp; ledger -&gt;
+              </Link>
+            </div>
+          ) : null}
+
           {/* Uniform Hairline KPI Strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-[var(--hairline)] border border-[var(--hairline)]">
             <div className="bg-[var(--surface-soft)] p-4">

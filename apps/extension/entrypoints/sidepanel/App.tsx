@@ -103,6 +103,7 @@ export function App() {
   const [savingAnswerFieldId, setSavingAnswerFieldId] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [upgradePrompt, setUpgradePrompt] = useState<string | null>(null);
 
   // Direct Sign-in & Advanced Override fields
   const [emailInput, setEmailInput] = useState('');
@@ -604,6 +605,7 @@ export function App() {
 
     setTailoringHere(true);
     setErrorMsg(null);
+    setUpgradePrompt(null);
     setStatusMsg(null);
     try {
       const res = (await chrome.runtime.sendMessage({
@@ -620,7 +622,13 @@ export function App() {
         }
       } satisfies ExtensionMessage)) as TailorResumeProxyResponse;
 
-      if (!res?.ok) throw new Error(res?.error || 'Tailoring failed.');
+      if (!res?.ok) {
+        if (res?.status === 402 || res?.status === 403) {
+          setUpgradePrompt(res.error);
+          return;
+        }
+        throw new Error(res?.error || 'Tailoring failed.');
+      }
       const created = res.data;
       if (cachedData) {
         const updatedCache: CachedUserData = {
@@ -671,6 +679,7 @@ export function App() {
 
     setDrafting(true);
     setErrorMsg(null);
+    setUpgradePrompt(null);
     setStatusMsg(null);
     try {
       const res = (await chrome.runtime.sendMessage({
@@ -683,7 +692,13 @@ export function App() {
         }
       } satisfies ExtensionMessage)) as ApiProxyResponse<DraftAnswersResponse>;
 
-      if (!res?.ok) throw new Error(res?.error || 'Failed to draft answers.');
+      if (!res?.ok) {
+        if (res?.status === 402 || res?.status === 403) {
+          setUpgradePrompt(res.error);
+          return;
+        }
+        throw new Error(res?.error || 'Failed to draft answers.');
+      }
       const draftMap = new Map(res.data.drafts.map((d) => [d.fieldId, d]));
 
       setPlanItems((prev) =>
@@ -728,6 +743,7 @@ export function App() {
 
     setMappingFallback(true);
     setErrorMsg(null);
+    setUpgradePrompt(null);
     setStatusMsg(null);
     try {
       const res = (await chrome.runtime.sendMessage({
@@ -749,7 +765,13 @@ export function App() {
         }
       } satisfies ExtensionMessage)) as ApiProxyResponse<FallbackFillResponse>;
 
-      if (!res?.ok) throw new Error(res?.error || 'LLM fallback mapping failed.');
+      if (!res?.ok) {
+        if (res?.status === 402 || res?.status === 403) {
+          setUpgradePrompt(res.error);
+          return;
+        }
+        throw new Error(res?.error || 'LLM fallback mapping failed.');
+      }
 
       const merged = [...lastFallbackRef.current];
       for (const s of res.data.suggestions) {
@@ -1023,6 +1045,13 @@ export function App() {
 
   const handleToggleAdapter = (adapterKey: keyof AdapterEnabledMap, enabled: boolean) => {
     const meta = getAdapterById(adapterKey);
+    const nonApiUnlocked = cachedData?.billing?.entitlements.nonApiAdaptersUnlocked ?? true;
+    if (enabled && meta.category === 'non_api_session' && !nonApiUnlocked) {
+      setUpgradePrompt(
+        `${meta.displayName} opt-in autofill requires Pro, 90-Day Sprint Pass, or Plus.`
+      );
+      return;
+    }
     const permPromise =
       enabled && meta.hostOriginPatterns.length > 0
         ? chrome.permissions.request({ origins: [...meta.hostOriginPatterns] })
@@ -1082,9 +1111,25 @@ export function App() {
       <header className="jp-header">
         <div className="jp-brand-row">
           <span className="jp-brand">[JP] JobPilot MV3</span>
-          <span className={session ? 'jp-badge jp-badge-ok' : 'jp-badge jp-badge-warn'}>
-            {session ? 'CONNECTED' : 'OFFLINE'}
-          </span>
+          <div className="jp-row" style={{ gap: '6px' }}>
+            {cachedData?.billing ? (
+              <button
+                type="button"
+                className="jp-badge"
+                style={{ cursor: 'pointer' }}
+                title="Open Plans & Credits"
+                onClick={() => void chrome.tabs.create({ url: `${settings.webBaseUrl}/billing` })}
+              >
+                {cachedData.billing.plan.name.toUpperCase()} ·{' '}
+                {cachedData.billing.executionMode === 'byok'
+                  ? 'BYOK'
+                  : `${cachedData.billing.totalCreditsRemaining} CR`}
+              </button>
+            ) : null}
+            <span className={session ? 'jp-badge jp-badge-ok' : 'jp-badge jp-badge-warn'}>
+              {session ? 'CONNECTED' : 'OFFLINE'}
+            </span>
+          </div>
         </div>
         {scan ? (
           <div className="jp-row">
@@ -1134,6 +1179,18 @@ export function App() {
         {errorMsg ? (
           <div className="jp-banner jp-banner-error" role="alert">
             [err] {errorMsg}
+          </div>
+        ) : null}
+        {upgradePrompt ? (
+          <div className="jp-banner jp-banner-warn" role="alert">
+            <div style={{ marginBottom: 6 }}>[upgrade] {upgradePrompt}</div>
+            <button
+              type="button"
+              className="jp-btn jp-btn-primary"
+              onClick={() => void chrome.tabs.create({ url: `${settings.webBaseUrl}/billing` })}
+            >
+              Open Plans &amp; Credits -&gt;
+            </button>
           </div>
         ) : null}
         {statusMsg ? (
@@ -1860,7 +1917,18 @@ export function App() {
             </div>
 
             <div className="jp-panel">
-              <div className="jp-label">Opt-In Session Portals (Non-API, ToS Risk)</div>
+              <div className="jp-field-top">
+                <div className="jp-label">Opt-In Session Portals (Non-API, ToS Risk)</div>
+                {cachedData?.billing && !cachedData.billing.entitlements.nonApiAdaptersUnlocked ? (
+                  <button
+                    type="button"
+                    className="jp-btn jp-btn-primary"
+                    onClick={() => void chrome.tabs.create({ url: `${settings.webBaseUrl}/billing` })}
+                  >
+                    Unlock on Pro -&gt;
+                  </button>
+                ) : null}
+              </div>
               <p className="jp-meta">
                 All 6 portals below are OFF by default and never scraped server-side. Turning one on
                 requests host permission only for that portal, runs strictly when you click in your
@@ -1868,24 +1936,36 @@ export function App() {
               </p>
               {NON_API_SESSION_ADAPTERS.map((adapter) => {
                 const key = adapter.id as keyof AdapterEnabledMap;
+                const nonApiUnlocked =
+                  cachedData?.billing?.entitlements.nonApiAdaptersUnlocked ?? true;
                 return (
                   <div key={adapter.id} className="jp-field-card">
                     <div className="jp-field-top">
-                      <label className="jp-row" style={{ cursor: 'pointer' }}>
+                      <label
+                        className="jp-row"
+                        style={{
+                          cursor: nonApiUnlocked ? 'pointer' : 'not-allowed',
+                          opacity: nonApiUnlocked ? 1 : 0.65
+                        }}
+                      >
                         <input
                           type="checkbox"
+                          disabled={!nonApiUnlocked}
                           checked={settings.enabledAdapters[key]}
                           onChange={(e) => handleToggleAdapter(key, e.target.checked)}
                         />
                         <span className="jp-label">{adapter.displayName}</span>
                       </label>
-                      <span
-                        className={
-                          adapter.tosRiskLevel === 'high' ? 'jp-badge jp-badge-warn' : 'jp-badge'
-                        }
-                      >
-                        {adapter.tosRiskLevel.toUpperCase()} RISK
-                      </span>
+                      <div className="jp-row" style={{ gap: 4 }}>
+                        {!nonApiUnlocked ? <span className="jp-badge">PRO</span> : null}
+                        <span
+                          className={
+                            adapter.tosRiskLevel === 'high' ? 'jp-badge jp-badge-warn' : 'jp-badge'
+                          }
+                        >
+                          {adapter.tosRiskLevel.toUpperCase()} RISK
+                        </span>
+                      </div>
                     </div>
                     <div className="jp-meta">{adapter.tosWarning}</div>
                   </div>

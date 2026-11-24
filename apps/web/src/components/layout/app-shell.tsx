@@ -3,6 +3,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import type { BillingSnapshot } from '@jobpilot/shared';
+import { api } from '@/lib/api';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 import { ThemeQuickToggle } from '../theme-toggle';
 import { AlertBanner, AsciiWordmark, Button, SkeletonBlock, cn } from '../ui/primitives';
@@ -15,6 +17,7 @@ type NavIconName =
   | 'resume'
   | 'stories'
   | 'answers'
+  | 'billing'
   | 'usage'
   | 'settings';
 
@@ -50,6 +53,7 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
 ];
 
 const UTILITY_ITEMS: NavItem[] = [
+  { href: '/billing', label: 'Plans', icon: 'billing' },
   { href: '/usage', label: 'Usage', icon: 'usage' },
   { href: '/settings', label: 'Settings', icon: 'settings' }
 ];
@@ -140,6 +144,14 @@ function NavIcon({ name }: { name: NavIconName }) {
           />
         </svg>
       );
+    case 'billing':
+      return (
+        <svg {...props}>
+          <rect x="2" y="3.5" width="12" height="9" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+          <path d="M2 6.5h12" stroke="currentColor" strokeWidth="1.4" />
+          <path d="M4.5 9.5h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      );
     case 'usage':
       return (
         <svg {...props}>
@@ -183,6 +195,7 @@ export function AppShell({
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [billing, setBilling] = useState<BillingSnapshot | null>(null);
 
   const shortcutsDialogRef = useRef<HTMLDialogElement>(null);
   const pressedOutsideRef = useRef(false);
@@ -269,6 +282,12 @@ export function AppShell({
         router.replace('/login');
       } else {
         setUserEmail(data.session.user.email ?? null);
+        void api
+          .getBillingStatus()
+          .then((snap) => {
+            if (mounted) setBilling(snap);
+          })
+          .catch(() => {});
       }
       setAuthChecked(true);
     });
@@ -346,6 +365,29 @@ export function AppShell({
         </nav>
 
         <div className="border-t border-[var(--hairline)] p-3 space-y-2.5 shrink-0">
+          {billing ? (
+            <Link
+              href="/billing"
+              className="block border border-[var(--hairline)] bg-[var(--canvas)] hover:border-[var(--hairline-strong)] px-2.5 py-2 rounded-[4px] no-underline transition-colors"
+            >
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-bold uppercase tracking-wider text-[var(--ink)]">
+                  {billing.plan.name}
+                </span>
+                <span className="tabular-nums font-semibold text-[var(--ink)]">
+                  {billing.executionMode === 'byok'
+                    ? 'BYOK'
+                    : `${billing.totalCreditsRemaining} cr`}
+                </span>
+              </div>
+              <p className="text-[10px] text-[var(--mute)] mt-0.5 truncate">
+                {billing.executionMode === 'byok'
+                  ? 'Developer key active'
+                  : 'Managed AI credits →'}
+              </p>
+            </Link>
+          ) : null}
+
           <div className="space-y-0.5">{UTILITY_ITEMS.map((item) => renderNavLink(item))}</div>
 
           <div className="flex items-center gap-2 pt-1">

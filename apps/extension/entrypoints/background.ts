@@ -621,9 +621,13 @@ export default defineBackground(() => {
           const data = await draftExtensionAnswers(message.payload);
           sendResponse({ ok: true, data });
         } catch (err) {
+          const apiErr = err as { status?: number; code?: string; upgradeUrl?: string };
           sendResponse({
             ok: false,
-            error: err instanceof Error ? err.message : 'Failed to draft answers'
+            error: err instanceof Error ? err.message : 'Failed to draft answers',
+            status: apiErr?.status,
+            code: apiErr?.code,
+            upgradeUrl: apiErr?.upgradeUrl
           });
         }
       })();
@@ -636,9 +640,13 @@ export default defineBackground(() => {
           const data = await fallbackFillExtensionFields(message.payload);
           sendResponse({ ok: true, data });
         } catch (err) {
+          const apiErr = err as { status?: number; code?: string; upgradeUrl?: string };
           sendResponse({
             ok: false,
-            error: err instanceof Error ? err.message : 'LLM fallback mapping failed'
+            error: err instanceof Error ? err.message : 'LLM fallback mapping failed',
+            status: apiErr?.status,
+            code: apiErr?.code,
+            upgradeUrl: apiErr?.upgradeUrl
           });
         }
       })();
@@ -711,9 +719,13 @@ export default defineBackground(() => {
           const data = await tailorResumeInExtension(message.payload);
           sendResponse({ ok: true, data });
         } catch (err) {
+          const apiErr = err as { status?: number; code?: string; upgradeUrl?: string };
           sendResponse({
             ok: false,
-            error: err instanceof Error ? err.message : 'Failed to tailor resume'
+            error: err instanceof Error ? err.message : 'Failed to tailor resume',
+            status: apiErr?.status,
+            code: apiErr?.code,
+            upgradeUrl: apiErr?.upgradeUrl
           });
         }
       })();

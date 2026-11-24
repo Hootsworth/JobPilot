@@ -98,6 +98,15 @@ describe('Phase 7 Expansion API routes (#1, #2, #6, #8, #9)', () => {
     });
     expect(delLast.statusCode).toBe(400);
 
+    // Upgrade to Pro (allows up to 3 profile variants) before creating a second variant
+    const upgradeRes = await app.inject({
+      method: 'POST',
+      url: '/api/billing/checkout',
+      headers,
+      payload: { kind: 'plan', planId: 'pro', currency: 'INR' }
+    });
+    expect(upgradeRes.statusCode).toBe(200);
+
     // Create a second variant marked default with backend-specific skills
     const createRes = await app.inject({
       method: 'POST',

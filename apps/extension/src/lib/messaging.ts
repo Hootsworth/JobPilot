@@ -127,7 +127,7 @@ export type ExtensionMessage =
 
 export type ApiProxyResponse<T> =
   | { ok: true; data: T }
-  | { ok: false; error: string; status?: number };
+  | { ok: false; error: string; status?: number; code?: string; upgradeUrl?: string };
 
 export interface PdfBytesResponse {
   base64: string;

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
+import Link from 'next/link';
 import type {
   ImportPreviewCandidate,
   ProfileVariantRecord
@@ -29,6 +30,7 @@ export interface ImportSelectionState {
 interface ProfileVariantBarProps {
   variants: ProfileVariantRecord[];
   activeVariantId: string | null;
+  maxVariants?: number;
   busy: boolean;
   onSelectVariant: (variant: ProfileVariantRecord) => void;
   onCreateVariant: (input: {
@@ -43,6 +45,7 @@ interface ProfileVariantBarProps {
 export function ProfileVariantBar({
   variants,
   activeVariantId,
+  maxVariants,
   busy,
   onSelectVariant,
   onCreateVariant,
@@ -55,6 +58,8 @@ export function ProfileVariantBar({
   const [cloneCurrent, setCloneCurrent] = useState(true);
 
   const activeVariant = variants.find((v) => v.id === activeVariantId) ?? variants[0] ?? null;
+  const atVariantLimit = maxVariants !== undefined && variants.length >= maxVariants;
+  const limitLabel = maxVariants !== undefined && maxVariants < 999 ? ` / ${maxVariants}` : '';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,7 +79,8 @@ export function ProfileVariantBar({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)] mr-1">
-            Profile Variants ({variants.length})
+            Profile Variants ({variants.length}
+            {limitLabel})
           </span>
           {variants.map((v) => {
             const isSelected = v.id === activeVariant?.id;
@@ -130,15 +136,24 @@ export function ProfileVariantBar({
               Delete Variant
             </Button>
           ) : null}
-          <Button
-            type="button"
-            size="sm"
-            variant={creating ? 'primary' : 'secondary'}
-            disabled={busy}
-            onClick={() => setCreating((v) => !v)}
-          >
-            {creating ? 'Close' : '+ New Variant'}
-          </Button>
+          {atVariantLimit ? (
+            <Link
+              href="/billing"
+              className="text-xs font-medium text-[var(--accent-text)] underline px-2 py-1"
+            >
+              Upgrade for more variants -&gt;
+            </Link>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant={creating ? 'primary' : 'secondary'}
+              disabled={busy}
+              onClick={() => setCreating((v) => !v)}
+            >
+              {creating ? 'Close' : '+ New Variant'}
+            </Button>
+          )}
         </div>
       </div>
 

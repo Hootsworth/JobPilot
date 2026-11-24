@@ -1,9 +1,12 @@
 'use client';
 
 import React, { Suspense, useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import type {
+  AiQualityMode,
   AtsScoreReport,
+  BillingSnapshot,
   JobFeedItem,
   ProfileVariantRecord,
   ResumeSectionDiffSchema,
@@ -31,7 +34,7 @@ import {
   TabStrip,
   Textarea
 } from '@/components/ui/primitives';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { pluralize } from '@/lib/format';
 
 type StudioMode = 'resume' | 'cover-letter';
@@ -207,6 +210,9 @@ function TailorStudioInner() {
   const [templateId, setTemplateId] = useState<ResumeTemplateId>('ats-classic');
   const [labelOverride, setLabelOverride] = useState('');
   const [autoRepairFlagged, setAutoRepairFlagged] = useState(true);
+  const [billing, setBilling] = useState<BillingSnapshot | null>(null);
+  const [aiMode, setAiMode] = useState<AiQualityMode>('fast');
+  const [upgradePrompt, setUpgradePrompt] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<TailorTab>('pdf');
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -220,11 +226,16 @@ function TailorStudioInner() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const [jobsRes, versionsRes, variantsRes] = await Promise.all([
+      const [jobsRes, versionsRes, variantsRes, billingSnap] = await Promise.all([
         api.listJobs({ limit: 50 }),
         api.listResumeVersions(),
-        api.listProfileVariants()
+        api.listProfileVariants(),
+        api.getBillingStatus().catch(() => null)
       ]);
+      setBilling(billingSnap);
+      if (billingSnap) {
+        setAiMode(billingSnap.subscription.aiModePreference);
+      }
 
       let mergedJobs = jobsRes.items;
       if (jobIdParam && !mergedJobs.some((item) => item.job.id === jobIdParam)) {
@@ -374,6 +385,7 @@ function TailorStudioInner() {
 
     setGeneratingTarget(targetLabel);
     setTailoring(true);
+    setUpgradePrompt(null);
     setResumeStage('generating');
 
     try {
@@ -390,6 +402,7 @@ function TailorStudioInner() {
         ...(profileVariantId ? { profileVariantId } : {}),
         templateId,
         autoRepairFlagged,
+        aiMode,
         ...(labelOverride.trim() ? { label: labelOverride.trim() } : {})
       });
 
@@ -400,6 +413,7 @@ function TailorStudioInner() {
       setAtsMode('target');
       setChkReport(null);
       setResumeStage('viewer');
+      void api.getBillingStatus().then(setBilling).catch(() => {});
       if (!created.verifierPassed) {
         setStatusMsg(
           `Created v${created.versionNumber} with ${created.verifierReport.unsupportedClaimCount} flagged claim(s) — check Verification.`
@@ -407,7 +421,11 @@ function TailorStudioInner() {
       }
       moToast(`Created resume v${created.versionNumber}`);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Resume tailoring failed.');
+      if (err instanceof ApiError && (err.status === 402 || err.status === 403)) {
+        setUpgradePrompt(err.message);
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : 'Resume tailoring failed.');
+      }
       setResumeStage('compose');
     } finally {
       setTailoring(false);
@@ -517,6 +535,16 @@ function TailorStudioInner() {
       }
     >
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
+      {upgradePrompt ? (
+        <div className="border border-[var(--warning-text)]/40 bg-[var(--warning-bg)] p-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-[var(--ink)]">{upgradePrompt}</p>
+          <Link href="/billing">
+            <Button variant="primary" size="sm">
+              View Plans &amp; Top-Ups -&gt;
+            </Button>
+          </Link>
+        </div>
+      ) : null}
       {statusMsg ? <AlertBanner tone="success" message={statusMsg} /> : null}
 
       {!hideStudioTabs ? (
@@ -568,6 +596,7 @@ function TailorStudioInner() {
           catalogJobs={catalogJobs}
           variants={variants}
           defaultJobId={jobIdParam || undefined}
+          billing={billing}
           onGeneratingChange={setCoverLetterGenerating}
         />
       ) : resumeStage === 'generating' ? (
@@ -732,20 +761,54 @@ function TailorStudioInner() {
                 </Field>
               </div>
 
-              <Field
-                label="Version Label (optional)"
-                htmlFor="tailor-label"
-                hint="Defaults to Company — Role Title."
-              >
-                {(inputProps) => (
-                  <Input
-                    {...inputProps}
-                    value={labelOverride}
-                    onChange={(e) => setLabelOverride(e.target.value)}
-                    placeholder="e.g. Payments Backend Focus"
-                  />
-                )}
-              </Field>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field
+                  label="Version Label (optional)"
+                  htmlFor="tailor-label"
+                  hint="Defaults to Company — Role Title."
+                >
+                  {(inputProps) => (
+                    <Input
+                      {...inputProps}
+                      value={labelOverride}
+                      onChange={(e) => setLabelOverride(e.target.value)}
+                      placeholder="e.g. Payments Backend Focus"
+                    />
+                  )}
+                </Field>
+
+                <Field
+                  label="AI Quality Mode"
+                  htmlFor="tailor-ai-mode"
+                  hint={
+                    billing?.executionMode === 'byok'
+                      ? 'Developer BYOK active (0 credits)'
+                      : billing && !billing.entitlements.dualLlmVerifier
+                        ? 'Free uses deterministic verifier · Pro unlocks Dual LLM verification'
+                        : 'Fast uses 3 credits · Precision (Plus) uses 10 credits'
+                  }
+                >
+                  {(inputProps) => (
+                    <Select
+                      {...inputProps}
+                      value={aiMode}
+                      onChange={(e) => setAiMode(e.target.value as AiQualityMode)}
+                    >
+                      <option value="fast">Fast — Gemini Flash-Lite (3 credits)</option>
+                      <option
+                        value="precision"
+                        disabled={
+                          Boolean(billing) &&
+                          billing?.executionMode !== 'byok' &&
+                          !billing?.entitlements.allowedAiModes.includes('precision')
+                        }
+                      >
+                        Precision — Gemini Pro (10 credits · Plus)
+                      </option>
+                    </Select>
+                  )}
+                </Field>
+              </div>
 
               <label className="flex items-start gap-2.5 text-xs text-[var(--body)] cursor-pointer min-h-[44px] py-1">
                 <input

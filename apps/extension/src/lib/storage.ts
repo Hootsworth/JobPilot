@@ -1,6 +1,7 @@
 import { getDefaultEnabledAdapterMap } from '@jobpilot/form-engine';
 import type {
   AtsAdapterId,
+  BillingSnapshot,
   CoverLetterRecord,
   MasterProfile,
   ProfileVariantRecord,
@@ -31,6 +32,7 @@ export interface CachedUserData {
   resumeVersions: ResumeVersionRecord[];
   profileVariants: ProfileVariantRecord[];
   coverLetters: CoverLetterRecord[];
+  billing?: BillingSnapshot;
   syncedAt: string;
 }
 
@@ -122,6 +124,7 @@ export async function getCachedUserData(): Promise<CachedUserData | null> {
     resumeVersions: raw.resumeVersions ?? [],
     profileVariants: raw.profileVariants ?? [],
     coverLetters: raw.coverLetters ?? [],
+    billing: raw.billing,
     syncedAt: raw.syncedAt ?? new Date().toISOString()
   };
 }

@@ -341,5 +341,48 @@ describe('@jobpilot/shared schemas & utilities', () => {
     });
     expect(atsReq.customJob?.title).toBe('Backend Engineer');
   });
+
+  it('validates billing plans, credit packs, costs, and checkout payloads', async () => {
+    const mod = await import('../index.js');
+
+    expect(mod.PLAN_CATALOG.free.monthlyCredits).toBe(25);
+    expect(mod.PLAN_CATALOG.free.entitlements.maxProfileVariants).toBe(1);
+    expect(mod.PLAN_CATALOG.free.entitlements.dualLlmVerifier).toBe(false);
+    expect(mod.PLAN_CATALOG.pro.monthlyCredits).toBe(300);
+    expect(mod.PLAN_CATALOG.pro.entitlements.nonApiAdaptersUnlocked).toBe(true);
+    expect(mod.PLAN_CATALOG.sprint_90.monthlyCredits).toBe(900);
+    expect(mod.PLAN_CATALOG.sprint_90.billingInterval).toBe('one_time_90d');
+    expect(mod.PLAN_CATALOG.plus.entitlements.allowedAiModes).toContain('precision');
+    expect(mod.PLAN_CATALOG.plus.entitlements.priorityJobSync).toBe(true);
+
+    expect(mod.CREDIT_PACKS.pack_150.credits).toBe(150);
+    expect(mod.CREDIT_PACKS.pack_500.credits).toBe(500);
+
+    expect(mod.getCreditCost('resume_tailor', 'fast')).toBe(3);
+    expect(mod.getCreditCost('resume_tailor', 'precision')).toBe(10);
+    expect(mod.getCreditCost('cover_letter', 'fast')).toBe(2);
+
+    const planCheckout = mod.CreateCheckoutRequestSchema.parse({
+      kind: 'plan',
+      planId: 'pro',
+      currency: 'INR'
+    });
+    expect(planCheckout.kind).toBe('plan');
+
+    const packCheckout = mod.CreateCheckoutRequestSchema.parse({
+      kind: 'topup',
+      packId: 'pack_150',
+      currency: 'USD'
+    });
+    expect(packCheckout.kind).toBe('topup');
+
+    expect(() =>
+      mod.CreateCheckoutRequestSchema.parse({
+        kind: 'plan',
+        planId: 'enterprise',
+        currency: 'USD'
+      })
+    ).toThrow();
+  });
 });
 

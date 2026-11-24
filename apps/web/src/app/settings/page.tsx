@@ -4,6 +4,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type {
+  AiQualityMode,
+  BillingSnapshot,
   LlmProviderId,
   LlmSettingsItem,
   MasterProfile,
@@ -23,7 +25,7 @@ import {
   Select,
   SkeletonBlock
 } from '@/components/ui/primitives';
-import { api, getApiBaseUrl } from '@/lib/api';
+import { api, ApiError, getApiBaseUrl } from '@/lib/api';
 import { getSupabaseClient, getSupabasePublishableKey } from '@/lib/supabase';
 
 const PROVIDER_META: Record<
@@ -105,6 +107,9 @@ export default function SettingsPage() {
     meta: { ...INITIAL_DRAFT }
   });
   const [profile, setProfile] = useState<MasterProfile | null>(null);
+  const [billing, setBilling] = useState<BillingSnapshot | null>(null);
+  const [savingBillingPref, setSavingBillingPref] = useState(false);
+  const [byokOpen, setByokOpen] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
   const [copiedExt, setCopiedExt] = useState(false);
@@ -113,10 +118,18 @@ export default function SettingsPage() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [llmRes, prof] = await Promise.all([api.getLlmSettings(), api.getProfile()]);
+      const [llmRes, prof, billingSnap] = await Promise.all([
+        api.getLlmSettings(),
+        api.getProfile(),
+        api.getBillingStatus().catch(() => null)
+      ]);
       setItems(llmRes.items);
       setDefaultEnvProvider(llmRes.defaultEnvProvider);
       setProfile(prof);
+      setBilling(billingSnap);
+      if (billingSnap?.subscription.useByokOverride) {
+        setByokOpen(true);
+      }
       const activeItem = llmRes.items.find((i) => i.isActive);
       if (activeItem) {
         setFocusedProvider(activeItem.provider);
@@ -249,6 +262,31 @@ export default function SettingsPage() {
     }
   };
 
+  const handleUpdateAiPreferences = async (patch: {
+    aiModePreference?: AiQualityMode;
+    useByokOverride?: boolean;
+  }) => {
+    setSavingBillingPref(true);
+    setGlobalError(null);
+    setGlobalSuccess(null);
+    try {
+      const updated = await api.updateBillingPreferences(patch);
+      setBilling(updated);
+      if (patch.useByokOverride) {
+        setByokOpen(true);
+      }
+      setGlobalSuccess('Updated AI routing preferences.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setGlobalError(`${err.message} Visit Plans & Credits to upgrade.`);
+      } else {
+        setGlobalError(err instanceof Error ? err.message : 'Failed to update AI preferences.');
+      }
+    } finally {
+      setSavingBillingPref(false);
+    }
+  };
+
   const handleToggleTelemetry = async (checked: boolean) => {
     if (!profile) return;
     setGlobalError(null);
@@ -355,54 +393,157 @@ export default function SettingsPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          {/* 1. Uniform Hairline Summary Bar */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-[var(--hairline)] border border-[var(--hairline)]">
-            <div className="p-4 bg-[var(--surface-soft)]">
-              <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                Provider
+          {/* 1. Managed AI & Plan Summary */}
+          <section className="border border-[var(--hairline)] bg-[var(--canvas)] p-5 sm:p-6 space-y-5">
+            <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-[var(--hairline)]">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-[var(--ink)]">Managed AI &amp; Plan</h2>
+                  {billing ? (
+                    <Badge tone={billing.executionMode === 'byok' ? 'accent' : 'success'}>
+                      {billing.executionMode === 'byok' ? 'Developer BYOK Active' : `${billing.plan.name} · ${billing.totalCreditsRemaining} cr`}
+                    </Badge>
+                  ) : null}
+                </div>
+                <p className="text-xs text-[var(--mute)]">
+                  JobPilot includes managed Fast and Precision AI routing out of the box—no API key setup needed.
+                </p>
               </div>
-              <div className="text-sm font-bold text-[var(--ink)] mt-1">
-                {activeItem ? PROVIDER_META[activeItem.provider].shortName : defaultEnvProvider}
-              </div>
+              <Link href="/billing">
+                <Button variant="primary" size="sm">
+                  Plans &amp; Credits -&gt;
+                </Button>
+              </Link>
             </div>
 
-            <div className="p-4 bg-[var(--surface-soft)]">
-              <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                Model
-              </div>
-              <div className="text-sm font-bold text-[var(--ink)] truncate mt-1">
-                {activeItem?.selectedModel || 'Default'}
-              </div>
-            </div>
+            {billing ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-[var(--ink)]">Default AI Quality Mode</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['fast', 'precision'] as AiQualityMode[]).map((mode) => {
+                      const allowed = billing.entitlements.allowedAiModes.includes(mode);
+                      const selected = billing.subscription.aiModePreference === mode;
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          disabled={savingBillingPref || (!allowed && !billing.subscription.useByokOverride)}
+                          onClick={() => void handleUpdateAiPreferences({ aiModePreference: mode })}
+                          className={`p-3 text-left border rounded-[4px] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
+                            selected
+                              ? 'border-[var(--ink)] bg-[var(--surface-soft)] font-semibold'
+                              : 'border-[var(--hairline)] bg-[var(--canvas)] hover:border-[var(--hairline-strong)]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1 text-xs">
+                            <span className="capitalize font-bold text-[var(--ink)]">{mode}</span>
+                            {!allowed ? <Badge tone="neutral">Plus</Badge> : null}
+                          </div>
+                          <p className="text-[11px] text-[var(--mute)] mt-1">
+                            {mode === 'fast'
+                              ? 'Fast Gemini 2.5 Flash-Lite routing'
+                              : 'Frontier Gemini 2.5 Pro routing'}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
-            <div className="p-4 bg-[var(--surface-soft)]">
-              <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                API Key
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-[var(--ink)]">Execution Mode</p>
+                  <label className="flex items-start gap-3 p-3 bg-[var(--surface-soft)] border border-[var(--hairline)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={billing.subscription.useByokOverride}
+                      disabled={savingBillingPref}
+                      onChange={(e) =>
+                        void handleUpdateAiPreferences({ useByokOverride: e.target.checked })
+                      }
+                      className="mt-0.5 w-4 h-4 shrink-0"
+                    />
+                    <span className="text-xs text-[var(--body)] leading-relaxed">
+                      <strong className="text-[var(--ink)] block">
+                        Enable Developer BYOK Override
+                      </strong>
+                      Route AI calls through your own encrypted API key below (0 managed credits deducted; requires a saved key).
+                    </span>
+                  </label>
+                </div>
               </div>
-              <div className="text-sm font-bold text-[var(--ink)] mt-1">
-                {activeItem?.hasKey
-                  ? `Saved (${activeItem.keyHint})`
-                  : activeItem?.usingEnvFallback
-                    ? 'Server default'
-                    : 'Not set'}
-              </div>
-            </div>
+            ) : null}
+          </section>
 
-            <div className="p-4 bg-[var(--surface-soft)]">
-              <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                Security
+          {/* 2. Advanced: Developer BYOK Console */}
+          <details
+            id="byok"
+            open={byokOpen}
+            onToggle={(e) => setByokOpen((e.currentTarget as HTMLDetailsElement).open)}
+            className="border border-[var(--hairline)] bg-[var(--canvas)]"
+          >
+            <summary className="px-5 py-4 cursor-pointer flex flex-wrap items-center justify-between gap-2 bg-[var(--surface-soft)] hover:bg-[var(--surface-card)]">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-[var(--ink)]">
+                  Advanced: Developer BYOK Mode (OpenAI / Gemini / Meta Llama)
+                </span>
+                {activeItem?.hasKey ? (
+                  <Badge tone="success">Key saved ({activeItem.keyHint})</Badge>
+                ) : (
+                  <Badge tone="neutral">Optional</Badge>
+                )}
               </div>
-              <div className="text-sm font-bold text-[var(--ink)] mt-1">Encrypted</div>
-            </div>
-          </div>
+              <span className="text-xs text-[var(--mute)]">
+                {byokOpen ? 'Hide [-]' : 'Expand [+]'}
+              </span>
+            </summary>
 
-          {/* 2. AI Provider Console */}
-          <section className="border border-[var(--hairline)] bg-[var(--canvas)]">
-            <div
-              role="tablist"
-              aria-label="Select AI Provider to configure"
-              className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[var(--hairline)] border-b border-[var(--hairline)]"
-            >
+            <div className="border-t border-[var(--hairline)]">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-[var(--hairline)] border-b border-[var(--hairline)]">
+                <div className="p-4 bg-[var(--surface-soft)]">
+                  <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                    Provider
+                  </div>
+                  <div className="text-sm font-bold text-[var(--ink)] mt-1">
+                    {activeItem ? PROVIDER_META[activeItem.provider].shortName : defaultEnvProvider}
+                  </div>
+                </div>
+
+                <div className="p-4 bg-[var(--surface-soft)]">
+                  <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                    Model
+                  </div>
+                  <div className="text-sm font-bold text-[var(--ink)] truncate mt-1">
+                    {activeItem?.selectedModel || 'Default'}
+                  </div>
+                </div>
+
+                <div className="p-4 bg-[var(--surface-soft)]">
+                  <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                    API Key
+                  </div>
+                  <div className="text-sm font-bold text-[var(--ink)] mt-1">
+                    {activeItem?.hasKey
+                      ? `Saved (${activeItem.keyHint})`
+                      : activeItem?.usingEnvFallback
+                        ? 'Server default'
+                        : 'Not set'}
+                  </div>
+                </div>
+
+                <div className="p-4 bg-[var(--surface-soft)]">
+                  <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
+                    Security
+                  </div>
+                  <div className="text-sm font-bold text-[var(--ink)] mt-1">AES-256-GCM</div>
+                </div>
+              </div>
+
+              <div
+                role="tablist"
+                aria-label="Select AI Provider to configure"
+                className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[var(--hairline)] border-b border-[var(--hairline)]"
+              >
               {PROVIDER_ORDER.map((provId) => {
                 const item = items.find((i) => i.provider === provId);
                 const meta = PROVIDER_META[provId];
@@ -674,7 +815,8 @@ export default function SettingsPage() {
                 </div>
               </div>
             ) : null}
-          </section>
+            </div>
+          </details>
 
           {/* 3. Lower Equal-Height 2-Column Workspace Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">

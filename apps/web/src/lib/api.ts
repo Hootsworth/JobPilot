@@ -6,10 +6,14 @@ import type {
   ApplicationStatus,
   AtsScoreReport,
   AtsScoreRequest,
+  BillingSnapshot,
+  CheckoutResponse,
   CoverLetterRecord,
   CrawlRunSummary,
+  CreateCheckoutRequest,
   CreateManualApplicationRequest,
   CreateProfileVariantRequest,
+  CreditPackDefinition,
   DismissReason,
   GenerateCoverLetterRequest,
   GithubImportRequest,
@@ -24,6 +28,8 @@ import type {
   MasterProfile,
   ModelInfo,
   ParsedResumeOutput,
+  PlanDefinition,
+  PlanId,
   ProfileStory,
   ProfileVariantRecord,
   RecommendationsResponse,
@@ -35,6 +41,7 @@ import type {
   TestLlmKeyRequest,
   TestLlmKeyResult,
   UpdateApplicationRequest,
+  UpdateBillingPreferencesRequest,
   UpdateCoverLetterRequest,
   UpdateProfileRequest,
   UpdateProfileVariantRequest,
@@ -50,11 +57,31 @@ export function getApiBaseUrl(): string {
 
 export class ApiError extends Error {
   readonly status: number;
+  readonly code?: string;
+  readonly requiredPlan?: PlanId;
+  readonly creditsRequired?: number;
+  readonly creditsRemaining?: number;
+  readonly upgradeUrl?: string;
 
-  constructor(message: string, status: number) {
+  constructor(
+    message: string,
+    status: number,
+    meta?: {
+      code?: string;
+      requiredPlan?: PlanId;
+      creditsRequired?: number;
+      creditsRemaining?: number;
+      upgradeUrl?: string;
+    }
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = meta?.code;
+    this.requiredPlan = meta?.requiredPlan;
+    this.creditsRequired = meta?.creditsRequired;
+    this.creditsRemaining = meta?.creditsRemaining;
+    this.upgradeUrl = meta?.upgradeUrl;
   }
 }
 
@@ -103,11 +130,29 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (!res.ok) {
+    const obj =
+      json && typeof json === 'object' ? (json as Record<string, unknown>) : null;
     const errMsg =
-      json && typeof json === 'object' && 'error' in json && typeof json.error === 'string'
-        ? json.error
+      obj && typeof obj['error'] === 'string'
+        ? obj['error']
         : `Request failed with status ${res.status}`;
-    throw new ApiError(errMsg, res.status);
+    throw new ApiError(errMsg, res.status, {
+      code: obj && typeof obj['code'] === 'string' ? obj['code'] : undefined,
+      requiredPlan:
+        obj && typeof obj['requiredPlan'] === 'string'
+          ? (obj['requiredPlan'] as PlanId)
+          : undefined,
+      creditsRequired:
+        obj && typeof obj['creditsRequired'] === 'number'
+          ? obj['creditsRequired']
+          : undefined,
+      creditsRemaining:
+        obj && typeof obj['creditsRemaining'] === 'number'
+          ? obj['creditsRemaining']
+          : undefined,
+      upgradeUrl:
+        obj && typeof obj['upgradeUrl'] === 'string' ? obj['upgradeUrl'] : undefined
+    });
   }
 
   return json as T;
@@ -222,6 +267,20 @@ export const api = {
     }),
 
   getUsage: () => apiFetch<LlmUsageSummary>('/api/usage'),
+
+  getBillingPlans: () =>
+    apiFetch<{ plans: PlanDefinition[]; creditPacks: CreditPackDefinition[] }>('/api/billing/plans'),
+  getBillingStatus: () => apiFetch<BillingSnapshot>('/api/billing/status'),
+  updateBillingPreferences: (payload: UpdateBillingPreferencesRequest) =>
+    apiFetch<BillingSnapshot>('/api/billing/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  createCheckout: (payload: CreateCheckoutRequest) =>
+    apiFetch<CheckoutResponse>('/api/billing/checkout', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
 
   listJobs: (params: Record<string, string | number | boolean | undefined> = {}) => {
     const qs = new URLSearchParams();

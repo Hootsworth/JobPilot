@@ -1,7 +1,10 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import type {
+  AiQualityMode,
+  BillingSnapshot,
   CoverLetterRecord,
   CoverLetterTone,
   JobFeedItem,
@@ -21,7 +24,7 @@ import {
   TabStrip,
   Textarea
 } from '@/components/ui/primitives';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { GeneratingStage } from './generating-stage';
 import { PdfPreviewFrame } from './pdf-preview-frame';
 
@@ -29,6 +32,7 @@ interface CoverLetterWorkbenchProps {
   catalogJobs: JobFeedItem[];
   variants: ProfileVariantRecord[];
   defaultJobId?: string;
+  billing?: BillingSnapshot | null;
   onGeneratingChange?: (busy: boolean) => void;
 }
 
@@ -47,6 +51,7 @@ export function CoverLetterWorkbench({
   catalogJobs,
   variants,
   defaultJobId,
+  billing,
   onGeneratingChange
 }: CoverLetterWorkbenchProps) {
   const [letters, setLetters] = useState<CoverLetterRecord[]>([]);
@@ -72,6 +77,10 @@ export function CoverLetterWorkbench({
   const [customJd, setCustomJd] = useState('');
   const [customInstructions, setCustomInstructions] = useState('');
   const [labelOverride, setLabelOverride] = useState('');
+  const [aiMode, setAiMode] = useState<AiQualityMode>(
+    billing?.subscription.aiModePreference ?? 'fast'
+  );
+  const [upgradePrompt, setUpgradePrompt] = useState<string | null>(null);
 
   const [viewTab, setViewTab] = useState<CoverLetterViewTab>('pdf');
   const [draftLabel, setDraftLabel] = useState('');
@@ -141,6 +150,7 @@ export function CoverLetterWorkbench({
 
     setGeneratingTarget(targetLabel);
     setGenerating(true);
+    setUpgradePrompt(null);
     onGeneratingChange?.(true);
     setStage('generating');
 
@@ -157,6 +167,7 @@ export function CoverLetterWorkbench({
             }),
         ...(selectedVariantId ? { profileVariantId: selectedVariantId } : {}),
         tone,
+        aiMode,
         ...(labelOverride.trim() ? { label: labelOverride.trim() } : {}),
         ...(customInstructions.trim()
           ? { customInstructions: customInstructions.trim() }
@@ -170,7 +181,11 @@ export function CoverLetterWorkbench({
       setStage('viewer');
       moToast(`Generated cover letter v${created.versionNumber}`);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Cover letter generation failed.');
+      if (err instanceof ApiError && (err.status === 402 || err.status === 403)) {
+        setUpgradePrompt(err.message);
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : 'Cover letter generation failed.');
+      }
       setStage('compose');
     } finally {
       setGenerating(false);
@@ -220,6 +235,16 @@ export function CoverLetterWorkbench({
   return (
     <div className="space-y-5">
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
+      {upgradePrompt ? (
+        <div className="border border-[var(--warning-text)]/40 bg-[var(--warning-bg)] p-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-[var(--ink)]">{upgradePrompt}</p>
+          <Link href="/billing">
+            <Button variant="primary" size="sm">
+              View Plans &amp; Top-Ups -&gt;
+            </Button>
+          </Link>
+        </div>
+      ) : null}
       {statusMsg ? <AlertBanner tone="success" message={statusMsg} /> : null}
 
       <ConfirmDialog
@@ -397,6 +422,36 @@ export function CoverLetterWorkbench({
                   )}
                 </Field>
               </div>
+
+              <Field
+                label="AI Quality Mode"
+                htmlFor="cl-ai-mode"
+                hint={
+                  billing?.executionMode === 'byok'
+                    ? 'Developer BYOK active (0 credits)'
+                    : 'Fast uses 2 credits · Precision (Plus) uses 6 credits'
+                }
+              >
+                {(props) => (
+                  <Select
+                    {...props}
+                    value={aiMode}
+                    onChange={(e) => setAiMode(e.target.value as AiQualityMode)}
+                  >
+                    <option value="fast">Fast — Gemini Flash-Lite (2 credits)</option>
+                    <option
+                      value="precision"
+                      disabled={
+                        Boolean(billing) &&
+                        billing?.executionMode !== 'byok' &&
+                        !billing?.entitlements.allowedAiModes.includes('precision')
+                      }
+                    >
+                      Precision — Gemini Pro (6 credits · Plus)
+                    </option>
+                  </Select>
+                )}
+              </Field>
 
               <div className="pt-1">
                 <Button type="submit" variant="primary" className="w-full sm:w-auto" disabled={generating}>

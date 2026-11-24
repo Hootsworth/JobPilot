@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   INDIAN_TECH_HUBS,
   JsonResumeSchema,
+  type BillingSnapshot,
   type ImportPreviewCandidate,
   type IndiaProfile,
   type JsonResume,
@@ -67,6 +68,7 @@ export default function ProfilePage() {
   const [importOpen, setImportOpen] = useState(false);
   const [variants, setVariants] = useState<ProfileVariantRecord[]>([]);
   const [activeVariantId, setActiveVariantId] = useState<string | null>(null);
+  const [billing, setBilling] = useState<BillingSnapshot | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -83,9 +85,14 @@ export default function ProfilePage() {
   };
 
   useEffect(() => {
-    Promise.all([api.getProfile(), api.listProfileVariants()])
-      .then(([p, vList]) => {
+    Promise.all([
+      api.getProfile(),
+      api.listProfileVariants(),
+      api.getBillingStatus().catch(() => null)
+    ])
+      .then(([p, vList, billingSnap]) => {
         setVariants(vList);
+        setBilling(billingSnap);
         const def = vList.find((v) => v.isDefault) ?? vList[0] ?? null;
         setActiveVariantId(def?.id ?? null);
         hydrateFromProfile(p, def);
@@ -1675,6 +1682,7 @@ export default function ProfilePage() {
             <ProfileVariantBar
               variants={variants}
               activeVariantId={activeVariantId}
+              maxVariants={billing?.entitlements.maxProfileVariants}
               busy={variantBusy || saving}
               onSelectVariant={handleSelectVariant}
               onCreateVariant={handleCreateVariant}

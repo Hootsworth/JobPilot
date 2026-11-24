@@ -304,11 +304,13 @@ export async function tailorResumePipeline(params: {
   model?: string;
   templateId?: ResumeTemplateId;
   autoRepairFlagged?: boolean;
+  skipLlmVerifier?: boolean;
   typstBin?: string;
 }): Promise<TailorPipelineResult> {
   const stories = params.stories ?? [];
   const templateId = params.templateId ?? 'ats-classic';
   const autoRepairFlagged = params.autoRepairFlagged ?? true;
+  const verifierLlm = params.skipLlmVerifier ? null : params.llmProvider;
 
   // 1. Extract JD requirements (reusing cached requirements when available)
   const jdStage = await extractJdRequirements({
@@ -364,13 +366,13 @@ export async function tailorResumePipeline(params: {
     jdStage.requirements
   );
 
-  // 3. Dual Verifier (Layer 1 deterministic + Layer 2 independent LLM audit)
+  // 3. Dual Verifier (Layer 1 deterministic + optional Layer 2 independent LLM audit)
   let verifierReport = await runDualVerification({
     masterProfile: params.profile,
     stories,
     tailoredResume: materialized.resume,
     sourceLinks: materialized.sourceLinks,
-    llmProvider: params.llmProvider,
+    llmProvider: verifierLlm,
     model: params.model
   });
 
@@ -409,7 +411,7 @@ export async function tailorResumePipeline(params: {
       stories,
       tailoredResume: materialized.resume,
       sourceLinks: materialized.sourceLinks,
-      llmProvider: params.llmProvider,
+      llmProvider: verifierLlm,
       model: params.model
     });
   }

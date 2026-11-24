@@ -37,7 +37,7 @@ export class JobSyncService {
     this.syncRunner = params.syncRunner ?? runDiscoverySync;
   }
 
-  async getStatus(userId?: string): Promise<JobSyncStatus> {
+  async getStatus(userId?: string, staleHoursOverride?: number): Promise<JobSyncStatus> {
     const [{ sources, recentRuns }, activeCounts] = await Promise.all([
       this.store.listJobSourcesAndRuns(),
       userId ? this.store.countActiveJobs(userId) : Promise.resolve({ total: 0, bySource: {} })
@@ -46,6 +46,7 @@ export class JobSyncService {
     const lastOkRun =
       recentRuns.find((r) => r.status === 'ok' && r.finishedAt != null) ?? null;
     const lastSyncedAt = lastOkRun?.finishedAt ?? null;
+    const effectiveStaleHours = Math.max(1, staleHoursOverride ?? this.config.jobSyncStaleHours);
 
     let isStale = false;
     if (userId && activeCounts.total === 0) {
@@ -55,7 +56,7 @@ export class JobSyncService {
     } else {
       const ms = Date.parse(lastSyncedAt);
       const ageHours = Number.isFinite(ms) ? (Date.now() - ms) / (1000 * 60 * 60) : 999;
-      isStale = ageHours >= this.config.jobSyncStaleHours;
+      isStale = ageHours >= effectiveStaleHours;
     }
 
     return {
@@ -74,10 +75,13 @@ export class JobSyncService {
     profile?: MasterProfile | null;
     mode: 'quick' | 'full';
     force: boolean;
+    staleHoursOverride?: number;
   }): Promise<JobSyncRunResult> {
     if (this.inFlightPromise) {
       const joined = await this.inFlightPromise;
-      const freshStatus = params.userId ? await this.getStatus(params.userId) : joined.status;
+      const freshStatus = params.userId
+        ? await this.getStatus(params.userId, params.staleHoursOverride)
+        : joined.status;
       return {
         ...joined,
         alreadyRunning: true,
@@ -85,7 +89,7 @@ export class JobSyncService {
       };
     }
 
-    const currentStatus = await this.getStatus(params.userId);
+    const currentStatus = await this.getStatus(params.userId, params.staleHoursOverride);
     if (!params.force && !currentStatus.isStale) {
       return {
         alreadyRunning: false,

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AiQualityModeSchema } from './billing.js';
 
 export const OfficialAtsAdapterIdSchema = z.enum(['greenhouse', 'lever', 'ashby', 'workday']);
 export type OfficialAtsAdapterId = z.infer<typeof OfficialAtsAdapterIdSchema>;
@@ -176,7 +177,8 @@ export const DraftAnswersRequestSchema = z.object({
   jobTitle: z.string().min(1).max(300),
   companyName: z.string().min(1).max(200),
   jobDescription: z.string().max(30_000).optional(),
-  questions: z.array(DraftAnswerQuestionSchema).min(1).max(20)
+  questions: z.array(DraftAnswerQuestionSchema).min(1).max(20),
+  aiMode: AiQualityModeSchema.optional()
 });
 export type DraftAnswersRequest = z.infer<typeof DraftAnswersRequestSchema>;
 
@@ -247,7 +249,8 @@ export const FallbackFillRequestSchema = z.object({
   jobTitle: z.string().min(1).max(300),
   companyName: z.string().min(1).max(200),
   jobDescription: z.string().max(20_000).optional(),
-  fields: z.array(FallbackFillFieldInputSchema).min(1).max(30)
+  fields: z.array(FallbackFillFieldInputSchema).min(1).max(30),
+  aiMode: AiQualityModeSchema.optional()
 });
 export type FallbackFillRequest = z.infer<typeof FallbackFillRequestSchema>;
 

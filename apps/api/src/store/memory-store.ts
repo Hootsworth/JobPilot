@@ -5,16 +5,21 @@ import {
   IndiaProfileSchema,
   JsonResumeSchema,
   LlmProviderIdSchema,
+  PLAN_CATALOG,
   SearchPreferencesSchema,
+  type AiQualityMode,
   type ApplicationEventRecord,
   type ApplicationRecord,
   type ApplicationStatus,
+  type BillingCurrency,
   type CaptureExtensionJobRequest,
   type CaptureExtensionJobResponse,
   type CoverLetterRecord,
   type CrawlRunSummary,
   type CreateManualApplicationRequest,
   type CreateProfileVariantRequest,
+  type CreditLedgerEntry,
+  type CreditPackId,
   type DismissReason,
   type JdRequirements,
   type JobFeedBucket,
@@ -28,14 +33,18 @@ import {
   type LlmUsageLog,
   type LlmUsageSummary,
   type MasterProfile,
+  type PaymentProvider,
+  type PlanId,
   type ProfileStory,
   type ProfileVariantRecord,
   type ResumeVersionRecord,
   type SavedAnswer,
   type UpdateApplicationRequest,
+  type UpdateBillingPreferencesRequest,
   type UpdateProfileVariantRequest,
   type UpsertSavedAnswerRequest,
   type UpsertStoryRequest,
+  type UserSubscription,
   type VerifierReport
 } from '@jobpilot/shared';
 import type {
@@ -49,6 +58,7 @@ import type {
   AuthUser,
   CreateCoverLetterInput,
   CreateResumeVersionInput,
+  CreditDebitResult,
   DataStore,
   LlmSettingPatch,
   ProfilePatch,
@@ -201,6 +211,8 @@ export class MemoryDataStore implements DataStore {
   private resumeVersionsByUser = new Map<string, ResumeVersionRecord[]>();
   private profileVariantsByUser = new Map<string, ProfileVariantRecord[]>();
   private coverLettersByUser = new Map<string, CoverLetterRecord[]>();
+  private subscriptionsByUser = new Map<string, UserSubscription>();
+  private creditLedgerByUser = new Map<string, CreditLedgerEntry[]>();
 
   seedJobsForTest(items: JobForMatching[], sources: JobSourceStatus[] = []) {
     this.jobs = structuredClone(items);
@@ -538,7 +550,9 @@ export class MemoryDataStore implements DataStore {
       usageLogs: structuredClone(usageLogs),
       resumeVersions: await this.listResumeVersions(user.id),
       coverLetters: await this.listCoverLetters(user.id),
-      applications: await this.listApplications(user.id)
+      applications: await this.listApplications(user.id),
+      subscription: await this.getOrCreateSubscription(user.id),
+      creditLedger: await this.listCreditLedger(user.id, 100)
     };
   }
 
@@ -551,6 +565,8 @@ export class MemoryDataStore implements DataStore {
     this.usageLogs.delete(userId);
     this.profileEmbeddings.delete(userId);
     this.jobMatchesByUser.delete(userId);
+    this.subscriptionsByUser.delete(userId);
+    this.creditLedgerByUser.delete(userId);
     const userApps = this.applicationsByUser.get(userId);
     if (userApps) {
       for (const app of userApps.values()) {
@@ -1720,5 +1736,298 @@ export class MemoryDataStore implements DataStore {
       }
     }
     return false;
+  }
+
+  private appendCreditLedger(
+    userId: string,
+    entry: Omit<CreditLedgerEntry, 'id' | 'userId' | 'createdAt'>
+  ) {
+    const list = this.creditLedgerByUser.get(userId) ?? [];
+    list.unshift({
+      id: randomUUID(),
+      userId,
+      ...entry,
+      createdAt: new Date().toISOString()
+    });
+    this.creditLedgerByUser.set(userId, list.slice(0, 500));
+  }
+
+  async getOrCreateSubscription(userId: string): Promise<UserSubscription> {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    let sub = this.subscriptionsByUser.get(userId);
+    if (!sub) {
+      const freePlan = PLAN_CATALOG.free;
+      const periodEnd = new Date(
+        now.getTime() + freePlan.durationDays * 24 * 60 * 60 * 1000
+      ).toISOString();
+      sub = {
+        userId,
+        planId: 'free',
+        status: 'active',
+        billingCurrency: 'INR',
+        aiModePreference: 'fast',
+        useByokOverride: false,
+        monthlyCreditsRemaining: freePlan.monthlyCredits,
+        monthlyCreditsAllowance: freePlan.monthlyCredits,
+        topupCreditsRemaining: 0,
+        currentPeriodStart: nowIso,
+        currentPeriodEnd: periodEnd,
+        paymentProvider: null,
+        externalCustomerId: null,
+        externalSubscriptionId: null,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      };
+      this.subscriptionsByUser.set(userId, sub);
+      this.appendCreditLedger(userId, {
+        delta: freePlan.monthlyCredits,
+        bucket: 'monthly',
+        reason: 'plan_grant:free',
+        aiMode: null,
+        balanceAfter: freePlan.monthlyCredits,
+        metadata: { planId: 'free' }
+      });
+      return structuredClone(sub);
+    }
+
+    // Handle period expiry / rollover
+    if (Date.parse(sub.currentPeriodEnd) <= now.getTime()) {
+      if (sub.planId === 'sprint_90') {
+        const freePlan = PLAN_CATALOG.free;
+        const nextEnd = new Date(
+          now.getTime() + freePlan.durationDays * 24 * 60 * 60 * 1000
+        ).toISOString();
+        sub.planId = 'free';
+        sub.status = 'active';
+        sub.aiModePreference = 'fast';
+        sub.monthlyCreditsAllowance = freePlan.monthlyCredits;
+        sub.monthlyCreditsRemaining = freePlan.monthlyCredits;
+        sub.currentPeriodStart = nowIso;
+        sub.currentPeriodEnd = nextEnd;
+        sub.updatedAt = nowIso;
+        this.appendCreditLedger(userId, {
+          delta: freePlan.monthlyCredits,
+          bucket: 'monthly',
+          reason: 'sprint_90_expired_to_free',
+          aiMode: null,
+          balanceAfter: sub.monthlyCreditsRemaining + sub.topupCreditsRemaining,
+          metadata: { planId: 'free' }
+        });
+      } else if (sub.status === 'active') {
+        const plan = PLAN_CATALOG[sub.planId];
+        const nextEnd = new Date(
+          now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000
+        ).toISOString();
+        sub.monthlyCreditsAllowance = plan.monthlyCredits;
+        sub.monthlyCreditsRemaining = plan.monthlyCredits;
+        sub.currentPeriodStart = nowIso;
+        sub.currentPeriodEnd = nextEnd;
+        sub.updatedAt = nowIso;
+        this.appendCreditLedger(userId, {
+          delta: plan.monthlyCredits,
+          bucket: 'monthly',
+          reason: `period_renewal:${sub.planId}`,
+          aiMode: null,
+          balanceAfter: sub.monthlyCreditsRemaining + sub.topupCreditsRemaining,
+          metadata: { planId: sub.planId }
+        });
+      }
+    }
+
+    return structuredClone(sub);
+  }
+
+  async updateSubscriptionPreferences(
+    userId: string,
+    patch: UpdateBillingPreferencesRequest
+  ): Promise<UserSubscription> {
+    await this.getOrCreateSubscription(userId);
+    const sub = this.subscriptionsByUser.get(userId)!;
+    if (patch.billingCurrency !== undefined) sub.billingCurrency = patch.billingCurrency;
+    if (patch.aiModePreference !== undefined) sub.aiModePreference = patch.aiModePreference;
+    if (patch.useByokOverride !== undefined) sub.useByokOverride = patch.useByokOverride;
+    sub.updatedAt = new Date().toISOString();
+    return structuredClone(sub);
+  }
+
+  async applyPlanChange(
+    userId: string,
+    params: {
+      planId: PlanId;
+      currency?: BillingCurrency;
+      paymentProvider?: PaymentProvider | null;
+      externalCustomerId?: string | null;
+      externalSubscriptionId?: string | null;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<UserSubscription> {
+    await this.getOrCreateSubscription(userId);
+    const sub = this.subscriptionsByUser.get(userId)!;
+    const plan = PLAN_CATALOG[params.planId];
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const periodEnd = new Date(
+      now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000
+    ).toISOString();
+
+    sub.planId = params.planId;
+    sub.status = 'active';
+    if (params.currency) sub.billingCurrency = params.currency;
+    if (!plan.entitlements.allowedAiModes.includes(sub.aiModePreference)) {
+      sub.aiModePreference = 'fast';
+    }
+    sub.monthlyCreditsAllowance = plan.monthlyCredits;
+    sub.monthlyCreditsRemaining = plan.monthlyCredits;
+    sub.currentPeriodStart = nowIso;
+    sub.currentPeriodEnd = periodEnd;
+    if (params.paymentProvider !== undefined) sub.paymentProvider = params.paymentProvider;
+    if (params.externalCustomerId !== undefined) sub.externalCustomerId = params.externalCustomerId;
+    if (params.externalSubscriptionId !== undefined) {
+      sub.externalSubscriptionId = params.externalSubscriptionId;
+    }
+    sub.updatedAt = nowIso;
+
+    this.appendCreditLedger(userId, {
+      delta: plan.monthlyCredits,
+      bucket: 'monthly',
+      reason: `plan_activated:${params.planId}`,
+      aiMode: null,
+      balanceAfter: sub.monthlyCreditsRemaining + sub.topupCreditsRemaining,
+      metadata: { planId: params.planId, ...(params.metadata ?? {}) }
+    });
+
+    return structuredClone(sub);
+  }
+
+  async grantTopupCredits(
+    userId: string,
+    params: {
+      packId: CreditPackId;
+      credits: number;
+      paymentProvider?: PaymentProvider | null;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<UserSubscription> {
+    await this.getOrCreateSubscription(userId);
+    const sub = this.subscriptionsByUser.get(userId)!;
+    sub.topupCreditsRemaining += params.credits;
+    sub.updatedAt = new Date().toISOString();
+
+    this.appendCreditLedger(userId, {
+      delta: params.credits,
+      bucket: 'topup',
+      reason: `topup_purchased:${params.packId}`,
+      aiMode: null,
+      balanceAfter: sub.monthlyCreditsRemaining + sub.topupCreditsRemaining,
+      metadata: { packId: params.packId, ...(params.metadata ?? {}) }
+    });
+
+    return structuredClone(sub);
+  }
+
+  async debitCredits(
+    userId: string,
+    params: {
+      amount: number;
+      reason: string;
+      aiMode: AiQualityMode;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<CreditDebitResult> {
+    await this.getOrCreateSubscription(userId);
+    const sub = this.subscriptionsByUser.get(userId)!;
+    const total = sub.monthlyCreditsRemaining + sub.topupCreditsRemaining;
+    if (params.amount <= 0) {
+      return {
+        ok: true,
+        subscription: structuredClone(sub),
+        debitedMonthly: 0,
+        debitedTopup: 0
+      };
+    }
+    if (total < params.amount) {
+      return { ok: false, subscription: structuredClone(sub) };
+    }
+
+    const debitedMonthly = Math.min(sub.monthlyCreditsRemaining, params.amount);
+    const debitedTopup = params.amount - debitedMonthly;
+
+    sub.monthlyCreditsRemaining -= debitedMonthly;
+    sub.topupCreditsRemaining -= debitedTopup;
+    sub.updatedAt = new Date().toISOString();
+
+    if (debitedMonthly > 0) {
+      this.appendCreditLedger(userId, {
+        delta: -debitedMonthly,
+        bucket: 'monthly',
+        reason: params.reason,
+        aiMode: params.aiMode,
+        balanceAfter: sub.monthlyCreditsRemaining + sub.topupCreditsRemaining + debitedTopup,
+        metadata: params.metadata ?? {}
+      });
+    }
+    if (debitedTopup > 0) {
+      this.appendCreditLedger(userId, {
+        delta: -debitedTopup,
+        bucket: 'topup',
+        reason: params.reason,
+        aiMode: params.aiMode,
+        balanceAfter: sub.monthlyCreditsRemaining + sub.topupCreditsRemaining,
+        metadata: params.metadata ?? {}
+      });
+    }
+
+    return {
+      ok: true,
+      subscription: structuredClone(sub),
+      debitedMonthly,
+      debitedTopup
+    };
+  }
+
+  async refundCredits(
+    userId: string,
+    params: {
+      debitedMonthly: number;
+      debitedTopup: number;
+      reason: string;
+      aiMode: AiQualityMode;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<UserSubscription> {
+    await this.getOrCreateSubscription(userId);
+    const sub = this.subscriptionsByUser.get(userId)!;
+    sub.monthlyCreditsRemaining += Math.max(0, params.debitedMonthly);
+    sub.topupCreditsRemaining += Math.max(0, params.debitedTopup);
+    sub.updatedAt = new Date().toISOString();
+
+    if (params.debitedMonthly > 0) {
+      this.appendCreditLedger(userId, {
+        delta: params.debitedMonthly,
+        bucket: 'monthly',
+        reason: params.reason,
+        aiMode: params.aiMode,
+        balanceAfter: sub.monthlyCreditsRemaining + sub.topupCreditsRemaining - params.debitedTopup,
+        metadata: params.metadata ?? {}
+      });
+    }
+    if (params.debitedTopup > 0) {
+      this.appendCreditLedger(userId, {
+        delta: params.debitedTopup,
+        bucket: 'topup',
+        reason: params.reason,
+        aiMode: params.aiMode,
+        balanceAfter: sub.monthlyCreditsRemaining + sub.topupCreditsRemaining,
+        metadata: params.metadata ?? {}
+      });
+    }
+
+    return structuredClone(sub);
+  }
+
+  async listCreditLedger(userId: string, limit: number = 50): Promise<CreditLedgerEntry[]> {
+    const entries = this.creditLedgerByUser.get(userId) ?? [];
+    return structuredClone(entries.slice(0, limit));
   }
 }

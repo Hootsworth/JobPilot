@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { PLAN_CATALOG, type BillingCurrency, type PlanId } from '@jobpilot/shared';
 import { RecommendationsHome } from '@/components/home/recommendations-home';
 import { ThemeQuickToggle } from '@/components/theme-toggle';
 import { MoBar, MoDecode, MoSpinner } from '@/components/ui/mo';
@@ -100,8 +101,8 @@ const FEATURE_ROWS = [
   },
   {
     marker: '[+]',
-    title: 'OpenAI, Gemini & Meta Llama BYOK',
-    body: 'Switch providers with zero code changes. Paste your own key in Settings (encrypted server-side with AES-256-GCM), fetch live model lists from the provider API, and track token latency and cost per call.'
+    title: 'Managed AI + optional Developer BYOK',
+    body: 'Start in 30 seconds with 25 free managed credits—no API key required. Choose Fast or Frontier Precision routing, or toggle Developer BYOK (OpenAI, Gemini, Meta Llama) under Settings.'
   },
   {
     marker: '[+]',
@@ -135,6 +136,7 @@ export default function LandingPage() {
   const [forceLanding, setForceLanding] = useState(false);
   const [activeStageId, setActiveStageId] = useState<TuiStageId>('parse');
   const [openFaqIdx, setOpenFaqIdx] = useState<number | null>(0);
+  const [pricingCurrency, setPricingCurrency] = useState<BillingCurrency>('INR');
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -190,6 +192,12 @@ export default function LandingPage() {
               className="hidden sm:inline text-sm text-[var(--mute)] hover:text-[var(--ink)] no-underline"
             >
               Overview
+            </a>
+            <a
+              href="#pricing"
+              className="hidden sm:inline text-sm text-[var(--mute)] hover:text-[var(--ink)] no-underline"
+            >
+              Pricing
             </a>
             <a
               href="#faq"
@@ -353,7 +361,7 @@ export default function LandingPage() {
                 <MoBar value={activeStage.progress} width={16} />
               </span>
             </div>
-            <span>providers: openai | gemini | meta-llama · byok: aes-256-gcm</span>
+            <span>models: fast &amp; precision managed · optional developer byok (aes-256-gcm)</span>
           </div>
         </section>
 
@@ -418,7 +426,93 @@ export default function LandingPage() {
           </ul>
         </section>
 
-        {/* 5. FAQ Accordion using mo-gallery stepped bracket toggle */}
+        {/* 5. Pricing Tiers (INR / USD) */}
+        <section id="pricing" className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="text-base font-bold text-[var(--ink)]">Pricing</h2>
+              <p className="text-sm text-[var(--body)]">
+                Zero-COGS local job matching, Tracker, PDF export, and core autofill are always free.
+              </p>
+            </div>
+            <div className="inline-flex border border-[var(--hairline-strong)] rounded-[4px] overflow-hidden">
+              {(['INR', 'USD'] as BillingCurrency[]).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setPricingCurrency(c)}
+                  className={`px-3 py-1.5 text-xs font-medium cursor-pointer ${
+                    pricingCurrency === c
+                      ? 'bg-[var(--ink)] text-[var(--on-primary)] font-bold'
+                      : 'bg-[var(--canvas)] text-[var(--mute)] hover:text-[var(--ink)]'
+                  }`}
+                >
+                  {c === 'INR' ? 'INR (₹)' : 'USD ($)'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 border border-[var(--hairline)] divide-y md:divide-y-0 md:divide-x divide-[var(--hairline)]">
+            {(['free', 'pro', 'sprint_90', 'plus'] as PlanId[]).map((planId) => {
+              const plan = PLAN_CATALOG[planId];
+              const price =
+                plan.priceInr === 0 && plan.priceUsd === 0
+                  ? pricingCurrency === 'INR'
+                    ? '₹0'
+                    : '$0'
+                  : pricingCurrency === 'INR'
+                    ? `₹${plan.priceInr.toLocaleString('en-IN')}`
+                    : `$${plan.priceUsd}`;
+              const cadence =
+                plan.billingInterval === 'free'
+                  ? 'forever'
+                  : plan.billingInterval === 'monthly'
+                    ? '/ mo'
+                    : 'for 90 days';
+              return (
+                <div key={planId} className="p-5 flex flex-col justify-between space-y-5">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-bold text-[var(--ink)]">{plan.name}</h3>
+                      {plan.highlightBadge ? (
+                        <span className="text-[10px] px-1.5 py-0.5 border border-[var(--hairline-strong)] bg-[var(--surface-soft)] text-[var(--ink)]">
+                          {plan.highlightBadge}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div>
+                      <span className="text-2xl font-bold text-[var(--ink)] tabular-nums">
+                        {price}
+                      </span>{' '}
+                      <span className="text-xs text-[var(--mute)]">{cadence}</span>
+                    </div>
+                    <p className="text-xs text-[var(--mute)]">{plan.tagline}</p>
+                    <ul className="space-y-1.5 text-xs text-[var(--body)] list-none p-0 m-0 pt-2 border-t border-[var(--hairline)]">
+                      {plan.features.slice(0, 4).map((f) => (
+                        <li key={f} className="flex items-start gap-2">
+                          <span className="text-[var(--mute)] shrink-0">[+]</span>
+                          <span>{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <Link href={signedInEmail ? '/billing' : '/login?mode=signup'}>
+                    <Button
+                      variant={planId === 'pro' || planId === 'plus' ? 'primary' : 'secondary'}
+                      size="sm"
+                      className="w-full"
+                    >
+                      {signedInEmail ? 'Manage Plan' : planId === 'free' ? 'Start Free' : 'Get Started'}
+                    </Button>
+                  </Link>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* 6. FAQ Accordion using mo-gallery stepped bracket toggle */}
         <section id="faq" className="max-w-[880px] space-y-4">
           <h2 className="text-base font-bold text-[var(--ink)]">FAQ</h2>
           <div className="divide-y divide-[var(--hairline)] border-t border-b border-[var(--hairline)]">

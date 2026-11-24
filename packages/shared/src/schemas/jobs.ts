@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AiQualityModeSchema } from './billing.js';
 import { LlmProviderIdSchema } from './llm.js';
 
 export const JobSourceTypeSchema = z.enum([
@@ -246,7 +247,8 @@ export type CrawlRunSummary = z.infer<typeof CrawlRunSummarySchema>;
 export const RefreshMatchesRequestSchema = z.object({
   topKVector: z.number().int().min(5).max(100).default(30),
   topKLlm: z.number().int().min(0).max(30).default(15),
-  forceRecompute: z.boolean().default(false)
+  forceRecompute: z.boolean().default(false),
+  aiMode: AiQualityModeSchema.optional()
 });
 export type RefreshMatchesRequest = z.infer<typeof RefreshMatchesRequestSchema>;
 

@@ -8,5 +8,6 @@ export * from './schemas/resume-tailor.js';
 export * from './schemas/cover-letter.js';
 export * from './schemas/extension.js';
 export * from './schemas/tracker.js';
+export * from './schemas/billing.js';
 export * from './utils/currency.js';
 

@@ -1,14 +1,13 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   INDIAN_TECH_HUBS,
+  type BillingSnapshot,
   type IndiaProfile,
-  type LlmProviderId,
-  type LlmSettingsItem,
   type MasterProfile,
-  type ModelInfo,
   type ParsedResumeOutput
 } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
@@ -23,34 +22,21 @@ import {
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 
-const PROVIDER_LABELS: Record<LlmProviderId, string> = {
-  gemini: 'Google Gemini',
-  openai: 'OpenAI',
-  meta: 'Meta Llama API'
-};
-
 export default function OnboardingPage() {
   const router = useRouter();
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<1 | 2>(1);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [billing, setBilling] = useState<BillingSnapshot | null>(null);
 
-  // Step 1: AI Provider quick setup
-  const [llmItems, setLlmItems] = useState<LlmSettingsItem[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState<LlmProviderId>('gemini');
-  const [byokInput, setByokInput] = useState('');
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [selectedModel, setSelectedModel] = useState('');
-  const [testingKey, setTestingKey] = useState(false);
-
-  // Step 2: PDF Resume Upload
+  // Step 1: PDF Resume Upload
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
   const [parsedPreview, setParsedPreview] = useState<ParsedResumeOutput | null>(null);
   const [storagePath, setStoragePath] = useState<string | null>(null);
 
-  // Step 3: India & Eligibility confirmation
+  // Step 2: India & Eligibility confirmation
   const [profile, setProfile] = useState<MasterProfile | null>(null);
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -60,20 +46,15 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([api.getProfile(), api.getLlmSettings()])
-      .then(([prof, llm]) => {
+    Promise.all([api.getProfile(), api.getBillingStatus().catch(() => null)])
+      .then(([prof, bill]) => {
         if (!active) return;
         setProfile(prof);
+        setBilling(bill);
         setFullName(prof.fullName ?? '');
         setEmail(prof.email ?? '');
         setPhone(prof.phone ?? '');
         setIndia(prof.indiaProfile);
-        setLlmItems(llm.items);
-        const activeProv = llm.items.find((i) => i.isActive) ?? llm.items[0];
-        if (activeProv) {
-          setSelectedProvider(activeProv.provider);
-          setSelectedModel(activeProv.selectedModel ?? '');
-        }
       })
       .catch((err) => {
         if (active) setErrorMsg(err instanceof Error ? err.message : 'Failed to load setup.');
@@ -86,47 +67,6 @@ export default function OnboardingPage() {
     };
   }, []);
 
-  const currentProviderRow = llmItems.find((i) => i.provider === selectedProvider);
-
-  const handleSaveAndTestKey = async () => {
-    setTestingKey(true);
-    setErrorMsg(null);
-    setStatusMsg(null);
-    try {
-      await api.upsertLlmSetting(selectedProvider, {
-        isActive: true,
-        ...(byokInput.trim() ? { apiKey: byokInput.trim() } : {}),
-        ...(selectedModel ? { selectedModel } : {})
-      });
-      const modelsRes = await api.listProviderModels({
-        provider: selectedProvider,
-        ...(byokInput.trim() ? { apiKey: byokInput.trim() } : {})
-      });
-      setModels(modelsRes.models);
-      const modelToTest = selectedModel || modelsRes.models[0]?.id;
-      if (modelToTest && !selectedModel) {
-        setSelectedModel(modelToTest);
-        await api.upsertLlmSetting(selectedProvider, { selectedModel: modelToTest });
-      }
-      const testRes = await api.testLlmKey({
-        provider: selectedProvider,
-        model: modelToTest
-      });
-      if (!testRes.ok) {
-        setErrorMsg(testRes.message);
-      } else {
-        setStatusMsg(`${testRes.message} (${testRes.latencyMs} ms)`);
-        setByokInput('');
-        const refreshed = await api.getLlmSettings();
-        setLlmItems(refreshed.items);
-      }
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Provider verification failed.');
-    } finally {
-      setTestingKey(false);
-    }
-  };
-
   const handleParseResume = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile) {
@@ -137,11 +77,7 @@ export default function OnboardingPage() {
     setErrorMsg(null);
     setStatusMsg(null);
     try {
-      const res = await api.parseResumePdf(selectedFile, {
-        apply: true,
-        provider: selectedProvider,
-        model: selectedModel || undefined
-      });
+      const res = await api.parseResumePdf(selectedFile, { apply: true });
       setParsedPreview(res.parsed);
       setStoragePath(res.storagePath);
       if (res.appliedProfile) {
@@ -175,7 +111,7 @@ export default function OnboardingPage() {
       setStatusMsg(
         `Parsed ${res.totalPages} page(s) with ${res.modelUsed} in ${res.latencyMs} ms. Review below & continue.`
       );
-      setStep(3);
+      setStep(2);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Resume parsing failed.');
     } finally {
@@ -222,12 +158,11 @@ export default function OnboardingPage() {
 
   return (
     <AppShell title="Get Started">
-      {/* Multi-step progress tracker */}
-      <nav aria-label="Onboarding progress" className="grid grid-cols-3 gap-2">
+      {/* Frictionless 2-step progress tracker */}
+      <nav aria-label="Onboarding progress" className="grid grid-cols-2 gap-2">
         {[
-          { num: 1 as const, label: '1. Provider' },
-          { num: 2 as const, label: '2. Parse Resume' },
-          { num: 3 as const, label: '3. Preferences' }
+          { num: 1 as const, label: '1. Upload & Parse Resume' },
+          { num: 2 as const, label: '2. Review Profile & Preferences' }
         ].map((item) => {
           const active = step === item.num;
           const done = step > item.num;
@@ -260,136 +195,65 @@ export default function OnboardingPage() {
         </div>
       ) : step === 1 ? (
         <SectionBlock
-          title="Step 1: Choose & Verify AI Provider"
-          description="Bring your own API key (encrypted AES-256-GCM server-side) or use a configured server key."
-        >
-          <div className="space-y-4 max-w-xl">
-            <Field label="Provider" htmlFor="onb-provider">
-              {(props) => (
-                <Select
-                  {...props}
-                  value={selectedProvider}
-                  onChange={(e) => {
-                    setSelectedProvider(e.target.value as LlmProviderId);
-                    setModels([]);
-                    setSelectedModel('');
-                  }}
-                >
-                  {(['gemini', 'openai', 'meta'] as LlmProviderId[]).map((p) => (
-                    <option key={p} value={p}>
-                      {PROVIDER_LABELS[p]}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Field>
-
-            {currentProviderRow ? (
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <Badge tone={currentProviderRow.hasKey ? 'success' : 'neutral'}>
-                  {currentProviderRow.hasKey
-                    ? `BYOK saved (${currentProviderRow.keyHint})`
-                    : currentProviderRow.usingEnvFallback
-                      ? 'Using server env key'
-                      : 'No key saved yet'}
-                </Badge>
-                {currentProviderRow.lastTestStatus === 'ok' ? (
-                  <Badge tone="success">Verified</Badge>
-                ) : null}
-              </div>
-            ) : null}
-
-            <Field
-              label="API Key (BYOK — optional if server key exists)"
-              htmlFor="onb-apikey"
-              hint="Never logged or returned in plaintext. Leave blank to use saved/server key."
-            >
-              {(props) => (
-                <Input
-                  {...props}
-                  type="password"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  value={byokInput}
-                  onChange={(e) => setByokInput(e.target.value)}
-                  placeholder="Paste provider API key..."
-                />
-              )}
-            </Field>
-
-            {models.length > 0 ? (
-              <Field label="Live Model Selection" htmlFor="onb-model">
-                {(props) => (
-                  <Select
-                    {...props}
-                    value={selectedModel}
-                    onChange={(e) => setSelectedModel(e.target.value)}
-                  >
-                    {models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.displayName} ({m.id})
-                      </option>
-                    ))}
-                  </Select>
-                )}
-              </Field>
-            ) : null}
-
-            <div className="flex flex-wrap gap-2 pt-2">
-              <Button variant="primary" onClick={handleSaveAndTestKey} disabled={testingKey}>
-                {testingKey ? 'Testing & fetching models...' : 'Verify & Fetch Models'}
-              </Button>
-              <Button variant="secondary" onClick={() => setStep(2)}>
-                Continue to Resume Upload -&gt;
-              </Button>
-            </div>
-          </div>
-        </SectionBlock>
-      ) : step === 2 ? (
-        <SectionBlock
-          title="Step 2: Upload & Parse PDF Resume"
+          title="Step 1: Upload & Parse PDF Resume"
           description="Text-based PDF up to 10 MB. Stored privately in Supabase Storage and parsed strictly without hallucinating facts."
         >
-          <form onSubmit={handleParseResume} className="space-y-4 max-w-xl">
-            <Field
-              label="Resume PDF File"
-              htmlFor="onb-pdf"
-              hint="Accepted: .pdf (text-selectable, max 10 MB)"
-              required
-            >
-              {(props) => (
-                <input
-                  {...props}
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
-                  className="block w-full text-sm border border-dashed border-[var(--hairline-strong)] bg-[var(--surface-soft)] p-4 rounded-[4px] cursor-pointer file:mr-4 file:py-1.5 file:px-3 file:rounded-[4px] file:border file:border-[var(--hairline-strong)] file:bg-[var(--canvas)] file:text-[var(--ink)] file:text-xs file:font-medium"
-                />
-              )}
-            </Field>
-
-            {selectedFile ? (
-              <p className="text-xs text-[var(--body)]">
-                Selected: <strong>{selectedFile.name}</strong> (
-                {Math.round(selectedFile.size / 1024)} KB)
-              </p>
-            ) : null}
-
-            <div className="flex flex-wrap gap-2 pt-2">
-              <Button type="submit" variant="primary" disabled={parsing || !selectedFile}>
-                {parsing ? 'Parsing PDF with LLM...' : 'Extract JSON Resume'}
-              </Button>
-              <Button variant="secondary" onClick={() => setStep(3)}>
-                Skip &amp; Enter Manually -&gt;
-              </Button>
+          <div className="space-y-5 max-w-xl">
+            <div className="p-3 border border-[var(--hairline)] bg-[var(--surface-soft)] flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <Badge tone="success">
+                  {billing?.executionMode === 'byok' ? 'BYOK Active' : 'Managed AI Ready'}
+                </Badge>
+                <span className="text-[var(--body)]">
+                  {billing
+                    ? `${billing.totalCreditsRemaining} credits available (${billing.plan.name}) · no API key needed`
+                    : 'No API key setup required'}
+                </span>
+              </div>
+              <Link href="/settings#byok" className="text-[var(--ink)] underline">
+                Developer BYOK
+              </Link>
             </div>
-          </form>
+
+            <form onSubmit={handleParseResume} className="space-y-4">
+              <Field
+                label="Resume PDF File"
+                htmlFor="onb-pdf"
+                hint="Accepted: .pdf (text-selectable, max 10 MB) · Uses 1 credit in Managed Fast mode"
+                required
+              >
+                {(props) => (
+                  <input
+                    {...props}
+                    type="file"
+                    accept="application/pdf,.pdf"
+                    onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+                    className="block w-full text-sm border border-dashed border-[var(--hairline-strong)] bg-[var(--surface-soft)] p-4 rounded-[4px] cursor-pointer file:mr-4 file:py-1.5 file:px-3 file:rounded-[4px] file:border file:border-[var(--hairline-strong)] file:bg-[var(--canvas)] file:text-[var(--ink)] file:text-xs file:font-medium"
+                  />
+                )}
+              </Field>
+
+              {selectedFile ? (
+                <p className="text-xs text-[var(--body)]">
+                  Selected: <strong>{selectedFile.name}</strong> (
+                  {Math.round(selectedFile.size / 1024)} KB)
+                </p>
+              ) : null}
+
+              <div className="flex flex-wrap gap-2 pt-2">
+                <Button type="submit" variant="primary" disabled={parsing || !selectedFile}>
+                  {parsing ? 'Parsing PDF...' : 'Extract JSON Resume'}
+                </Button>
+                <Button type="button" variant="secondary" onClick={() => setStep(2)}>
+                  Skip &amp; Enter Manually -&gt;
+                </Button>
+              </div>
+            </form>
+          </div>
         </SectionBlock>
       ) : india ? (
         <SectionBlock
-          title="Step 3: Review Parsed Resume & India Fields"
+          title="Step 2: Review Parsed Resume & India Fields"
           description={
             parsedPreview
               ? `Extracted ${parsedPreview.jsonResume.work.length} experience, ${parsedPreview.jsonResume.projects.length} project, ${parsedPreview.jsonResume.education.length} education entries.${storagePath ? ` Stored at ${storagePath}` : ''}`
@@ -667,7 +531,7 @@ export default function OnboardingPage() {
               >
                 Complete &amp; Tailor Resume -&gt;
               </Button>
-              <Button type="button" variant="secondary" onClick={() => setStep(2)}>
+              <Button type="button" variant="secondary" onClick={() => setStep(1)}>
                 &lt;- Back to PDF Upload
               </Button>
             </div>

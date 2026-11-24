@@ -2,6 +2,7 @@ import type {
   ApplicationRecord,
   AtsScoreReport,
   AtsScoreRequest,
+  BillingSnapshot,
   CaptureExtensionJobRequest,
   CaptureExtensionJobResponse,
   CoverLetterRecord,
@@ -27,10 +28,19 @@ import {
 
 export class ExtensionApiError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly code?: string;
+  readonly upgradeUrl?: string;
+
+  constructor(
+    message: string,
+    status: number,
+    meta?: { code?: string; upgradeUrl?: string }
+  ) {
     super(message);
     this.name = 'ExtensionApiError';
     this.status = status;
+    this.code = meta?.code;
+    this.upgradeUrl = meta?.upgradeUrl;
   }
 }
 
@@ -107,11 +117,16 @@ async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
   }
   if (!res.ok) {
+    const obj =
+      parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
     const msg =
-      parsed && typeof parsed === 'object' && 'error' in parsed
-        ? String((parsed as { error: unknown }).error)
+      obj && 'error' in obj
+        ? String(obj['error'])
         : `API request failed (${res.status})`;
-    throw new ExtensionApiError(msg, res.status);
+    throw new ExtensionApiError(msg, res.status, {
+      code: obj && typeof obj['code'] === 'string' ? obj['code'] : undefined,
+      upgradeUrl: obj && typeof obj['upgradeUrl'] === 'string' ? obj['upgradeUrl'] : undefined
+    });
   }
   return parsed as T;
 }
@@ -162,13 +177,15 @@ export async function signInWithSupabasePassword(params: {
 }
 
 export async function syncExtensionUserData(): Promise<CachedUserData> {
-  const [profile, savedAnswers, resumeVersions, profileVariants, coverLetters] = await Promise.all([
-    fetchJson<MasterProfile>('/api/profile'),
-    fetchJson<SavedAnswer[]>('/api/answers'),
-    fetchJson<ResumeVersionRecord[]>('/api/resumes/versions'),
-    fetchJson<ProfileVariantRecord[]>('/api/profiles/variants').catch(() => []),
-    fetchJson<CoverLetterRecord[]>('/api/cover-letters').catch(() => [])
-  ]);
+  const [profile, savedAnswers, resumeVersions, profileVariants, coverLetters, billing] =
+    await Promise.all([
+      fetchJson<MasterProfile>('/api/profile'),
+      fetchJson<SavedAnswer[]>('/api/answers'),
+      fetchJson<ResumeVersionRecord[]>('/api/resumes/versions'),
+      fetchJson<ProfileVariantRecord[]>('/api/profiles/variants').catch(() => []),
+      fetchJson<CoverLetterRecord[]>('/api/cover-letters').catch(() => []),
+      fetchJson<BillingSnapshot>('/api/billing/status').catch(() => undefined)
+    ]);
 
   const cached: CachedUserData = {
     profile,
@@ -176,6 +193,7 @@ export async function syncExtensionUserData(): Promise<CachedUserData> {
     resumeVersions,
     profileVariants,
     coverLetters,
+    billing,
     syncedAt: new Date().toISOString()
   };
   await saveCachedUserData(cached);
