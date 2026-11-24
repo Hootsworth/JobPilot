@@ -23,7 +23,7 @@ import {
   SkeletonBlock
 } from '@/components/ui/primitives';
 import { api, getApiBaseUrl } from '@/lib/api';
-import { getSupabaseClient } from '@/lib/supabase';
+import { getSupabaseClient, getSupabasePublishableKey } from '@/lib/supabase';
 
 const PROVIDER_META: Record<
   LlmProviderId,
@@ -295,6 +295,9 @@ export default function SettingsPage() {
       }
       const payload = {
         apiBaseUrl: getApiBaseUrl(),
+        webBaseUrl: window.location.origin,
+        supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || '',
+        supabaseAnonKey: getSupabasePublishableKey() || '',
         accessToken: session.access_token,
         refreshToken: session.refresh_token,
         email: session.user?.email ?? ''
@@ -714,8 +717,8 @@ export default function SettingsPage() {
                     <code className="font-bold text-[var(--ink)]">{getApiBaseUrl()}</code>
                   </div>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[var(--mute)]">Session Scope</span>
-                    <span className="text-[var(--body)]">chrome.storage.local (auto-expires)</span>
+                    <span className="text-[var(--mute)]">Extension Sync</span>
+                    <span className="text-[var(--body)]">Auto-syncs on load &amp; auto-refreshes</span>
                   </div>
                 </div>
 
@@ -727,10 +730,10 @@ export default function SettingsPage() {
                   >
                     {copiedExt
                       ? '[x] Copied Session JSON!'
-                      : 'Copy Extension Session JSON'}
+                      : 'Copy Session JSON (Manual Fallback)'}
                   </Button>
                   <span className="text-xs text-[var(--mute)]">
-                    Paste into the extension&apos;s <strong>Connect</strong> tab.
+                    Usually automatic via browser sign-in; copy only for custom profiles.
                   </span>
                 </div>
               </div>

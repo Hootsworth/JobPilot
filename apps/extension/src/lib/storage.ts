@@ -1,7 +1,9 @@
 import { getDefaultEnabledAdapterMap } from '@jobpilot/form-engine';
 import type {
   AtsAdapterId,
+  CoverLetterRecord,
   MasterProfile,
+  ProfileVariantRecord,
   ResumeVersionRecord,
   SavedAnswer
 } from '@jobpilot/shared';
@@ -17,6 +19,7 @@ export type AdapterEnabledMap = Record<Exclude<AtsAdapterId, 'generic'>, boolean
 
 export interface ExtensionSettingsState {
   apiBaseUrl: string;
+  webBaseUrl: string;
   supabaseUrl: string;
   supabaseAnonKey: string;
   enabledAdapters: AdapterEnabledMap;
@@ -26,6 +29,8 @@ export interface CachedUserData {
   profile: MasterProfile;
   savedAnswers: SavedAnswer[];
   resumeVersions: ResumeVersionRecord[];
+  profileVariants: ProfileVariantRecord[];
+  coverLetters: CoverLetterRecord[];
   syncedAt: string;
 }
 
@@ -35,10 +40,16 @@ const STORAGE_KEYS = {
   cachedData: 'jobpilot_ext_cached_data'
 } as const;
 
+const extEnv = (
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {}
+);
+
 export const DEFAULT_SETTINGS: ExtensionSettingsState = {
-  apiBaseUrl: 'http://localhost:4000',
-  supabaseUrl: '',
-  supabaseAnonKey: '',
+  apiBaseUrl: (extEnv['VITE_API_URL'] || 'https://jobpilot-moek.onrender.com').replace(/\/$/, ''),
+  webBaseUrl: (extEnv['VITE_WEB_URL'] || 'https://jobpilot.singulr.tech').replace(/\/$/, ''),
+  supabaseUrl: (extEnv['VITE_SUPABASE_URL'] || '').replace(/\/$/, ''),
+  supabaseAnonKey:
+    extEnv['VITE_SUPABASE_PUBLISHABLE_KEY'] || extEnv['VITE_SUPABASE_ANON_KEY'] || '',
   enabledAdapters: getDefaultEnabledAdapterMap()
 };
 
@@ -48,8 +59,9 @@ export async function getExtensionSettings(): Promise<ExtensionSettingsState> {
   const defaults = getDefaultEnabledAdapterMap();
   return {
     apiBaseUrl: (raw?.apiBaseUrl || DEFAULT_SETTINGS.apiBaseUrl).replace(/\/$/, ''),
-    supabaseUrl: (raw?.supabaseUrl || '').replace(/\/$/, ''),
-    supabaseAnonKey: raw?.supabaseAnonKey || '',
+    webBaseUrl: (raw?.webBaseUrl || DEFAULT_SETTINGS.webBaseUrl).replace(/\/$/, ''),
+    supabaseUrl: (raw?.supabaseUrl || DEFAULT_SETTINGS.supabaseUrl).replace(/\/$/, ''),
+    supabaseAnonKey: raw?.supabaseAnonKey || DEFAULT_SETTINGS.supabaseAnonKey,
     enabledAdapters: {
       greenhouse: raw?.enabledAdapters?.greenhouse ?? defaults.greenhouse,
       lever: raw?.enabledAdapters?.lever ?? defaults.lever,
@@ -73,6 +85,7 @@ export async function saveExtensionSettings(
     ...current,
     ...patch,
     apiBaseUrl: (patch.apiBaseUrl ?? current.apiBaseUrl).replace(/\/$/, ''),
+    webBaseUrl: (patch.webBaseUrl ?? current.webBaseUrl).replace(/\/$/, ''),
     supabaseUrl: (patch.supabaseUrl ?? current.supabaseUrl).replace(/\/$/, ''),
     enabledAdapters: {
       ...current.enabledAdapters,
@@ -101,7 +114,16 @@ export async function saveExtensionSession(
 
 export async function getCachedUserData(): Promise<CachedUserData | null> {
   const res = await chrome.storage.local.get(STORAGE_KEYS.cachedData);
-  return (res[STORAGE_KEYS.cachedData] as CachedUserData | undefined) ?? null;
+  const raw = res[STORAGE_KEYS.cachedData] as Partial<CachedUserData> | undefined;
+  if (!raw?.profile) return null;
+  return {
+    profile: raw.profile,
+    savedAnswers: raw.savedAnswers ?? [],
+    resumeVersions: raw.resumeVersions ?? [],
+    profileVariants: raw.profileVariants ?? [],
+    coverLetters: raw.coverLetters ?? [],
+    syncedAt: raw.syncedAt ?? new Date().toISOString()
+  };
 }
 
 export async function saveCachedUserData(data: CachedUserData | null): Promise<void> {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildFillPlan,
   getAdapterById,
@@ -8,20 +8,29 @@ import {
 } from '@jobpilot/form-engine';
 import type {
   AtsAdapterId,
+  AtsScoreReport,
   CaptureExtensionJobResponse,
   DraftAnswersResponse,
   FallbackFillResponse,
   FallbackFillSuggestion,
   FillExecutionItemResult,
-  FillPlanItem
+  FillPlanItem,
+  MasterProfile,
+  ResumeTemplateId
 } from '@jobpilot/shared';
+import { AtsMatchCard } from '../../src/components/AtsMatchCard';
+import { QuickCopyBar } from '../../src/components/QuickCopyBar';
 import { signInWithSupabasePassword, syncExtensionUserData } from '../../src/lib/api-client';
 import type {
   ApiProxyResponse,
-  ExecuteFillTabResponse,
+  AtsScoreProxyResponse,
   ExtensionMessage,
   PageScanPayload,
-  UndoFillTabResponse
+  SaveAnswerProxyResponse,
+  SubmitDetectedPayload,
+  TailorResumeProxyResponse,
+  UndoFillTabResponse,
+  ExecuteFillTabResponse
 } from '../../src/lib/messaging';
 import {
   DEFAULT_SETTINGS,
@@ -47,6 +56,20 @@ function confidenceLabel(conf: number, alreadyFilled: boolean): { text: string; 
   return { text: 'SKIP', cls: 'jp-badge' };
 }
 
+function normalizeUrlKey(rawUrl: string): string {
+  return rawUrl.split('#')[0]?.trim() || rawUrl;
+}
+
+function slugAnswerKey(label: string): string {
+  return (
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 60) || 'custom_question'
+  );
+}
+
 export function App() {
   const [tab, setTab] = useState<SideTab>('review');
   const [settings, setSettings] = useState<ExtensionSettingsState>(DEFAULT_SETTINGS);
@@ -54,85 +77,122 @@ export function App() {
   const [cachedData, setCachedData] = useState<CachedUserData | null>(null);
 
   const [scan, setScan] = useState<PageScanPayload | null>(null);
+  const [selectedVariantId, setSelectedVariantId] = useState<string>('');
   const [selectedResumeId, setSelectedResumeId] = useState<string>('');
+  const [selectedCoverLetterId, setSelectedCoverLetterId] = useState<string>('');
+  const [tailorTemplateId, setTailorTemplateId] = useState<ResumeTemplateId>('ats-classic');
+
   const [planItems, setPlanItems] = useState<FillPlanItem[]>([]);
-  const [fallbackSuggestions, setFallbackSuggestions] = useState<FallbackFillSuggestion[]>([]);
   const [execResults, setExecResults] = useState<Map<string, FillExecutionItemResult>>(new Map());
-  const [pendingPermissionAdapterId, setPendingPermissionAdapterId] = useState<AtsAdapterId | null>(null);
+  const [pendingPermissionAdapterId, setPendingPermissionAdapterId] =
+    useState<AtsAdapterId | null>(null);
+
+  const [atsReport, setAtsReport] = useState<AtsScoreReport | null>(null);
+  const [scoringAts, setScoringAts] = useState(false);
+  const [submitPrompt, setSubmitPrompt] = useState<SubmitDetectedPayload | null>(null);
+  const [markingApplied, setMarkingApplied] = useState(false);
 
   const [scanning, setScanning] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [detectingWebAuth, setDetectingWebAuth] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [mappingFallback, setMappingFallback] = useState(false);
+  const [tailoringHere, setTailoringHere] = useState(false);
   const [filling, setFilling] = useState(false);
   const [savingJob, setSavingJob] = useState(false);
+  const [savingAnswerFieldId, setSavingAnswerFieldId] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Connect form inputs
-  const [sessionJsonText, setSessionJsonText] = useState('');
-  const [apiUrlInput, setApiUrlInput] = useState(DEFAULT_SETTINGS.apiBaseUrl);
-  const [sbUrlInput, setSbUrlInput] = useState('');
-  const [sbAnonInput, setSbAnonInput] = useState('');
+  // Direct Sign-in & Advanced Override fields
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  const [sessionJsonText, setSessionJsonText] = useState('');
+  const [apiUrlInput, setApiUrlInput] = useState(DEFAULT_SETTINGS.apiBaseUrl);
+  const [webUrlInput, setWebUrlInput] = useState(DEFAULT_SETTINGS.webBaseUrl);
+  const [sbUrlInput, setSbUrlInput] = useState(DEFAULT_SETTINGS.supabaseUrl);
+  const [sbAnonInput, setSbAnonInput] = useState(DEFAULT_SETTINGS.supabaseAnonKey);
+
+  // Persistent cache of manual edits / AI drafts keyed by `${normalizedUrl}::${fieldId}` (Bug #5 fix)
+  const savedEditsRef = useRef<Map<string, FillPlanItem>>(new Map());
+  const lastScanUrlRef = useRef<string>('');
+  const lastFallbackRef = useRef<FallbackFillSuggestion[]>([]);
+  const scanRef = useRef<PageScanPayload | null>(null);
+  scanRef.current = scan;
+
+  const effectiveProfile: MasterProfile | null = useMemo(() => {
+    if (!cachedData?.profile) return null;
+    const variant = cachedData.profileVariants.find((v) => v.id === selectedVariantId);
+    if (!variant) return cachedData.profile;
+    return {
+      ...cachedData.profile,
+      activeProfileVersion: variant.version,
+      jsonResume: variant.jsonResume,
+      indiaProfile: variant.indiaProfile
+    };
+  }, [cachedData, selectedVariantId]);
 
   const recomputePlan = useCallback(
     (
       nextScan: PageScanPayload | null,
       data: CachedUserData | null,
+      variantId: string,
       resumeId: string,
-      prevDraftItems?: FillPlanItem[],
+      coverLetterId: string,
       nextFallbackSuggestions?: FallbackFillSuggestion[]
     ) => {
       if (!nextScan || !data) {
         setPlanItems([]);
         return;
       }
+      const variant = data.profileVariants.find((v) => v.id === variantId);
+      const profileForFill: MasterProfile = variant
+        ? {
+            ...data.profile,
+            activeProfileVersion: variant.version,
+            jsonResume: variant.jsonResume,
+            indiaProfile: variant.indiaProfile
+          }
+        : data.profile;
+
       const resumeVersion = data.resumeVersions.find((v) => v.id === resumeId) ?? null;
+      const coverLetter = data.coverLetters.find((c) => c.id === coverLetterId) ?? null;
       const computed = buildFillPlan({
         fields: nextScan.fields,
-        profile: data.profile,
+        profile: profileForFill,
         savedAnswers: data.savedAnswers,
         resumeVersion,
-        fallbackSuggestions: nextFallbackSuggestions ?? fallbackSuggestions
+        coverLetter,
+        fallbackSuggestions: nextFallbackSuggestions ?? lastFallbackRef.current
       });
 
-      const prevEditedMap = new Map(
-        (prevDraftItems ?? [])
-          .filter(
-            (i) =>
-              i.source === 'user_edited' ||
-              i.source === 'llm_draft' ||
-              i.source === 'llm_fallback'
-          )
-          .map((i) => [i.fieldId, i])
-      );
-
+      const urlKey = normalizeUrlKey(nextScan.url);
       setPlanItems(
         computed.map((item) => {
-          const prev = prevEditedMap.get(item.fieldId);
-          if (prev && !item.alreadyFilled && prev.proposedValue.trim()) {
+          const remembered = savedEditsRef.current.get(`${urlKey}::${item.fieldId}`);
+          if (remembered && !item.alreadyFilled && remembered.proposedValue.trim()) {
             return {
               ...item,
-              proposedValue: prev.proposedValue,
-              displayValue: prev.displayValue,
-              source: prev.source,
-              confidence: prev.confidence,
-              included: prev.included
+              proposedValue: remembered.proposedValue,
+              displayValue: remembered.displayValue,
+              source: remembered.source,
+              confidence: remembered.confidence,
+              included: remembered.included
             };
           }
           return item;
         })
       );
     },
-    [fallbackSuggestions]
+    []
   );
 
   const scanActiveTab = useCallback(
     async (
       dataOverride?: CachedUserData | null,
+      variantIdOverride?: string,
       resumeIdOverride?: string,
+      coverLetterIdOverride?: string,
       settingsOverride?: ExtensionSettingsState
     ) => {
       setScanning(true);
@@ -145,13 +205,19 @@ export function App() {
           return;
         }
 
+        const nextUrlKey = activeTab.url ? normalizeUrlKey(activeTab.url) : '';
+        const samePage = Boolean(nextUrlKey && nextUrlKey === lastScanUrlRef.current);
+        if (!samePage) {
+          lastFallbackRef.current = [];
+          setAtsReport(null);
+        }
+
         let response: PageScanPayload | undefined;
         try {
           response = (await chrome.tabs.sendMessage(activeTab.id, {
             type: 'SCAN_PAGE'
           } satisfies ExtensionMessage)) as PageScanPayload | undefined;
         } catch {
-          // Content script is not static on Workday / opt-in non-API portals; inject on demand if permitted
           const activeSettings = settingsOverride ?? (await getExtensionSettings());
           if (activeTab.url) {
             const resolved = resolveAdapterForUrl(activeTab.url, activeSettings.enabledAdapters);
@@ -173,6 +239,7 @@ export function App() {
                 fields: [],
                 hasSubmitControl: false
               });
+              lastScanUrlRef.current = nextUrlKey;
               setPlanItems([]);
               return;
             }
@@ -200,17 +267,21 @@ export function App() {
 
         if (!response) {
           setScan(null);
+          lastScanUrlRef.current = nextUrlKey;
           return;
         }
         setScan(response);
-        setExecResults(new Map());
-        setFallbackSuggestions([]);
+        lastScanUrlRef.current = normalizeUrlKey(response.url);
+        if (!samePage) {
+          setExecResults(new Map());
+        }
         recomputePlan(
           response,
           dataOverride ?? cachedData,
+          variantIdOverride ?? selectedVariantId,
           resumeIdOverride ?? selectedResumeId,
-          [],
-          []
+          coverLetterIdOverride ?? selectedCoverLetterId,
+          samePage ? lastFallbackRef.current : []
         );
       } catch {
         setScan(null);
@@ -218,41 +289,167 @@ export function App() {
         setScanning(false);
       }
     },
-    [cachedData, recomputePlan, selectedResumeId]
+    [
+      cachedData,
+      recomputePlan,
+      selectedCoverLetterId,
+      selectedResumeId,
+      selectedVariantId
+    ]
   );
 
+  // Initial load + automatic web-session detection if signed out
   useEffect(() => {
     void (async () => {
-      const [s, sess, data] = await Promise.all([
+      let [s, sess, data] = await Promise.all([
         getExtensionSettings(),
         getExtensionSession(),
         getCachedUserData()
       ]);
+
+      if (!sess) {
+        await chrome.runtime
+          .sendMessage({ type: 'JOBPILOT_SYNC_FROM_WEB_TAB' } satisfies ExtensionMessage)
+          .catch(() => {});
+        [s, sess, data] = await Promise.all([
+          getExtensionSettings(),
+          getExtensionSession(),
+          getCachedUserData()
+        ]);
+      }
+
       setSettings(s);
       setApiUrlInput(s.apiBaseUrl);
+      setWebUrlInput(s.webBaseUrl);
       setSbUrlInput(s.supabaseUrl);
       setSbAnonInput(s.supabaseAnonKey);
       setSession(sess);
       setCachedData(data);
+
+      const defaultVariantId =
+        data?.profileVariants.find((v) => v.isDefault)?.id ?? data?.profileVariants[0]?.id ?? '';
       const defaultResumeId = data?.resumeVersions[0]?.id ?? '';
+      const defaultCoverId = data?.coverLetters[0]?.id ?? '';
+      setSelectedVariantId(defaultVariantId);
       setSelectedResumeId(defaultResumeId);
+      setSelectedCoverLetterId(defaultCoverId);
 
       if (!sess) {
         setTab('connect');
       }
-      await scanActiveTab(data, defaultResumeId);
+      await scanActiveTab(data, defaultVariantId, defaultResumeId, defaultCoverId, s);
     })();
   }, []);
 
+  // Keep Side Panel reactive to tab switches, URL changes, Web Auth sync, & Post-Submit confirmation (#4, #6)
   useEffect(() => {
-    const listener = (message: ExtensionMessage) => {
+    const onMessage = (message: ExtensionMessage) => {
       if (message?.type === 'PAGE_STRUCTURE_UPDATED') {
+        void scanActiveTab();
+      } else if (message?.type === 'APPLICATION_SUBMIT_DETECTED') {
+        setSubmitPrompt(message.payload);
+      } else if (message?.type === 'AUTH_SESSION_UPDATED') {
+        void (async () => {
+          const [s, sess, data] = await Promise.all([
+            getExtensionSettings(),
+            getExtensionSession(),
+            getCachedUserData()
+          ]);
+          setSettings(s);
+          setApiUrlInput(s.apiBaseUrl);
+          setWebUrlInput(s.webBaseUrl);
+          setSbUrlInput(s.supabaseUrl);
+          setSbAnonInput(s.supabaseAnonKey);
+          setSession(sess);
+          setCachedData(data);
+          if (sess && data) {
+            const vId =
+              data.profileVariants.find((v) => v.isDefault)?.id ??
+              data.profileVariants[0]?.id ??
+              '';
+            const rId = data.resumeVersions[0]?.id ?? '';
+            const cId = data.coverLetters[0]?.id ?? '';
+            setSelectedVariantId(vId);
+            setSelectedResumeId(rId);
+            setSelectedCoverLetterId(cId);
+            setTab('review');
+            setStatusMsg(`Auto-connected via JobPilot Web (${sess.email}).`);
+            await scanActiveTab(data, vId, rId, cId, s);
+          } else if (!sess) {
+            setTab('connect');
+          }
+        })();
+      }
+    };
+
+    const onTabActivated = () => {
+      setSubmitPrompt(null);
+      void scanActiveTab();
+    };
+    const onTabUpdated = (_tabId: number, info: { status?: string; url?: string }, updatedTab: chrome.tabs.Tab) => {
+      if (updatedTab.active && (info.status === 'complete' || info.url)) {
         void scanActiveTab();
       }
     };
-    chrome.runtime.onMessage.addListener(listener);
-    return () => chrome.runtime.onMessage.removeListener(listener);
+
+    chrome.runtime.onMessage.addListener(onMessage);
+    chrome.tabs.onActivated.addListener(onTabActivated);
+    chrome.tabs.onUpdated.addListener(onTabUpdated);
+    return () => {
+      chrome.runtime.onMessage.removeListener(onMessage);
+      chrome.tabs.onActivated.removeListener(onTabActivated);
+      chrome.tabs.onUpdated.removeListener(onTabUpdated);
+    };
   }, [scanActiveTab]);
+
+  // Live In-Tab ATS Score (#2)
+  useEffect(() => {
+    const desc = scan?.jobMetadata.descriptionClean?.trim() ?? '';
+    if (!session || !cachedData || !scan || desc.length < 20) {
+      setAtsReport(null);
+      return;
+    }
+
+    let cancelled = false;
+    setScoringAts(true);
+    void (async () => {
+      try {
+        const res = (await chrome.runtime.sendMessage({
+          type: 'API_ATS_SCORE',
+          payload: {
+            ...(selectedResumeId
+              ? { resumeVersionId: selectedResumeId }
+              : selectedVariantId
+                ? { profileVariantId: selectedVariantId }
+                : {}),
+            customJob: {
+              title: scan.jobMetadata.title || 'Target Role',
+              companyName: scan.jobMetadata.companyName || '',
+              description: desc
+            }
+          }
+        } satisfies ExtensionMessage)) as AtsScoreProxyResponse;
+        if (!cancelled && res?.ok) {
+          setAtsReport(res.data);
+        }
+      } catch {
+        if (!cancelled) setAtsReport(null);
+      } finally {
+        if (!cancelled) setScoringAts(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scan, session, cachedData, selectedVariantId, selectedResumeId]);
+
+  const persistFieldEdit = (fieldId: string, nextItem: FillPlanItem) => {
+    const activeUrl = scanRef.current?.url;
+    if (activeUrl) {
+      savedEditsRef.current.set(`${normalizeUrlKey(activeUrl)}::${fieldId}`, nextItem);
+    }
+  };
 
   const handleSyncData = async () => {
     setSyncing(true);
@@ -261,14 +458,25 @@ export function App() {
     try {
       const fresh = await syncExtensionUserData();
       setCachedData(fresh);
-      const nextResumeId =
+      const nextVarId =
+        fresh.profileVariants.find((v) => v.id === selectedVariantId)?.id ??
+        fresh.profileVariants.find((v) => v.isDefault)?.id ??
+        fresh.profileVariants[0]?.id ??
+        '';
+      const nextResId =
         fresh.resumeVersions.find((v) => v.id === selectedResumeId)?.id ??
         fresh.resumeVersions[0]?.id ??
         '';
-      setSelectedResumeId(nextResumeId);
-      recomputePlan(scan, fresh, nextResumeId);
+      const nextCoverId =
+        fresh.coverLetters.find((c) => c.id === selectedCoverLetterId)?.id ??
+        fresh.coverLetters[0]?.id ??
+        '';
+      setSelectedVariantId(nextVarId);
+      setSelectedResumeId(nextResId);
+      setSelectedCoverLetterId(nextCoverId);
+      recomputePlan(scan, fresh, nextVarId, nextResId, nextCoverId);
       setStatusMsg(
-        `Synced profile, ${fresh.savedAnswers.length} saved answer(s), and ${fresh.resumeVersions.length} resume version(s).`
+        `Synced profile, ${fresh.profileVariants.length} variant(s), ${fresh.coverLetters.length} cover letter(s), ${fresh.savedAnswers.length} answer(s), ${fresh.resumeVersions.length} resume(s).`
       );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Sync failed.');
@@ -277,9 +485,61 @@ export function App() {
     }
   };
 
-  const handleResumeChange = (nextId: string) => {
-    setSelectedResumeId(nextId);
-    recomputePlan(scan, cachedData, nextId, planItems);
+  const handleDetectWebSession = async () => {
+    setDetectingWebAuth(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'JOBPILOT_SYNC_FROM_WEB_TAB'
+      } satisfies ExtensionMessage)) as ApiProxyResponse<{
+        found: boolean;
+        email?: string;
+        tabCount: number;
+      }>;
+
+      if (!res?.ok) throw new Error(res?.error || 'Unable to inspect web tabs.');
+      if (!res.data.found) {
+        if (res.data.tabCount === 0) {
+          throw new Error(
+            `No open JobPilot web tab found. Click "Sign in on JobPilot Web" below.`
+          );
+        }
+        throw new Error('JobPilot web tab is open, but you are not signed in there yet.');
+      }
+
+      const [s, sess, data] = await Promise.all([
+        getExtensionSettings(),
+        getExtensionSession(),
+        getCachedUserData()
+      ]);
+      setSettings(s);
+      setSession(sess);
+      const fresh = data ?? (await syncExtensionUserData());
+      setCachedData(fresh);
+      const vId =
+        fresh.profileVariants.find((v) => v.isDefault)?.id ??
+        fresh.profileVariants[0]?.id ??
+        '';
+      const rId = fresh.resumeVersions[0]?.id ?? '';
+      const cId = fresh.coverLetters[0]?.id ?? '';
+      setSelectedVariantId(vId);
+      setSelectedResumeId(rId);
+      setSelectedCoverLetterId(cId);
+      setTab('review');
+      setStatusMsg(`Connected from JobPilot Web (${sess?.email ?? 'signed in'}).`);
+      await scanActiveTab(fresh, vId, rId, cId, s);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to detect website login.');
+    } finally {
+      setDetectingWebAuth(false);
+    }
+  };
+
+  const handleOpenWebLogin = () => {
+    const loginUrl = `${settings.webBaseUrl.replace(/\/$/, '')}/login`;
+    void chrome.tabs.create({ url: loginUrl });
+    setStatusMsg('Opened JobPilot login tab — extension connects automatically once signed in.');
   };
 
   const handleSaveJobToTracker = async () => {
@@ -289,7 +549,6 @@ export function App() {
     setStatusMsg(null);
     try {
       const sourceType = scan.adapterId === 'generic' ? 'extension_capture' : scan.adapterId;
-
       const res = (await chrome.runtime.sendMessage({
         type: 'API_CAPTURE_JOB',
         payload: {
@@ -305,13 +564,9 @@ export function App() {
         }
       } satisfies ExtensionMessage)) as ApiProxyResponse<CaptureExtensionJobResponse>;
 
-      if (!res?.ok) {
-        throw new Error(res?.error || 'Failed to save job to tracker');
-      }
+      if (!res?.ok) throw new Error(res?.error || 'Failed to save job to tracker');
       setStatusMsg(
-        `Saved "${scan.jobMetadata.title}" @ ${scan.jobMetadata.companyName} to Tracker${
-          selectedResumeId ? ' with selected resume version' : ''
-        }.`
+        `Saved "${scan.jobMetadata.title}" @ ${scan.jobMetadata.companyName} to Tracker.`
       );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Capture failed.');
@@ -328,14 +583,62 @@ export function App() {
       const res = (await chrome.runtime.sendMessage({
         type: 'JOBPILOT_SAVE_ACTIVE_TAB_JOB'
       } satisfies ExtensionMessage)) as ApiProxyResponse<{ title: string; companyName: string }>;
-      if (!res?.ok) {
-        throw new Error(res?.error || 'Failed to save active page.');
-      }
+      if (!res?.ok) throw new Error(res?.error || 'Failed to save active page.');
       setStatusMsg(`Saved "${res.data.title}" @ ${res.data.companyName} to Tracker.`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save active page.');
     } finally {
       setSavingJob(false);
+    }
+  };
+
+  const handleTailorNowInExtension = async () => {
+    if (!scan) return;
+    const desc = scan.jobMetadata.descriptionClean?.trim() ?? '';
+    if (desc.length < 30) {
+      setErrorMsg(
+        'Not enough job description text on this tab to tailor directly — click "Tailor Studio ->" to paste JD.'
+      );
+      return;
+    }
+
+    setTailoringHere(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: 'API_TAILOR_RESUME',
+        payload: {
+          ...(selectedVariantId ? { profileVariantId: selectedVariantId } : {}),
+          customJob: {
+            title: scan.jobMetadata.title || 'Software Engineer',
+            companyName: scan.jobMetadata.companyName || 'Company',
+            description: desc
+          },
+          templateId: tailorTemplateId,
+          autoRepairFlagged: true
+        }
+      } satisfies ExtensionMessage)) as TailorResumeProxyResponse;
+
+      if (!res?.ok) throw new Error(res?.error || 'Tailoring failed.');
+      const created = res.data;
+      if (cachedData) {
+        const updatedCache: CachedUserData = {
+          ...cachedData,
+          resumeVersions: [created, ...cachedData.resumeVersions]
+        };
+        setCachedData(updatedCache);
+        await saveCachedUserData(updatedCache);
+        setSelectedResumeId(created.id);
+        recomputePlan(scan, updatedCache, selectedVariantId, created.id, selectedCoverLetterId);
+      }
+      setStatusMsg(
+        `Created v${created.versionNumber} (${created.verifierPassed ? 'VERIFIED' : 'FLAGGED'}) and selected for attachment.`
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Tailor failed.');
+    } finally {
+      setTailoringHere(false);
     }
   };
 
@@ -353,6 +656,7 @@ export function App() {
             !planItem?.proposedValue)
         );
       })
+      .slice(0, 20) // Bug #6 fix: matches DraftAnswersRequestSchema max(20)
       .map((f) => ({
         fieldId: f.fieldId,
         label: f.label || f.placeholder || f.name || 'Application question',
@@ -386,7 +690,7 @@ export function App() {
         prev.map((item) => {
           const hit = draftMap.get(item.fieldId);
           if (!hit || !hit.answer.trim()) return item;
-          return {
+          const nextItem: FillPlanItem = {
             ...item,
             proposedValue: hit.answer,
             displayValue: hit.answer,
@@ -395,6 +699,8 @@ export function App() {
             included: !item.alreadyFilled,
             skipReason: hit.rationale
           };
+          persistFieldEdit(item.fieldId, nextItem);
+          return nextItem;
         })
       );
 
@@ -407,129 +713,6 @@ export function App() {
     } finally {
       setDrafting(false);
     }
-  };
-
-  const handleExecuteFill = async () => {
-    if (!scan) return;
-    setFilling(true);
-    setErrorMsg(null);
-    setStatusMsg(null);
-    try {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab?.id) throw new Error('No active browser tab.');
-
-      const res = (await chrome.tabs.sendMessage(activeTab.id, {
-        type: 'EXECUTE_FILL',
-        planItems,
-        resumeVersionId: selectedResumeId || null
-      } satisfies ExtensionMessage)) as ExecuteFillTabResponse;
-
-      if (!res?.ok) throw new Error(res?.error || 'Fill execution failed.');
-      setExecResults(new Map(res.results.map((r) => [r.fieldId, r])));
-      setStatusMsg(
-        `Filled ${res.filledCount} field(s) (preserved ${res.skippedAlreadyFilledCount} pre-filled). Paused for your review — click Submit on the page when ready.`
-      );
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to fill form on this tab.');
-    } finally {
-      setFilling(false);
-    }
-  };
-
-  const handleUndoFill = async () => {
-    setErrorMsg(null);
-    try {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!activeTab?.id) return;
-      const res = (await chrome.tabs.sendMessage(activeTab.id, {
-        type: 'UNDO_FILL'
-      } satisfies ExtensionMessage)) as UndoFillTabResponse;
-      setStatusMsg(`Restored ${res.restoredCount} field(s) and cleared highlights.`);
-      await scanActiveTab();
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Undo failed.');
-    }
-  };
-
-  const handleConnectWithSessionJson = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-    setStatusMsg(null);
-    try {
-      const parsed = JSON.parse(sessionJsonText) as {
-        apiBaseUrl?: string;
-        accessToken?: string;
-        refreshToken?: string;
-        email?: string;
-      };
-      if (!parsed.accessToken) throw new Error('Session JSON is missing accessToken.');
-
-      const nextSettings = await saveExtensionSettings({
-        apiBaseUrl: parsed.apiBaseUrl || apiUrlInput
-      });
-      setSettings(nextSettings);
-      setApiUrlInput(nextSettings.apiBaseUrl);
-
-      const newSess: ExtensionAuthSession = {
-        accessToken: parsed.accessToken,
-        refreshToken: parsed.refreshToken ?? '',
-        email: parsed.email ?? 'Connected User'
-      };
-      await saveExtensionSession(newSess);
-      setSession(newSess);
-      setSessionJsonText('');
-
-      const fresh = await syncExtensionUserData();
-      setCachedData(fresh);
-      const nextResId = fresh.resumeVersions[0]?.id ?? '';
-      setSelectedResumeId(nextResId);
-      setStatusMsg(`Connected and synced (${newSess.email}).`);
-      setTab('review');
-      await scanActiveTab(fresh, nextResId);
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Invalid Session JSON.');
-    }
-  };
-
-  const handlePasswordSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-    setStatusMsg(null);
-    try {
-      const nextSettings = await saveExtensionSettings({
-        apiBaseUrl: apiUrlInput,
-        supabaseUrl: sbUrlInput,
-        supabaseAnonKey: sbAnonInput
-      });
-      setSettings(nextSettings);
-      const newSess = await signInWithSupabasePassword({
-        supabaseUrl: nextSettings.supabaseUrl,
-        supabaseAnonKey: nextSettings.supabaseAnonKey,
-        email: emailInput,
-        password: passwordInput
-      });
-      setSession(newSess);
-      setPasswordInput('');
-
-      const fresh = await syncExtensionUserData();
-      setCachedData(fresh);
-      const nextResId = fresh.resumeVersions[0]?.id ?? '';
-      setSelectedResumeId(nextResId);
-      setStatusMsg(`Signed in and synced (${newSess.email}).`);
-      setTab('review');
-      await scanActiveTab(fresh, nextResId);
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Sign-in failed.');
-    }
-  };
-
-  const handleDisconnect = async () => {
-    await Promise.all([saveExtensionSession(null), saveCachedUserData(null)]);
-    setSession(null);
-    setCachedData(null);
-    setPlanItems([]);
-    setFallbackSuggestions([]);
-    setStatusMsg('Cleared stored extension session & local profile cache.');
   };
 
   const handleLlmFallbackMap = async () => {
@@ -568,14 +751,21 @@ export function App() {
 
       if (!res?.ok) throw new Error(res?.error || 'LLM fallback mapping failed.');
 
-      const merged = [...fallbackSuggestions];
+      const merged = [...lastFallbackRef.current];
       for (const s of res.data.suggestions) {
         const idx = merged.findIndex((m) => m.fieldId === s.fieldId);
         if (idx >= 0) merged[idx] = s;
         else merged.push(s);
       }
-      setFallbackSuggestions(merged);
-      recomputePlan(scan, cachedData, selectedResumeId, planItems, merged);
+      lastFallbackRef.current = merged;
+      recomputePlan(
+        scan,
+        cachedData,
+        selectedVariantId,
+        selectedResumeId,
+        selectedCoverLetterId,
+        merged
+      );
       setStatusMsg(
         res.data.note ||
           `LLM fallback mapped ${res.data.suggestions.length} additional field(s) (confidence capped <= 85% for review).`
@@ -587,11 +777,235 @@ export function App() {
     }
   };
 
+  const handleSaveFieldToAnswerBank = async (item: FillPlanItem) => {
+    if (!item.proposedValue.trim() || !cachedData) return;
+    setSavingAnswerFieldId(item.fieldId);
+    setErrorMsg(null);
+    try {
+      const questionKey =
+        item.canonicalKey === 'unknown' || item.canonicalKey === 'custom_question'
+          ? slugAnswerKey(item.label)
+          : item.canonicalKey;
+
+      const res = (await chrome.runtime.sendMessage({
+        type: 'API_SAVE_ANSWER',
+        payload: {
+          questionKey,
+          questionPattern: item.label,
+          answer: item.proposedValue.trim(),
+          tags: scan ? [scan.adapterId] : []
+        }
+      } satisfies ExtensionMessage)) as SaveAnswerProxyResponse;
+
+      if (!res?.ok) throw new Error(res?.error || 'Failed to save answer.');
+
+      const updatedCache: CachedUserData = {
+        ...cachedData,
+        savedAnswers: [res.data, ...cachedData.savedAnswers]
+      };
+      setCachedData(updatedCache);
+      await saveCachedUserData(updatedCache);
+      setPlanItems((prev) =>
+        prev.map((p) => {
+          if (p.fieldId !== item.fieldId) return p;
+          const nextItem: FillPlanItem = { ...p, source: 'saved_answer', confidence: 0.94 };
+          persistFieldEdit(p.fieldId, nextItem);
+          return nextItem;
+        })
+      );
+      setStatusMsg(`Saved "${item.label}" to your Answer Bank.`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to save answer.');
+    } finally {
+      setSavingAnswerFieldId(null);
+    }
+  };
+
+  const handleMarkSubmittedApplied = async () => {
+    if (!submitPrompt) return;
+    setMarkingApplied(true);
+    setErrorMsg(null);
+    try {
+      const sourceType = scan?.adapterId && scan.adapterId !== 'generic' ? scan.adapterId : 'extension_capture';
+      const res = (await chrome.runtime.sendMessage({
+        type: 'API_MARK_APPLIED',
+        payload: {
+          sourceType,
+          sourceUrl: submitPrompt.url,
+          applyUrl: submitPrompt.url,
+          title: submitPrompt.title,
+          companyName: submitPrompt.companyName,
+          ...(selectedResumeId ? { resumeVersionId: selectedResumeId } : {}),
+          ...(selectedCoverLetterId ? { coverLetterId: selectedCoverLetterId } : {})
+        }
+      } satisfies ExtensionMessage)) as ApiProxyResponse<unknown>;
+
+      if (!res?.ok) throw new Error(res?.error || 'Failed to mark application applied.');
+      setSubmitPrompt(null);
+      setStatusMsg(`Logged "${submitPrompt.title}" @ ${submitPrompt.companyName} as APPLIED.`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to log application.');
+    } finally {
+      setMarkingApplied(false);
+    }
+  };
+
+  const handleExecuteFill = async () => {
+    if (!scan) return;
+    setFilling(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!activeTab?.id) throw new Error('No active browser tab.');
+
+      const res = (await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'EXECUTE_FILL',
+        planItems,
+        resumeVersionId: selectedResumeId || null,
+        coverLetterId: selectedCoverLetterId || null
+      } satisfies ExtensionMessage)) as ExecuteFillTabResponse;
+
+      if (!res?.ok) throw new Error(res?.error || 'Fill execution failed.');
+      setExecResults(new Map(res.results.map((r) => [r.fieldId, r])));
+      setStatusMsg(
+        `Filled ${res.filledCount} field(s) (preserved ${res.skippedAlreadyFilledCount} pre-filled). Review & click Submit when ready.`
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to fill form on this tab.');
+    } finally {
+      setFilling(false);
+    }
+  };
+
+  const handleUndoFill = async () => {
+    setErrorMsg(null);
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!activeTab?.id) return;
+      const res = (await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'UNDO_FILL'
+      } satisfies ExtensionMessage)) as UndoFillTabResponse;
+      setStatusMsg(`Restored ${res.restoredCount} field(s) and cleared highlights.`);
+      await scanActiveTab();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Undo failed.');
+    }
+  };
+
+  const handleConnectWithSessionJson = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const parsed = JSON.parse(sessionJsonText) as {
+        apiBaseUrl?: string;
+        webBaseUrl?: string;
+        supabaseUrl?: string;
+        supabaseAnonKey?: string;
+        accessToken?: string;
+        refreshToken?: string;
+        email?: string;
+      };
+      if (!parsed.accessToken) throw new Error('Session JSON is missing accessToken.');
+
+      const nextSettings = await saveExtensionSettings({
+        apiBaseUrl: parsed.apiBaseUrl || apiUrlInput,
+        webBaseUrl: parsed.webBaseUrl || webUrlInput,
+        ...(parsed.supabaseUrl ? { supabaseUrl: parsed.supabaseUrl } : {}),
+        ...(parsed.supabaseAnonKey ? { supabaseAnonKey: parsed.supabaseAnonKey } : {})
+      });
+      setSettings(nextSettings);
+      setApiUrlInput(nextSettings.apiBaseUrl);
+      setWebUrlInput(nextSettings.webBaseUrl);
+      setSbUrlInput(nextSettings.supabaseUrl);
+      setSbAnonInput(nextSettings.supabaseAnonKey);
+
+      const newSess: ExtensionAuthSession = {
+        accessToken: parsed.accessToken,
+        refreshToken: parsed.refreshToken ?? '',
+        email: parsed.email ?? 'Connected User'
+      };
+      await saveExtensionSession(newSess);
+      setSession(newSess);
+      setSessionJsonText('');
+
+      const fresh = await syncExtensionUserData();
+      setCachedData(fresh);
+      const nextVarId =
+        fresh.profileVariants.find((v) => v.isDefault)?.id ??
+        fresh.profileVariants[0]?.id ??
+        '';
+      const nextResId = fresh.resumeVersions[0]?.id ?? '';
+      const nextCoverId = fresh.coverLetters[0]?.id ?? '';
+      setSelectedVariantId(nextVarId);
+      setSelectedResumeId(nextResId);
+      setSelectedCoverLetterId(nextCoverId);
+      setStatusMsg(`Connected and synced (${newSess.email}).`);
+      setTab('review');
+      await scanActiveTab(fresh, nextVarId, nextResId, nextCoverId, nextSettings);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Invalid Session JSON.');
+    }
+  };
+
+  const handlePasswordSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const nextSettings = await saveExtensionSettings({
+        apiBaseUrl: apiUrlInput,
+        webBaseUrl: webUrlInput,
+        supabaseUrl: sbUrlInput,
+        supabaseAnonKey: sbAnonInput
+      });
+      setSettings(nextSettings);
+      if (!nextSettings.supabaseUrl || !nextSettings.supabaseAnonKey) {
+        throw new Error('Open JobPilot Web once or set Supabase URL & Key in Advanced Settings below.');
+      }
+      const newSess = await signInWithSupabasePassword({
+        supabaseUrl: nextSettings.supabaseUrl,
+        supabaseAnonKey: nextSettings.supabaseAnonKey,
+        email: emailInput,
+        password: passwordInput
+      });
+      setSession(newSess);
+      setPasswordInput('');
+
+      const fresh = await syncExtensionUserData();
+      setCachedData(fresh);
+      const nextVarId =
+        fresh.profileVariants.find((v) => v.isDefault)?.id ??
+        fresh.profileVariants[0]?.id ??
+        '';
+      const nextResId = fresh.resumeVersions[0]?.id ?? '';
+      const nextCoverId = fresh.coverLetters[0]?.id ?? '';
+      setSelectedVariantId(nextVarId);
+      setSelectedResumeId(nextResId);
+      setSelectedCoverLetterId(nextCoverId);
+      setStatusMsg(`Signed in and synced (${newSess.email}).`);
+      setTab('review');
+      await scanActiveTab(fresh, nextVarId, nextResId, nextCoverId, nextSettings);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Sign-in failed.');
+    }
+  };
+
+  const handleDisconnect = async () => {
+    await Promise.all([saveExtensionSession(null), saveCachedUserData(null)]);
+    setSession(null);
+    setCachedData(null);
+    setPlanItems([]);
+    lastFallbackRef.current = [];
+    setAtsReport(null);
+    setStatusMsg('Cleared stored extension session & local profile cache.');
+  };
+
   const handleGrantPendingPermission = () => {
     if (!pendingPermissionAdapterId) return;
     const meta = getAdapterById(pendingPermissionAdapterId);
     if (meta.hostOriginPatterns.length === 0) return;
-    // Call chrome.permissions.request synchronously in click turn before awaiting (preserves user gesture)
     const reqPromise = chrome.permissions.request({ origins: [...meta.hostOriginPatterns] });
     void (async () => {
       try {
@@ -609,7 +1023,6 @@ export function App() {
 
   const handleToggleAdapter = (adapterKey: keyof AdapterEnabledMap, enabled: boolean) => {
     const meta = getAdapterById(adapterKey);
-    // Request optional host permission synchronously in user-gesture handler before awaiting
     const permPromise =
       enabled && meta.hostOriginPatterns.length > 0
         ? chrome.permissions.request({ origins: [...meta.hostOriginPatterns] })
@@ -646,12 +1059,23 @@ export function App() {
       });
       setSettings(next);
       setStatusMsg(`${meta.displayName} ${enabled ? 'enabled' : 'disabled'}.`);
-      await scanActiveTab(cachedData, selectedResumeId, next);
+      await scanActiveTab(
+        cachedData,
+        selectedVariantId,
+        selectedResumeId,
+        selectedCoverLetterId,
+        next
+      );
     })();
   };
 
   const includedCount = planItems.filter((p) => p.included).length;
-  const unresolvedCount = planItems.filter((p) => !p.alreadyFilled && p.controlType !== 'file' && !p.proposedValue.trim()).length;
+  const unresolvedCount = planItems.filter(
+    (p) => !p.alreadyFilled && p.controlType !== 'file' && !p.proposedValue.trim()
+  ).length;
+  const hasEnoughJdForAts = Boolean(
+    scan?.jobMetadata.descriptionClean && scan.jobMetadata.descriptionClean.trim().length >= 20
+  );
 
   return (
     <div className="jp-shell">
@@ -671,7 +1095,7 @@ export function App() {
           </div>
         ) : (
           <div className="jp-meta">
-            Open a Greenhouse, Lever, or Ashby application page to scan fields.
+            Supports Greenhouse, Lever, Ashby, Workday + Alt+Shift+S job capture anywhere.
           </div>
         )}
       </header>
@@ -693,7 +1117,7 @@ export function App() {
           className="jp-tab"
           onClick={() => setTab('connect')}
         >
-          Connect
+          Account
         </button>
         <button
           type="button"
@@ -707,28 +1131,75 @@ export function App() {
       </nav>
 
       <main className="jp-main">
-        {errorMsg ? <div className="jp-banner jp-banner-error" role="alert">[err] {errorMsg}</div> : null}
-        {statusMsg ? <div className="jp-banner jp-banner-ok" role="status">[ok] {statusMsg}</div> : null}
+        {errorMsg ? (
+          <div className="jp-banner jp-banner-error" role="alert">
+            [err] {errorMsg}
+          </div>
+        ) : null}
+        {statusMsg ? (
+          <div className="jp-banner jp-banner-ok" role="status">
+            [ok] {statusMsg}
+          </div>
+        ) : null}
+
+        {submitPrompt ? (
+          <div className="jp-panel" role="status" aria-label="Post-submit tracker confirmation">
+            <div className="jp-label">&gt; Submitted! Mark application as APPLIED?</div>
+            <div className="jp-meta">
+              {submitPrompt.companyName} — {submitPrompt.title}
+            </div>
+            <div className="jp-row">
+              <button
+                type="button"
+                className="jp-btn jp-btn-primary"
+                disabled={markingApplied}
+                onClick={() => void handleMarkSubmittedApplied()}
+              >
+                {markingApplied ? 'Saving...' : 'Mark Applied'}
+              </button>
+              <button
+                type="button"
+                className="jp-btn"
+                onClick={() => setSubmitPrompt(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {tab === 'review' ? (
           <>
             <div className="jp-banner jp-banner-warn">
-              <strong>[!] REVIEW REQUIRED:</strong> JobPilot fills checked fields only and NEVER clicks Submit automatically.
+              <strong>[!] REVIEW REQUIRED:</strong> JobPilot fills checked fields only and NEVER
+              clicks Submit automatically.
             </div>
+
+            {effectiveProfile ? <QuickCopyBar profile={effectiveProfile} /> : null}
 
             {!session || !cachedData ? (
               <div className="jp-panel">
-                <div className="jp-label">Connect JobPilot Account</div>
+                <div className="jp-label">Connect Your JobPilot Account</div>
                 <p className="jp-meta">
-                  Open the Connect tab to paste your Session JSON (from Web Settings) or sign in directly.
+                  Sign in once on JobPilot Web and this extension syncs automatically.
                 </p>
-                <button
-                  type="button"
-                  className="jp-btn jp-btn-primary"
-                  onClick={() => setTab('connect')}
-                >
-                  Go to Connect -&gt;
-                </button>
+                <div className="jp-row">
+                  <button
+                    type="button"
+                    className="jp-btn jp-btn-primary"
+                    onClick={handleOpenWebLogin}
+                  >
+                    Sign in on JobPilot Web -&gt;
+                  </button>
+                  <button
+                    type="button"
+                    className="jp-btn"
+                    disabled={detectingWebAuth}
+                    onClick={() => void handleDetectWebSession()}
+                  >
+                    {detectingWebAuth ? 'Checking...' : 'Detect Web Login'}
+                  </button>
+                </div>
               </div>
             ) : pendingPermissionAdapterId ? (
               <div className="jp-panel">
@@ -736,7 +1207,8 @@ export function App() {
                   Host Permission Required ({getAdapterById(pendingPermissionAdapterId).displayName})
                 </div>
                 <p className="jp-meta">
-                  Grant access to this domain so JobPilot can read the active job details and scan application inputs on click.
+                  Grant access to this domain so JobPilot can read the active job details and scan
+                  application inputs on click.
                 </p>
                 <button
                   type="button"
@@ -750,7 +1222,8 @@ export function App() {
               <div className="jp-panel">
                 <div className="jp-label">No Application Form Detected</div>
                 <p className="jp-meta">
-                  Save any job page immediately via <strong>Alt+Shift+S</strong>, right-click menu, or below — even outside supported ATS forms.
+                  Save any job page via <strong>Alt+Shift+S</strong>, right-click menu, or below —
+                  or use the Quick Copy Palette above on locked portals.
                 </p>
                 <div className="jp-row" style={{ gap: '8px', flexWrap: 'wrap' }}>
                   <button
@@ -773,12 +1246,15 @@ export function App() {
               </div>
             ) : scan.disabledByUser ? (
               <div className="jp-panel">
-                <div className="jp-label">Adapter Disabled ({getAdapterById(scan.adapterId).displayName})</div>
+                <div className="jp-label">
+                  Adapter Disabled ({getAdapterById(scan.adapterId).displayName})
+                </div>
                 {scan.tosWarning ? (
                   <div className="jp-banner jp-banner-warn">{scan.tosWarning}</div>
                 ) : null}
                 <p className="jp-meta">
-                  Turn this adapter on in Adapters for autofill, or save this page directly to your Tracker (Alt+Shift+S).
+                  Turn this adapter on in Adapters for autofill, or save this page directly to your
+                  Tracker (Alt+Shift+S).
                 </p>
                 <div className="jp-row" style={{ gap: '8px', flexWrap: 'wrap' }}>
                   <button
@@ -806,7 +1282,7 @@ export function App() {
                   </div>
                 ) : null}
 
-                {/* Save This Job card (works on job detail pages even before an Apply form opens) */}
+                {/* Save This Job card */}
                 <section className="jp-panel" aria-label="Save captured job">
                   <div className="jp-field-top">
                     <div>
@@ -828,10 +1304,65 @@ export function App() {
                   </div>
                 </section>
 
+                {/* Live ATS Score Card (#2) */}
+                <AtsMatchCard
+                  report={atsReport}
+                  loading={scoringAts}
+                  hasEnoughJd={hasEnoughJdForAts}
+                  onOpenTailor={() => {
+                    void chrome.tabs.create({
+                      url: `${settings.webBaseUrl.replace(/\/$/, '')}/tailor`
+                    });
+                  }}
+                />
+
+                {/* Variant, Tailored Resume + Quick Tailor, Cover Letter & Action Toolbar (#3, #4) */}
                 <section className="jp-panel" aria-label="Tailored resume and actions">
+                  {cachedData.profileVariants.length > 0 ? (
+                    <>
+                      <span className="jp-label">
+                        Profile Variant ({cachedData.profileVariants.length})
+                      </span>
+                      <div className="jp-select-wrap">
+                        <select
+                          className="jp-select"
+                          aria-label="Profile variant"
+                          value={selectedVariantId}
+                          onChange={(e) => {
+                            const nextVarId = e.target.value;
+                            setSelectedVariantId(nextVarId);
+                            recomputePlan(
+                              scan,
+                              cachedData,
+                              nextVarId,
+                              selectedResumeId,
+                              selectedCoverLetterId
+                            );
+                          }}
+                        >
+                          {cachedData.profileVariants.map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.name} {v.isDefault ? '(Default)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="jp-select-chevron" aria-hidden="true">
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                            <path
+                              d="M4 6L8 10L12 6"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="square"
+                            />
+                          </svg>
+                        </span>
+                      </div>
+                    </>
+                  ) : null}
+
                   <div className="jp-row" style={{ justifyContent: 'space-between' }}>
                     <span className="jp-label">
-                      Tailored Resume Version ({cachedData.resumeVersions.length})
+                      Tailored Resume ({cachedData.resumeVersions.length})
                     </span>
                     <span className="jp-meta">{scan.fields.length} field(s) detected</span>
                   </div>
@@ -841,9 +1372,19 @@ export function App() {
                       className="jp-select"
                       aria-label="Tailored resume version"
                       value={selectedResumeId}
-                      onChange={(e) => handleResumeChange(e.target.value)}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        setSelectedResumeId(nextId);
+                        recomputePlan(
+                          scan,
+                          cachedData,
+                          selectedVariantId,
+                          nextId,
+                          selectedCoverLetterId
+                        );
+                      }}
                     >
-                      <option value="">Profile details only (no PDF file upload)</option>
+                      <option value="">Profile details only (no PDF upload)</option>
                       {cachedData.resumeVersions.map((ver) => (
                         <option key={ver.id} value={ver.id}>
                           v{ver.versionNumber} · {ver.label} (
@@ -862,6 +1403,84 @@ export function App() {
                       </svg>
                     </span>
                   </div>
+
+                  {/* Quick Tailor in-place (#3) */}
+                  <div className="jp-row" style={{ gap: '6px' }}>
+                    <div className="jp-select-wrap" style={{ flex: 1 }}>
+                      <select
+                        className="jp-select"
+                        aria-label="Template for quick tailor"
+                        value={tailorTemplateId}
+                        onChange={(e) => setTailorTemplateId(e.target.value as ResumeTemplateId)}
+                      >
+                        <option value="ats-classic">Classic 1-pg</option>
+                        <option value="ats-compact">Compact 1-pg</option>
+                        <option value="ats-detailed">Detailed 2-pg</option>
+                        <option value="ats-executive">Executive Serif</option>
+                      </select>
+                      <span className="jp-select-chevron" aria-hidden="true">
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                          <path
+                            d="M4 6L8 10L12 6"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="square"
+                          />
+                        </svg>
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="jp-btn"
+                      disabled={tailoringHere || !hasEnoughJdForAts}
+                      onClick={() => void handleTailorNowInExtension()}
+                    >
+                      {tailoringHere ? 'Tailoring...' : '[+] Tailor Now'}
+                    </button>
+                  </div>
+
+                  {cachedData.coverLetters.length > 0 ? (
+                    <>
+                      <span className="jp-label">
+                        Cover Letter ({cachedData.coverLetters.length})
+                      </span>
+                      <div className="jp-select-wrap">
+                        <select
+                          className="jp-select"
+                          aria-label="Cover letter version"
+                          value={selectedCoverLetterId}
+                          onChange={(e) => {
+                            const nextClId = e.target.value;
+                            setSelectedCoverLetterId(nextClId);
+                            recomputePlan(
+                              scan,
+                              cachedData,
+                              selectedVariantId,
+                              selectedResumeId,
+                              nextClId
+                            );
+                          }}
+                        >
+                          <option value="">-- Fallback to summary / saved answer --</option>
+                          {cachedData.coverLetters.map((cl) => (
+                            <option key={cl.id} value={cl.id}>
+                              v{cl.versionNumber} · {cl.label} ({cl.tone})
+                            </option>
+                          ))}
+                        </select>
+                        <span className="jp-select-chevron" aria-hidden="true">
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                            <path
+                              d="M4 6L8 10L12 6"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="square"
+                            />
+                          </svg>
+                        </span>
+                      </div>
+                    </>
+                  ) : null}
 
                   <div className="jp-row">
                     <button
@@ -911,10 +1530,19 @@ export function App() {
                   {planItems.map((item) => {
                     const conf = confidenceLabel(item.confidence, item.alreadyFilled);
                     const result = execResults.get(item.fieldId);
+                    const canSaveToBank =
+                      !item.alreadyFilled &&
+                      item.controlType !== 'file' &&
+                      item.proposedValue.trim().length > 0 &&
+                      (item.source === 'user_edited' || item.source === 'llm_draft');
+
                     return (
                       <div key={item.fieldId} className="jp-field-card">
                         <div className="jp-field-top">
-                          <label className="jp-row" style={{ cursor: item.alreadyFilled ? 'not-allowed' : 'pointer' }}>
+                          <label
+                            className="jp-row"
+                            style={{ cursor: item.alreadyFilled ? 'not-allowed' : 'pointer' }}
+                          >
                             <input
                               type="checkbox"
                               disabled={item.alreadyFilled}
@@ -922,9 +1550,12 @@ export function App() {
                               onChange={(e) => {
                                 const checked = e.target.checked;
                                 setPlanItems((prev) =>
-                                  prev.map((p) =>
-                                    p.fieldId === item.fieldId ? { ...p, included: checked } : p
-                                  )
+                                  prev.map((p) => {
+                                    if (p.fieldId !== item.fieldId) return p;
+                                    const nextItem = { ...p, included: checked };
+                                    persistFieldEdit(p.fieldId, nextItem);
+                                    return nextItem;
+                                  })
                                 );
                               }}
                             />
@@ -933,21 +1564,36 @@ export function App() {
                           <span className={conf.cls}>{conf.text}</span>
                         </div>
 
-                        <div className="jp-row">
-                          <span className="jp-badge">{item.canonicalKey}</span>
-                          <span className="jp-meta">{item.source}</span>
-                          {result ? (
-                            <span
-                              className={
-                                result.status === 'filled'
-                                  ? 'jp-badge jp-badge-ok'
-                                  : result.status === 'failed'
-                                    ? 'jp-badge jp-badge-warn'
-                                    : 'jp-badge'
-                              }
+                        <div className="jp-row" style={{ justifyContent: 'space-between' }}>
+                          <div className="jp-row">
+                            <span className="jp-badge">{item.canonicalKey}</span>
+                            <span className="jp-meta">{item.source}</span>
+                            {result ? (
+                              <span
+                                className={
+                                  result.status === 'filled'
+                                    ? 'jp-badge jp-badge-ok'
+                                    : result.status === 'failed'
+                                      ? 'jp-badge jp-badge-warn'
+                                      : 'jp-badge'
+                                }
+                              >
+                                {result.status}
+                              </span>
+                            ) : null}
+                          </div>
+
+                          {canSaveToBank ? (
+                            <button
+                              type="button"
+                              className="jp-link-btn"
+                              disabled={savingAnswerFieldId === item.fieldId}
+                              onClick={() => void handleSaveFieldToAnswerBank(item)}
                             >
-                              {result.status}
-                            </span>
+                              {savingAnswerFieldId === item.fieldId
+                                ? 'Saving...'
+                                : '+ Save Answer'}
+                            </button>
                           ) : null}
                         </div>
 
@@ -957,7 +1603,7 @@ export function App() {
                           </div>
                         ) : item.controlType === 'file' ? (
                           <div className="jp-meta">
-                            File upload: {item.displayValue || 'Select a tailored resume version above'}
+                            File upload: {item.displayValue || 'Select a version above'}
                           </div>
                         ) : item.controlType === 'textarea' ? (
                           <textarea
@@ -968,17 +1614,18 @@ export function App() {
                             onChange={(e) => {
                               const nextVal = e.target.value;
                               setPlanItems((prev) =>
-                                prev.map((p) =>
-                                  p.fieldId === item.fieldId
-                                    ? {
-                                        ...p,
-                                        proposedValue: nextVal,
-                                        displayValue: nextVal,
-                                        source: 'user_edited',
-                                        included: nextVal.trim().length > 0
-                                      }
-                                    : p
-                                )
+                                prev.map((p) => {
+                                  if (p.fieldId !== item.fieldId) return p;
+                                  const nextItem: FillPlanItem = {
+                                    ...p,
+                                    proposedValue: nextVal,
+                                    displayValue: nextVal,
+                                    source: 'user_edited',
+                                    included: nextVal.trim().length > 0
+                                  };
+                                  persistFieldEdit(p.fieldId, nextItem);
+                                  return nextItem;
+                                })
                               );
                             }}
                           />
@@ -991,17 +1638,18 @@ export function App() {
                             onChange={(e) => {
                               const nextVal = e.target.value;
                               setPlanItems((prev) =>
-                                prev.map((p) =>
-                                  p.fieldId === item.fieldId
-                                    ? {
-                                        ...p,
-                                        proposedValue: nextVal,
-                                        displayValue: nextVal,
-                                        source: 'user_edited',
-                                        included: nextVal.trim().length > 0
-                                      }
-                                    : p
-                                )
+                                prev.map((p) => {
+                                  if (p.fieldId !== item.fieldId) return p;
+                                  const nextItem: FillPlanItem = {
+                                    ...p,
+                                    proposedValue: nextVal,
+                                    displayValue: nextVal,
+                                    source: 'user_edited',
+                                    included: nextVal.trim().length > 0
+                                  };
+                                  persistFieldEdit(p.fieldId, nextItem);
+                                  return nextItem;
+                                })
                               );
                             }}
                           />
@@ -1038,67 +1686,55 @@ export function App() {
                   </button>
                   <button
                     type="button"
+                    className="jp-btn"
+                    disabled={detectingWebAuth}
+                    onClick={() => void handleDetectWebSession()}
+                  >
+                    {detectingWebAuth ? 'Checking...' : 'Re-sync Web Session'}
+                  </button>
+                  <button
+                    type="button"
                     className="jp-btn jp-btn-danger"
                     onClick={() => void handleDisconnect()}
                   >
-                    Disconnect
+                    Sign Out
                   </button>
                 </div>
               </div>
-            ) : null}
-
-            <form className="jp-panel" onSubmit={handleConnectWithSessionJson}>
-              <div className="jp-label">Quick Connect via Session JSON</div>
-              <p className="jp-meta">
-                Click &ldquo;Copy Extension Session JSON&rdquo; inside JobPilot Web Settings, then paste below.
-              </p>
-              <label className="jp-label" htmlFor="jp-api-url">
-                JobPilot API URL
-              </label>
-              <input
-                id="jp-api-url"
-                className="jp-input"
-                value={apiUrlInput}
-                onChange={(e) => setApiUrlInput(e.target.value)}
-                placeholder="http://localhost:4000"
-              />
-              <label className="jp-label" htmlFor="jp-sess-json">
-                Session JSON
-              </label>
-              <textarea
-                id="jp-sess-json"
-                rows={4}
-                className="jp-textarea"
-                value={sessionJsonText}
-                onChange={(e) => setSessionJsonText(e.target.value)}
-                placeholder='{"apiBaseUrl": "...", "accessToken": "...", "refreshToken": "..."}'
-              />
-              <button type="submit" className="jp-btn jp-btn-primary">
-                Connect &amp; Sync
-              </button>
-            </form>
+            ) : (
+              <div className="jp-panel">
+                <div className="jp-label">One-Click Sign In via JobPilot Web</div>
+                <p className="jp-meta">
+                  Already logged in on Google or Email in the web app? Or open the login page —
+                  extension syncs automatically the moment you sign in.
+                </p>
+                <div className="jp-row">
+                  <button
+                    type="button"
+                    className="jp-btn jp-btn-primary"
+                    onClick={handleOpenWebLogin}
+                  >
+                    [→] Sign in on JobPilot Web
+                  </button>
+                  <button
+                    type="button"
+                    className="jp-btn"
+                    disabled={detectingWebAuth}
+                    onClick={() => void handleDetectWebSession()}
+                  >
+                    {detectingWebAuth ? 'Checking...' : '[↻] Detect Website Login'}
+                  </button>
+                </div>
+              </div>
+            )}
 
             <form className="jp-panel" onSubmit={handlePasswordSignIn}>
-              <div className="jp-label">Or Sign In with Supabase Password</div>
-              <input
-                className="jp-input"
-                aria-label="Supabase URL"
-                placeholder="https://xxxx.supabase.co"
-                value={sbUrlInput}
-                onChange={(e) => setSbUrlInput(e.target.value)}
-              />
-              <input
-                className="jp-input"
-                aria-label="Supabase Anon Key"
-                placeholder="Supabase Anon Key"
-                value={sbAnonInput}
-                onChange={(e) => setSbAnonInput(e.target.value)}
-              />
+              <div className="jp-label">Sign In Directly (Email &amp; Password)</div>
               <input
                 className="jp-input"
                 type="email"
                 aria-label="Email"
-                placeholder="you@college.edu"
+                placeholder="you@example.com"
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
               />
@@ -1110,10 +1746,89 @@ export function App() {
                 value={passwordInput}
                 onChange={(e) => setPasswordInput(e.target.value)}
               />
-              <button type="submit" className="jp-btn">
-                Sign In
+              <button
+                type="submit"
+                className="jp-btn"
+                disabled={!emailInput.trim() || !passwordInput}
+              >
+                Sign In to Extension
               </button>
             </form>
+
+            <details className="jp-details">
+              <summary>Advanced: Custom Server &amp; Manual Session JSON</summary>
+              <form className="jp-field-list" onSubmit={handleConnectWithSessionJson}>
+                <label className="jp-label" htmlFor="jp-web-url">
+                  Web App URL
+                </label>
+                <input
+                  id="jp-web-url"
+                  className="jp-input"
+                  value={webUrlInput}
+                  onChange={(e) => setWebUrlInput(e.target.value)}
+                />
+                <label className="jp-label" htmlFor="jp-api-url">
+                  API Server URL
+                </label>
+                <input
+                  id="jp-api-url"
+                  className="jp-input"
+                  value={apiUrlInput}
+                  onChange={(e) => setApiUrlInput(e.target.value)}
+                />
+                <label className="jp-label" htmlFor="jp-sb-url">
+                  Supabase URL (auto-populated from web tab)
+                </label>
+                <input
+                  id="jp-sb-url"
+                  className="jp-input"
+                  placeholder="https://xxxx.supabase.co"
+                  value={sbUrlInput}
+                  onChange={(e) => setSbUrlInput(e.target.value)}
+                />
+                <label className="jp-label" htmlFor="jp-sb-key">
+                  Supabase Publishable Key
+                </label>
+                <input
+                  id="jp-sb-key"
+                  className="jp-input"
+                  placeholder="sb_publishable_..."
+                  value={sbAnonInput}
+                  onChange={(e) => setSbAnonInput(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="jp-btn"
+                  onClick={() => {
+                    void saveExtensionSettings({
+                      webBaseUrl: webUrlInput,
+                      apiBaseUrl: apiUrlInput,
+                      supabaseUrl: sbUrlInput,
+                      supabaseAnonKey: sbAnonInput
+                    }).then((next) => {
+                      setSettings(next);
+                      setStatusMsg('Saved custom endpoint settings.');
+                    });
+                  }}
+                >
+                  Save Endpoints
+                </button>
+                <label className="jp-label" htmlFor="jp-sess-json">
+                  Manual Session JSON Fallback
+                </label>
+                <textarea
+                  id="jp-sess-json"
+                  rows={3}
+                  className="jp-textarea"
+                  value={sessionJsonText}
+                  onChange={(e) => setSessionJsonText(e.target.value)}
+                  placeholder='{"apiBaseUrl": "...", "accessToken": "...", "refreshToken": "..."}'
+                />
+                <button type="submit" className="jp-btn" disabled={!sessionJsonText.trim()}>
+                  Import Session JSON
+                </button>
+              </form>
+            </details>
           </div>
         ) : null}
 
@@ -1122,12 +1837,17 @@ export function App() {
             <div className="jp-panel">
               <div className="jp-label">Official ATS Adapters</div>
               <p className="jp-meta">
-                Greenhouse, Lever, and Ashby are pre-scoped; Workday requests optional host permission on demand.
+                Greenhouse, Lever, and Ashby are pre-scoped; Workday requests optional host
+                permission on demand.
               </p>
               {OFFICIAL_ATS_ADAPTERS.map((adapter) => {
                 const key = adapter.id as keyof AdapterEnabledMap;
                 return (
-                  <label key={adapter.id} className="jp-row" style={{ cursor: 'pointer', minHeight: 32 }}>
+                  <label
+                    key={adapter.id}
+                    className="jp-row"
+                    style={{ cursor: 'pointer', minHeight: 32 }}
+                  >
                     <input
                       type="checkbox"
                       checked={settings.enabledAdapters[key]}
@@ -1142,7 +1862,9 @@ export function App() {
             <div className="jp-panel">
               <div className="jp-label">Opt-In Session Portals (Non-API, ToS Risk)</div>
               <p className="jp-meta">
-                All 6 portals below are OFF by default and never scraped server-side. Turning one on requests host permission only for that portal, runs strictly when you click in your own logged-in tab, and pauses before Submit.
+                All 6 portals below are OFF by default and never scraped server-side. Turning one on
+                requests host permission only for that portal, runs strictly when you click in your
+                own logged-in tab, and pauses before Submit.
               </p>
               {NON_API_SESSION_ADAPTERS.map((adapter) => {
                 const key = adapter.id as keyof AdapterEnabledMap;
@@ -1159,9 +1881,7 @@ export function App() {
                       </label>
                       <span
                         className={
-                          adapter.tosRiskLevel === 'high'
-                            ? 'jp-badge jp-badge-warn'
-                            : 'jp-badge'
+                          adapter.tosRiskLevel === 'high' ? 'jp-badge jp-badge-warn' : 'jp-badge'
                         }
                       >
                         {adapter.tosRiskLevel.toUpperCase()} RISK

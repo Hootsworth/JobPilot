@@ -44,8 +44,12 @@ export default defineConfig({
       'https://jobs.lever.co/*',
       'https://jobs.eu.lever.co/*',
       'https://jobs.ashbyhq.com/*',
+      'https://jobpilot.singulr.tech/*',
+      'https://*.vercel.app/*',
+      'http://localhost:3000/*',
       'http://localhost:4000/*',
-      'https://*.onrender.com/*'
+      'https://*.onrender.com/*',
+      'https://*.supabase.co/*'
     ],
     optional_host_permissions: [
       'https://*.myworkdayjobs.com/*',
@@ -56,8 +60,7 @@ export default defineConfig({
       'https://*.instahyre.com/*',
       'https://*.wellfound.com/*',
       'https://*.angel.co/*',
-      'https://*.linkedin.com/*',
-      'https://*/*'
+      'https://*.linkedin.com/*'
     ]
   }
 });

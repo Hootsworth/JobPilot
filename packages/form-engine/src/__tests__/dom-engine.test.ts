@@ -5,10 +5,16 @@ import {
   buildFillPlan,
   collectRawFormControls,
   executeFillPlan,
+  executeFillPlanAsync,
   observeMultiStepForm,
   setNativeControlValue
 } from '../index.js';
-import { createEmptyIndiaProfile, createEmptyJsonResume, type MasterProfile } from '@jobpilot/shared';
+import {
+  CoverLetterRecordSchema,
+  createEmptyIndiaProfile,
+  createEmptyJsonResume,
+  type MasterProfile
+} from '@jobpilot/shared';
 
 function makeStudentProfile(): MasterProfile {
   const jsonResume = createEmptyJsonResume();
@@ -333,5 +339,172 @@ describe('@jobpilot/form-engine DOM mechanics & safety invariants', () => {
       profile: makeStudentProfile()
     });
     expect(plan[0]?.proposedValue).toBe('18');
+  });
+
+  it('fills async-mounted combobox portals via executeFillPlanAsync, sets React checkbox/radio safely, and supports cover letter text/PDF', async () => {
+    document.body.innerHTML = `
+      <form id="async-form">
+        <div class="field">
+          <label for="city-combo">Preferred City</label>
+          <div id="city-combo" role="combobox" aria-haspopup="listbox">
+            <input id="city-input" type="text" />
+          </div>
+          <div id="portal-menu"></div>
+        </div>
+        <div class="field">
+          <label><input id="agree-cb" type="checkbox" /> Require sponsorship?</label>
+        </div>
+        <div class="field">
+          <label for="cl-text">Cover Letter</label>
+          <textarea id="cl-text"></textarea>
+        </div>
+        <div class="field">
+          <label for="cl-file">Upload Cover Letter (PDF)</label>
+          <input id="cl-file" type="file" />
+        </div>
+      </form>
+    `;
+
+    const comboHost = document.getElementById('city-combo')!;
+    const portalMenu = document.getElementById('portal-menu')!;
+    comboHost.addEventListener('click', () => {
+      setTimeout(() => {
+        portalMenu.innerHTML = `<div role="option">Hyderabad</div><div role="option">Bengaluru</div>`;
+      }, 35);
+    });
+
+    const controls = collectRawFormControls(document);
+    const byId = new Map(controls.map((c) => [c.fieldId, c]));
+
+    const coverLetter = CoverLetterRecordSchema.parse({
+      id: '33333333-3333-4333-8333-333333333333',
+      userId: '11111111-1111-4111-8111-111111111111',
+      jobId: null,
+      profileVariantId: null,
+      parentProfileVersion: 1,
+      versionNumber: 4,
+      label: 'Razorpay CL',
+      companyName: 'Razorpay',
+      roleTitle: 'SDE 1',
+      tone: 'concise-technical',
+      jdRequirements: {},
+      content: {},
+      plainText: 'Dear Razorpay Team, Built resilient Postgres queues at FinGrid.',
+      verifierReport: {
+        passed: true,
+        deterministicPassed: true,
+        llmVerifierPassed: true,
+        totalClaimsChecked: 1,
+        unsupportedClaimCount: 0,
+        immutableFieldViolations: 0,
+        unsupportedClaimRate: 0,
+        claims: [],
+        overallNotes: ''
+      },
+      verifierPassed: true,
+      createdAt: new Date().toISOString()
+    });
+
+    const cityCtrl = controls.find((c) => c.id === 'city-combo')!;
+    const cbCtrl = controls.find((c) => c.id === 'agree-cb')!;
+    const clTextCtrl = controls.find((c) => c.id === 'cl-text')!;
+    const clFileCtrl = controls.find((c) => c.id === 'cl-file')!;
+
+    const plan = buildFillPlan({
+      fields: [
+        {
+          fieldId: cityCtrl.fieldId,
+          atsAdapter: 'greenhouse',
+          controlType: 'combobox',
+          canonicalKey: 'location_city',
+          label: 'Preferred City',
+          name: '',
+          id: 'city-combo',
+          placeholder: '',
+          required: false,
+          currentValue: '',
+          alreadyFilled: false,
+          options: [],
+          selectorPath: '',
+          framePath: 'top',
+          inShadowDom: false,
+          confidence: 0.9,
+          matchReason: ''
+        },
+        {
+          fieldId: cbCtrl.fieldId,
+          atsAdapter: 'greenhouse',
+          controlType: 'checkbox',
+          canonicalKey: 'willing_to_relocate',
+          label: 'Willing to relocate?',
+          name: '',
+          id: 'agree-cb',
+          placeholder: '',
+          required: false,
+          currentValue: '',
+          alreadyFilled: false,
+          options: [],
+          selectorPath: '',
+          framePath: 'top',
+          inShadowDom: false,
+          confidence: 0.9,
+          matchReason: ''
+        },
+        {
+          fieldId: clTextCtrl.fieldId,
+          atsAdapter: 'greenhouse',
+          controlType: 'textarea',
+          canonicalKey: 'cover_letter',
+          label: 'Cover Letter',
+          name: '',
+          id: 'cl-text',
+          placeholder: '',
+          required: false,
+          currentValue: '',
+          alreadyFilled: false,
+          options: [],
+          selectorPath: '',
+          framePath: 'top',
+          inShadowDom: false,
+          confidence: 0.9,
+          matchReason: ''
+        },
+        {
+          fieldId: clFileCtrl.fieldId,
+          atsAdapter: 'greenhouse',
+          controlType: 'file',
+          canonicalKey: 'cover_letter',
+          label: 'Upload Cover Letter',
+          name: '',
+          id: 'cl-file',
+          placeholder: '',
+          required: false,
+          currentValue: '',
+          alreadyFilled: false,
+          options: [],
+          selectorPath: '',
+          framePath: 'top',
+          inShadowDom: false,
+          confidence: 0.9,
+          matchReason: ''
+        }
+      ],
+      profile: makeStudentProfile(),
+      coverLetter
+    });
+
+    const exec = await executeFillPlanAsync(byId, plan, {
+      coverLetterFile: { bytes: new Uint8Array([37, 80, 68, 70]), filename: 'razorpay-cl.pdf' }
+    });
+
+    expect(exec.filledCount).toBe(4);
+    expect(exec.results.find((r) => r.fieldId === cityCtrl.fieldId)?.appliedValue).toBe('Bengaluru');
+    expect((document.getElementById('agree-cb') as HTMLInputElement).checked).toBe(true);
+    expect((document.getElementById('cl-text') as HTMLTextAreaElement).value).toContain('Razorpay');
+    expect((document.getElementById('cl-file') as HTMLInputElement).files?.[0]?.name).toBe('razorpay-cl.pdf');
+
+    exec.undo();
+    expect((document.getElementById('agree-cb') as HTMLInputElement).checked).toBe(false);
+    expect((document.getElementById('cl-text') as HTMLTextAreaElement).value).toBe('');
   });
 });

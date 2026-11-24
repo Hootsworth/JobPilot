@@ -1,4 +1,5 @@
 import type {
+  CoverLetterRecord,
   DetectedFormField,
   DraftAnswerItem,
   FallbackFillSuggestion,
@@ -100,9 +101,10 @@ function resolveCanonicalValue(params: {
   profile: MasterProfile;
   savedAnswers: SavedAnswer[];
   resumeVersion?: ResumeVersionRecord | null;
+  coverLetter?: CoverLetterRecord | null;
   draftsByFieldId: Map<string, DraftAnswerItem>;
 }): { value: string; displayValue: string; source: FillValueSource; confidence: number } {
-  const { field, profile, savedAnswers, resumeVersion, draftsByFieldId } = params;
+  const { field, profile, savedAnswers, resumeVersion, coverLetter, draftsByFieldId } = params;
   const activeResume = resumeVersion?.tailoredJsonResume ?? profile.jsonResume;
   const fullName = profile.fullName?.trim() || activeResume.basics.name?.trim() || '';
   const { firstName, lastName } = splitFullName(fullName);
@@ -277,6 +279,30 @@ function resolveCanonicalValue(params: {
     }
 
     case 'cover_letter': {
+      if (field.controlType === 'file') {
+        if (!coverLetter) {
+          return {
+            value: '',
+            displayValue: 'Select a cover letter above',
+            source: 'unmapped',
+            confidence: 0
+          };
+        }
+        return {
+          value: `jobpilot-cl-v${coverLetter.versionNumber}.pdf`,
+          displayValue: `CL v${coverLetter.versionNumber} · ${coverLetter.label}`,
+          source: 'tailored_resume',
+          confidence: 0.94
+        };
+      }
+      if (coverLetter?.plainText?.trim()) {
+        return {
+          value: coverLetter.plainText,
+          displayValue: coverLetter.plainText,
+          source: 'tailored_resume',
+          confidence: 0.94
+        };
+      }
       const saved = matchSavedAnswer(field.label || 'cover letter', savedAnswers);
       if (saved) {
         return { value: saved.answer, displayValue: saved.answer, source: 'saved_answer', confidence: 0.92 };
@@ -311,6 +337,7 @@ export function buildFillPlan(params: {
   profile: MasterProfile;
   savedAnswers?: SavedAnswer[];
   resumeVersion?: ResumeVersionRecord | null;
+  coverLetter?: CoverLetterRecord | null;
   drafts?: DraftAnswerItem[];
   fallbackSuggestions?: FallbackFillSuggestion[];
 }): FillPlanItem[] {
@@ -326,11 +353,16 @@ export function buildFillPlan(params: {
       profile: params.profile,
       savedAnswers,
       resumeVersion: params.resumeVersion,
+      coverLetter: params.coverLetter,
       draftsByFieldId
     });
 
     const deterministicHasValue =
-      field.controlType === 'file' ? Boolean(params.resumeVersion) : resolved.value.trim().length > 0;
+      field.controlType === 'file'
+        ? field.canonicalKey === 'cover_letter'
+          ? Boolean(params.coverLetter)
+          : Boolean(params.resumeVersion)
+        : resolved.value.trim().length > 0;
 
     // Apply grounded LLM fallback ONLY when field is not already filled and deterministic/saved resolution found nothing
     const fallback = !field.alreadyFilled && !deterministicHasValue

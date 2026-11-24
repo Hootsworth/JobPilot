@@ -1,5 +1,7 @@
 import {
-  executeFillPlan,
+  collectRawFormControls,
+  executeFillPlanAsync,
+  isSubmitControl,
   observeMultiStepForm,
   scanDocumentWithAdapter,
   type PageScanResult
@@ -17,6 +19,7 @@ import { getExtensionSettings } from '../src/lib/storage';
 
 const HIGHLIGHT_CLASS_OK = '2px solid #007aff';
 const HIGHLIGHT_CLASS_DRAFT = '2px solid #ff9f0a';
+const PENDING_SUBMIT_KEY = 'jobpilot_pending_submit';
 
 async function batchHighlightElements(
   items: Array<{ element: HTMLElement; status: FillExecutionItemResult['status']; confidence: number }>
@@ -88,6 +91,47 @@ export default defineContentScript({
       void chrome.runtime.sendMessage({ type: 'OPEN_SIDEPANEL' });
     });
 
+    const checkPostSubmitConfirmation = () => {
+      if (!isTopFrame) return;
+      try {
+        const raw = sessionStorage.getItem(PENDING_SUBMIT_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as {
+          ts?: number;
+          url?: string;
+          title?: string;
+          companyName?: string;
+        };
+        if (!parsed.ts || Date.now() - parsed.ts > 120_000) {
+          sessionStorage.removeItem(PENDING_SUBMIT_KEY);
+          return;
+        }
+        const urlLooksConfirmed = /thank|confirm|submit|success|received/i.test(window.location.href);
+        const bodySample = (document.body?.innerText || '').slice(0, 2500);
+        const textLooksConfirmed =
+          /application\s+(?:has\s+been\s+)?(?:submitted|received)|thank\s+you\s+for\s+applying|thanks\s+for\s+applying|we\s+have\s+received\s+your\s+application/i.test(
+            bodySample
+          );
+
+        if (urlLooksConfirmed || textLooksConfirmed) {
+          sessionStorage.removeItem(PENDING_SUBMIT_KEY);
+          void chrome.runtime
+            .sendMessage({
+              type: 'APPLICATION_SUBMIT_DETECTED',
+              payload: {
+                url: parsed.url || window.location.href,
+                title: parsed.title || lastScan?.jobMetadata.title || document.title || 'Application',
+                companyName:
+                  parsed.companyName || lastScan?.jobMetadata.companyName || window.location.hostname
+              }
+            } satisfies ExtensionMessage)
+            .catch(() => {});
+        }
+      } catch {
+        // Ignore sessionStorage restrictions
+      }
+    };
+
     const performScan = async (): Promise<PageScanPayload> => {
       const settings = await getExtensionSettings();
       const scan = scanDocumentWithAdapter({
@@ -114,15 +158,9 @@ export default defineContentScript({
       lastScan = scan;
 
       if (isTopFrame && scan.fields.length > 0) {
-        overlay.mount(
-          scan.adapterId.toUpperCase(),
-          `${scan.fields.length} fields detected`
-        );
+        overlay.mount(scan.adapterId.toUpperCase(), `${scan.fields.length} fields detected`);
       } else if (!isTopFrame && scan.fields.length > 0) {
-        overlay.mount(
-          scan.adapterId.toUpperCase(),
-          `${scan.fields.length} embedded fields`
-        );
+        overlay.mount(scan.adapterId.toUpperCase(), `${scan.fields.length} embedded fields`);
       } else {
         overlay.unmount();
       }
@@ -141,9 +179,36 @@ export default defineContentScript({
       };
     };
 
+    // Passive user-click detection on native Submit buttons (NEVER clicks Submit!)
+    document.addEventListener(
+      'click',
+      (evt) => {
+        const target = evt.target as Element | null;
+        const submitBtn = target?.closest('button, input[type="submit"]');
+        if (!submitBtn || !isSubmitControl(submitBtn)) return;
+        try {
+          sessionStorage.setItem(
+            PENDING_SUBMIT_KEY,
+            JSON.stringify({
+              ts: Date.now(),
+              url: window.location.href,
+              title: lastScan?.jobMetadata.title || document.title,
+              companyName: lastScan?.jobMetadata.companyName || window.location.hostname
+            })
+          );
+          setTimeout(checkPostSubmitConfirmation, 1500);
+        } catch {
+          // Ignore sessionStorage errors
+        }
+      },
+      { capture: true, passive: true }
+    );
+
     const initial = await performScan();
+    checkPostSubmitConfirmation();
     if (!initial.disabledByUser && document.body) {
       observeMultiStepForm(document.body, () => {
+        checkPostSubmitConfirmation();
         void (async () => {
           const updated = await performScan();
           try {
@@ -161,13 +226,13 @@ export default defineContentScript({
 
     chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
       if (message?.type === 'SCAN_PAGE') {
+        if (!isTopFrame && collectRawFormControls(document).length === 0) {
+          return false;
+        }
         (async () => {
           const payload = await performScan();
-          // Yield top frame response briefly if it has zero fields in case an iframe ATS form answers first
           if (isTopFrame && payload.fields.length === 0) {
             await new Promise((r) => setTimeout(r, 40));
-          } else if (!isTopFrame && payload.fields.length === 0) {
-            return;
           }
           sendResponse(payload);
         })();
@@ -175,27 +240,36 @@ export default defineContentScript({
       }
 
       if (message?.type === 'EXECUTE_FILL') {
+        if (
+          !isTopFrame &&
+          lastScan &&
+          !message.planItems.some((item) => lastScan!.controlsById.has(item.fieldId))
+        ) {
+          return false;
+        }
         (async () => {
-          const current = lastScan ?? (await (async () => {
-            await performScan();
-            return lastScan;
-          })());
+          const current =
+            lastScan ??
+            (await (async () => {
+              await performScan();
+              return lastScan;
+            })());
           if (!current) {
             sendResponse({ ok: false, error: 'Unable to inspect form DOM.' });
             return;
           }
 
-          const hasMatchingControl = message.planItems.some((item) =>
-            current.controlsById.has(item.fieldId)
-          );
-          if (!hasMatchingControl && !isTopFrame) return;
-
           let resumeFile: { bytes: Uint8Array; filename: string } | undefined;
-          const wantsFileUpload = message.planItems.some(
-            (i) => i.included && i.controlType === 'file'
+          let coverLetterFile: { bytes: Uint8Array; filename: string } | undefined;
+
+          const wantsResumeUpload = message.planItems.some(
+            (i) => i.included && i.controlType === 'file' && i.canonicalKey !== 'cover_letter'
+          );
+          const wantsCoverLetterUpload = message.planItems.some(
+            (i) => i.included && i.controlType === 'file' && i.canonicalKey === 'cover_letter'
           );
 
-          if (wantsFileUpload && message.resumeVersionId) {
+          if (wantsResumeUpload && message.resumeVersionId) {
             const pdfRes = (await chrome.runtime.sendMessage({
               type: 'API_FETCH_PDF_BYTES',
               versionId: message.resumeVersionId
@@ -209,14 +283,33 @@ export default defineContentScript({
             }
           }
 
-          // Strictly executes form fill and NEVER clicks Submit
-          const exec = executeFillPlan(current.controlsById, message.planItems, { resumeFile });
+          if (wantsCoverLetterUpload && message.coverLetterId) {
+            const clPdfRes = (await chrome.runtime.sendMessage({
+              type: 'API_FETCH_COVER_LETTER_PDF_BYTES',
+              coverLetterId: message.coverLetterId
+            } satisfies ExtensionMessage)) as ApiProxyResponse<PdfBytesResponse>;
+
+            if (clPdfRes?.ok) {
+              coverLetterFile = {
+                bytes: base64ToUint8(clPdfRes.data.base64),
+                filename: clPdfRes.data.filename
+              };
+            }
+          }
+
+          // Strictly executes form fill (with async combobox portal waiting) and NEVER clicks Submit
+          const exec = await executeFillPlanAsync(current.controlsById, message.planItems, {
+            resumeFile,
+            coverLetterFile
+          });
           lastUndo = exec.undo;
 
           const toHighlight = exec.results
             .map((r) => {
               const ctrl = current.controlsById.get(r.fieldId);
-              return ctrl ? { element: ctrl.element, status: r.status, confidence: r.confidence } : null;
+              return ctrl
+                ? { element: ctrl.element, status: r.status, confidence: r.confidence }
+                : null;
             })
             .filter((x): x is NonNullable<typeof x> => Boolean(x));
 
@@ -243,10 +336,7 @@ export default defineContentScript({
           lastUndo = null;
           await clearAllHighlights();
           const refreshed = await performScan();
-          overlay.mount(
-            refreshed.adapterId.toUpperCase(),
-            `Undid ${restoredCount} field(s)`
-          );
+          overlay.mount(refreshed.adapterId.toUpperCase(), `Undid ${restoredCount} field(s)`);
           sendResponse({ ok: true, restoredCount });
         })();
         return true;

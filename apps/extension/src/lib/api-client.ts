@@ -1,13 +1,20 @@
 import type {
+  ApplicationRecord,
+  AtsScoreReport,
+  AtsScoreRequest,
   CaptureExtensionJobRequest,
   CaptureExtensionJobResponse,
+  CoverLetterRecord,
   DraftAnswersRequest,
   DraftAnswersResponse,
   FallbackFillRequest,
   FallbackFillResponse,
   MasterProfile,
+  ProfileVariantRecord,
   ResumeVersionRecord,
-  SavedAnswer
+  SavedAnswer,
+  TailorResumeRequest,
+  UpsertSavedAnswerRequest
 } from '@jobpilot/shared';
 import {
   getExtensionSession,
@@ -155,16 +162,20 @@ export async function signInWithSupabasePassword(params: {
 }
 
 export async function syncExtensionUserData(): Promise<CachedUserData> {
-  const [profile, savedAnswers, resumeVersions] = await Promise.all([
+  const [profile, savedAnswers, resumeVersions, profileVariants, coverLetters] = await Promise.all([
     fetchJson<MasterProfile>('/api/profile'),
     fetchJson<SavedAnswer[]>('/api/answers'),
-    fetchJson<ResumeVersionRecord[]>('/api/resumes/versions')
+    fetchJson<ResumeVersionRecord[]>('/api/resumes/versions'),
+    fetchJson<ProfileVariantRecord[]>('/api/profiles/variants').catch(() => []),
+    fetchJson<CoverLetterRecord[]>('/api/cover-letters').catch(() => [])
   ]);
 
   const cached: CachedUserData = {
     profile,
     savedAnswers,
     resumeVersions,
+    profileVariants,
+    coverLetters,
     syncedAt: new Date().toISOString()
   };
   await saveCachedUserData(cached);
@@ -216,19 +227,84 @@ export function base64ToUint8(base64: string): Uint8Array {
   return out;
 }
 
-export async function fetchResumePdfBytes(
-  versionId: string
+async function fetchAuthenticatedPdfBytes(
+  path: string,
+  fallbackFilename: string,
+  label: string
 ): Promise<{ base64: string; filename: string }> {
-  const res = await authorizedFetch(`/api/resumes/versions/${encodeURIComponent(versionId)}/pdf`);
+  const res = await authorizedFetch(path);
   if (!res.ok) {
-    throw new ExtensionApiError(`Failed to fetch tailored PDF (${res.status})`, res.status);
+    throw new ExtensionApiError(`Failed to fetch ${label} PDF (${res.status})`, res.status);
   }
   const buf = new Uint8Array(await res.arrayBuffer());
   const disposition = res.headers.get('content-disposition');
   const match = disposition?.match(/filename="([^"]+)"/i);
-  const filename = match?.[1] ?? `jobpilot-resume-${versionId.slice(0, 8)}.pdf`;
+  const filename = match?.[1] ?? fallbackFilename;
   return {
     base64: uint8ToBase64(buf),
     filename
   };
+}
+
+export function fetchResumePdfBytes(
+  versionId: string
+): Promise<{ base64: string; filename: string }> {
+  return fetchAuthenticatedPdfBytes(
+    `/api/resumes/versions/${encodeURIComponent(versionId)}/pdf`,
+    `jobpilot-resume-${versionId.slice(0, 8)}.pdf`,
+    'tailored resume'
+  );
+}
+
+export function fetchCoverLetterPdfBytes(
+  coverLetterId: string
+): Promise<{ base64: string; filename: string }> {
+  return fetchAuthenticatedPdfBytes(
+    `/api/cover-letters/${encodeURIComponent(coverLetterId)}/pdf`,
+    `jobpilot-cover-letter-${coverLetterId.slice(0, 8)}.pdf`,
+    'cover letter'
+  );
+}
+
+export function scoreActiveJobAts(payload: AtsScoreRequest): Promise<AtsScoreReport> {
+  return fetchJson<AtsScoreReport>('/api/resumes/ats-score', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function tailorResumeInExtension(
+  payload: TailorResumeRequest
+): Promise<ResumeVersionRecord> {
+  return fetchJson<ResumeVersionRecord>('/api/resumes/tailor', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function createSavedAnswerInExtension(
+  payload: UpsertSavedAnswerRequest
+): Promise<SavedAnswer> {
+  return fetchJson<SavedAnswer>('/api/answers', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function markApplicationApplied(
+  payload: CaptureExtensionJobRequest & { coverLetterId?: string }
+): Promise<ApplicationRecord> {
+  const { coverLetterId, ...capturePayload } = payload;
+  const captured = await captureExtensionJob(capturePayload);
+  return fetchJson<ApplicationRecord>(
+    `/api/applications/${encodeURIComponent(captured.applicationId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status: 'applied',
+        resumeVersionId: payload.resumeVersionId ?? null,
+        coverLetterId: coverLetterId ?? null
+      })
+    }
+  );
 }

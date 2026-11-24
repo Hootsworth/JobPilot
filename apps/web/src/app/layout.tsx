@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/700.css';
+import { ExtensionAuthBridge } from '@/components/auth/extension-auth-bridge';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -32,6 +33,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>
       <body className="min-h-screen antialiased selection:bg-[var(--accent)] selection:text-white">
+        <ExtensionAuthBridge />
         {children}
       </body>
     </html>
