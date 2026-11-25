@@ -56,6 +56,7 @@ const ROLE_ALIAS_GROUPS: Array<[string, RegExp]> = [
   ['data', /\b(data|analytics|etl|warehouse|spark|bi)\b/i],
   ['devops', /\b(devops|sre|platform|cloud|infra|infrastructure|kubernetes)\b/i],
   ['mobile', /\b(mobile|android|ios|flutter|react native)\b/i],
+  ['cybersecurity', /\b(security|cybersecurity|appsec|infosec|soc|pentest|penetration|threat|vulnerability)\b/i],
   ['product', /\b(product manager|product management|\bpm\b|product owner)\b/i],
   ['design', /\b(design|designer|ux|ui\/ux|figma)\b/i]
 ];
@@ -117,6 +118,35 @@ export function computeFreshnessBoost(postedAt: string | null | undefined): numb
   const ageHours = (Date.now() - ms) / (1000 * 60 * 60);
   if (ageHours <= 48) return 5;
   if (ageHours <= 24 * 7) return 3;
+  return 0;
+}
+
+export function computeEducationAndStageBoost(
+  profile: MasterProfile,
+  job: Pick<JobRecord, 'employmentType' | 'fresherEligible' | 'seniority' | 'experienceMinYears'>
+): number {
+  const currentYear = new Date().getFullYear();
+  const gradYear = profile.indiaProfile.graduationYear;
+  const recentOrUpcomingGrad = gradYear != null && gradYear >= currentYear - 1;
+  const seekingIntern = profile.indiaProfile.internshipStatus === 'seeking_internship';
+  const isInternRole = job.employmentType === 'internship' || job.seniority === 'intern';
+  const isEarlyCareerRole =
+    Boolean(job.fresherEligible) ||
+    job.seniority === 'fresher' ||
+    job.seniority === 'junior' ||
+    (job.experienceMinYears != null && job.experienceMinYears <= 1);
+
+  if (seekingIntern) {
+    if (isInternRole) return 6;
+    if (isEarlyCareerRole) return 2;
+    return 0;
+  }
+
+  if (profile.indiaProfile.isFresher || recentOrUpcomingGrad) {
+    if (job.fresherEligible || job.seniority === 'fresher') return 5;
+    if (isInternRole || isEarlyCareerRole) return 2;
+  }
+
   return 0;
 }
 
@@ -217,11 +247,16 @@ function summarizeCandidateForLlm(profile: MasterProfile, stories: ProfileStory[
     .slice(0, 4)
     .map((p) => `${p.name} [${(p.keywords ?? []).join(', ')}]: ${p.highlights[0] ?? p.description}`)
     .join('; ');
+  const education = jsonResume.education
+    .slice(0, 2)
+    .map((e) => `${e.studyType} ${e.area} @ ${e.institution} (${e.endDate || 'Ongoing'})`.trim())
+    .join('; ');
 
   return [
     `Headline: ${jsonResume.basics.label || 'Software Engineer'}`,
-    `India/Eligibility: fresher=${indiaProfile.isFresher}, internship=${indiaProfile.internshipStatus}, expectedCtcLpa=${indiaProfile.expectedCtcLpa ?? 'unspecified'}, noticeDays=${indiaProfile.noticePeriodDays ?? 'unspecified'}, preferredCities=${indiaProfile.preferredCities.join(', ') || 'any'}, willingToRelocate=${indiaProfile.willingToRelocate}`,
+    `India/Eligibility: fresher=${indiaProfile.isFresher}, graduationYear=${indiaProfile.graduationYear ?? 'unspecified'}, internship=${indiaProfile.internshipStatus}, expectedCtcLpa=${indiaProfile.expectedCtcLpa ?? 'unspecified'}, noticeDays=${indiaProfile.noticePeriodDays ?? 'unspecified'}, preferredCities=${indiaProfile.preferredCities.join(', ') || 'any'}, willingToRelocate=${indiaProfile.willingToRelocate}`,
     `Preferences: targetRoles=${searchPreferences.targetRoles.join(', ') || 'any'}, workModes=${searchPreferences.workModes.join(', ')}`,
+    education ? `Education: ${education}` : '',
     skills ? `Skills: ${skills}` : '',
     work ? `Experience: ${work}` : '',
     projects ? `Projects: ${projects}` : '',
@@ -272,11 +307,13 @@ export async function runThreeStageMatching(
     const hf = evaluateHardFilters(profile, job);
     const overlap = computeDeterministicSkillOverlap(candidateSkills, job);
     const roleRelevance = computeRoleTitleRelevance(profile, job);
+    const stageBoost = computeEducationAndStageBoost(profile, job);
 
     let similarity =
       0.55 * overlap.similarity +
       0.35 * roleRelevance +
-      0.1 * (job.extractedSkills.length > 0 ? 0.5 : 0.3);
+      0.1 * (job.extractedSkills.length > 0 ? 0.5 : 0.3) +
+      stageBoost * 0.012;
     if (
       canCompareVectors &&
       profileEmbedding &&
@@ -287,7 +324,10 @@ export async function runThreeStageMatching(
       const vecSim = cosineSimilarity(profileEmbedding.vector, job.embedding);
       // Blend vector similarity with explicit skill coverage and role relevance
       similarity =
-        0.65 * Math.max(0, vecSim) + 0.2 * overlap.similarity + 0.15 * roleRelevance;
+        0.65 * Math.max(0, vecSim) +
+        0.2 * overlap.similarity +
+        0.15 * roleRelevance +
+        stageBoost * 0.01;
     }
     similarity = Math.round(Math.max(0, Math.min(1, similarity)) * 1000) / 1000;
 
@@ -412,7 +452,7 @@ export async function runThreeStageMatching(
             finalPassedMatches.push(
               buildHeuristicMatch(
                 item,
-                profile.activeProfileVersion,
+                profile,
                 existing?.dismissed ?? false,
                 nowIso,
                 dismissedCompanies,
@@ -429,7 +469,7 @@ export async function runThreeStageMatching(
           finalPassedMatches.push(
             buildHeuristicMatch(
               item,
-              profile.activeProfileVersion,
+              profile,
               existing?.dismissed ?? false,
               nowIso,
               dismissedCompanies,
@@ -459,7 +499,7 @@ export async function runThreeStageMatching(
         finalPassedMatches.push(
           buildHeuristicMatch(
             item,
-            profile.activeProfileVersion,
+            profile,
             existing?.dismissed ?? false,
             nowIso,
             dismissedCompanies,
@@ -489,7 +529,7 @@ export async function runThreeStageMatching(
       finalPassedMatches.push(
         buildHeuristicMatch(
           item,
-          profile.activeProfileVersion,
+          profile,
           existing?.dismissed ?? false,
           nowIso,
           dismissedCompanies,
@@ -518,19 +558,20 @@ function buildHeuristicMatch(
     similarity: number;
     overlap: ReturnType<typeof computeDeterministicSkillOverlap>;
   },
-  profileVersion: number,
+  profile: MasterProfile,
   dismissed: boolean,
   computedAt: string,
   dismissedCompanies?: Set<string>,
   existing?: JobMatch
 ): JobMatch {
   const freshness = computeFreshnessBoost(item.job.postedAt);
+  const stageBoost = computeEducationAndStageBoost(profile, item.job);
   const companyPenalty = dismissedCompanies?.has(item.job.companyName.trim().toLowerCase())
     ? 15
     : 0;
   const heuristicScore = Math.max(
     15,
-    Math.min(94, Math.round(item.similarity * 82 + 12) + freshness - companyPenalty)
+    Math.min(94, Math.round(item.similarity * 82 + 12) + freshness + stageBoost - companyPenalty)
   );
   const matchedSummary =
     item.overlap.matchedSkills.length > 0
@@ -539,7 +580,7 @@ function buildHeuristicMatch(
 
   return {
     jobId: item.job.id,
-    profileVersion,
+    profileVersion: profile.activeProfileVersion,
     hardFilterPassed: true,
     hardFilterReasons: preserveDismissReasonTags([], existing),
     vectorSimilarity: item.similarity,

@@ -56,6 +56,8 @@ export async function fetchLeverBoard(params: {
         title: item.text ?? '',
         locationRaw: item.categories?.location ?? '',
         workModeHint: item.workplaceType ?? null,
+        explicitEmploymentType: item.categories?.commitment ?? null,
+        boardKey: `lever:${params.slug}`,
         descriptionHtmlOrText: fullDescription,
         postedAt: item.createdAt ? new Date(item.createdAt).toISOString() : null,
         rawPayload: item as unknown as Record<string, unknown>

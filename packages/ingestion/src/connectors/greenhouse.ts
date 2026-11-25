@@ -43,6 +43,7 @@ export async function fetchGreenhouseBoard(params: {
         companyName: params.companyName,
         title: item.title ?? '',
         locationRaw: item.location?.name ?? '',
+        boardKey: `greenhouse:${params.slug}`,
         descriptionHtmlOrText: item.content ?? '',
         postedAt: item.first_published ?? item.updated_at ?? null,
         rawPayload: item as unknown as Record<string, unknown>

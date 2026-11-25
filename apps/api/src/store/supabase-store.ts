@@ -256,6 +256,11 @@ function mapJobRow(row: Record<string, unknown>, sightingsCount: number = 1): Jo
     salaryPeriod: row['salary_period'] ?? null,
     salaryMinLpa: row['salary_min_lpa'] != null ? Number(row['salary_min_lpa']) : null,
     salaryMaxLpa: row['salary_max_lpa'] != null ? Number(row['salary_max_lpa']) : null,
+    employmentType: row['employment_type'] ?? 'unknown',
+    fresherEligible: row['fresher_eligible'] == null ? null : Boolean(row['fresher_eligible']),
+    stipendMonthlyInr: row['stipend_monthly_inr'] != null ? Number(row['stipend_monthly_inr']) : null,
+    careerCategory: row['career_category'] ?? 'other',
+    boardKey: row['board_key'] ?? null,
     descriptionClean: row['description_clean'] ?? '',
     extractedSkills: Array.isArray(row['extracted_skills']) ? row['extracted_skills'] : [],
     postedAt: row['posted_at'] ?? null,
@@ -1246,7 +1251,7 @@ export class SupabaseDataStore implements DataStore {
       await Promise.all(
         chunk.map(async (bundle) => {
           const j = bundle.canonical;
-          const { data, error } = await this.client.rpc('upsert_public_job', {
+          const baseRpcParams = {
             p_dedupe_fingerprint: bundle.fingerprint,
             p_source_type: j.sourceType,
             p_external_id: j.externalId,
@@ -1275,7 +1280,20 @@ export class SupabaseDataStore implements DataStore {
             p_extracted_skills: j.extractedSkills,
             p_posted_at: j.postedAt,
             p_raw_payload: j.rawPayload ?? null
+          };
+
+          let { data, error } = await this.client.rpc('upsert_public_job', {
+            ...baseRpcParams,
+            p_employment_type: j.employmentType ?? 'unknown',
+            p_fresher_eligible: j.fresherEligible ?? null,
+            p_stipend_monthly_inr: j.stipendMonthlyInr ?? null,
+            p_career_category: j.careerCategory ?? 'other',
+            p_board_key: j.boardKey ?? null
           });
+
+          if (error) {
+            ({ data, error } = await this.client.rpc('upsert_public_job', baseRpcParams));
+          }
 
           if (!error && Array.isArray(data) && data[0]) {
             const row = data[0] as { job_id: string; is_new: boolean };
@@ -1300,6 +1318,32 @@ export class SupabaseDataStore implements DataStore {
     }
 
     return { insertedCount, updatedCount };
+  }
+
+  async reconcileExpiredPublicJobs(
+    boards: Array<{ boardKey: string; activeExternalIds: string[] }>,
+    staleDays: number = 14
+  ): Promise<number> {
+    let expiredCount = 0;
+    for (const boardSnap of boards) {
+      if (boardSnap.activeExternalIds.length === 0) continue;
+      const { data, error } = await this.client.rpc('reconcile_board_expired_jobs', {
+        p_board_key: boardSnap.boardKey,
+        p_active_external_ids: boardSnap.activeExternalIds
+      });
+      if (!error && data != null) {
+        expiredCount += Number(data) || 0;
+      }
+    }
+
+    const { data: staleData, error: staleError } = await this.client.rpc('expire_stale_public_jobs', {
+      p_stale_days: Math.max(1, staleDays)
+    });
+    if (!staleError && staleData != null) {
+      expiredCount += Number(staleData) || 0;
+    }
+
+    return expiredCount;
   }
 
   async upsertJobSourceStatus(input: UpsertJobSourceStatusInput): Promise<void> {

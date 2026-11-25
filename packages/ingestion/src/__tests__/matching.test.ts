@@ -12,6 +12,7 @@ import {
   type MasterProfile
 } from '@jobpilot/shared';
 import {
+  computeEducationAndStageBoost,
   computeRoleTitleRelevance,
   computeStretchScore,
   evaluateHardFilters,
@@ -91,6 +92,11 @@ function makeJob(id: string, overrides: Partial<JobForMatching> = {}): JobForMat
     countryCode: 'IN',
     workMode: 'hybrid',
     seniority: 'junior',
+    employmentType: 'full_time',
+    fresherEligible: null,
+    stipendMonthlyInr: null,
+    careerCategory: 'software_engineering',
+    boardKey: null,
     experienceMinYears: 0,
     experienceMaxYears: 2,
     salaryMin: 1_200_000,
@@ -305,5 +311,36 @@ describe('@jobpilot/ingestion 3-stage matching', () => {
     expect(upgraded.provider).toBe('gemini');
     expect(upgraded.llmScore).toBe(88);
     expect(upgraded.hardFilterReasons).toContain('dismiss_reason:company');
+  });
+
+  it('scores cybersecurity aliases and boosts internship/fresher matches based on graduation stage', () => {
+    const internProfile = makeProfile();
+    internProfile.jsonResume.basics.label = 'Security Analyst';
+    internProfile.jsonResume.work = [];
+    internProfile.indiaProfile.internshipStatus = 'seeking_internship';
+    internProfile.indiaProfile.graduationYear = new Date().getFullYear() + 1;
+    internProfile.searchPreferences.targetRoles = ['Cybersecurity Analyst'];
+    internProfile.searchPreferences.minSalaryLpa = null;
+    internProfile.jsonResume.skills = [
+      { name: 'Security', level: '', keywords: ['Python', 'AppSec', 'Kubernetes'] }
+    ];
+
+    const secIntern = makeJob('sec-intern', {
+      title: 'Application Security Intern',
+      normalizedTitle: 'application security intern',
+      seniority: 'intern',
+      employmentType: 'internship',
+      fresherEligible: true,
+      stipendMonthlyInr: 45000,
+      salaryMin: null,
+      salaryMax: null,
+      salaryMinLpa: null,
+      salaryMaxLpa: null,
+      extractedSkills: ['Python', 'AppSec', 'Kubernetes'],
+      careerCategory: 'cybersecurity'
+    });
+
+    expect(computeRoleTitleRelevance(internProfile, secIntern)).toBeGreaterThan(0.5);
+    expect(computeEducationAndStageBoost(internProfile, secIntern)).toBe(6);
   });
 });

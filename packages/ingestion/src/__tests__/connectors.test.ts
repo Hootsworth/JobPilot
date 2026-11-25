@@ -17,6 +17,8 @@ import {
   fetchSmartRecruitersBoard,
   fetchTheMuseFeed,
   fetchWorkableBoard,
+  fetchWorkdayBoard,
+  loadCompanyRegistry,
   PoliteHttpClient,
   runDiscoverySync
 } from '../index.js';
@@ -409,5 +411,106 @@ describe('@jobpilot/ingestion official connectors', () => {
     expect(syncRes.bundles.length).toBeGreaterThanOrEqual(5);
     expect(syncRes.stats.boardSuccess).toBe(1);
     expect(syncRes.stats.aggregatorCount).toBeGreaterThanOrEqual(5);
+    expect(syncRes.reconcilableBoards).toEqual([
+      {
+        boardKey: 'greenhouse:razorpaysoftwareprivatelimited',
+        activeExternalIds: ['22']
+      }
+    ]);
+  });
+
+  it('fetches Workday CXS boards, loads curated registry, and enforces tiered refresh cooldowns', async () => {
+    const http = createMockHttp({
+      'myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs': {
+        total: 2,
+        jobPostings: [
+          {
+            title: 'Software Engineer Intern - AI Systems',
+            externalPath: '/job/Bengaluru/Software-Engineer-Intern_JR101',
+            locationsText: 'Bengaluru, India',
+            postedOn: 'Posted Today',
+            bulletFields: ['JR101', 'Intern / Graduate']
+          },
+          {
+            title: 'Senior CUDA Kernel Engineer',
+            externalPath: '/job/Pune/Senior-CUDA_JR102',
+            locationsText: 'Pune, India',
+            postedOn: 'Posted 30+ Days Ago',
+            bulletFields: ['JR102']
+          }
+        ]
+      }
+    });
+
+    const wd = await fetchWorkdayBoard({
+      slug: 'nvidia:NVIDIAExternalCareerSite',
+      host: 'nvidia.wd5.myworkdayjobs.com',
+      tenant: 'nvidia',
+      site: 'NVIDIAExternalCareerSite',
+      companyName: 'NVIDIA',
+      http
+    });
+
+    expect(wd.jobs).toHaveLength(2);
+    expect(wd.jobs[0]).toMatchObject({
+      sourceType: 'workday',
+      boardKey: 'workday:nvidia:NVIDIAExternalCareerSite',
+      companyName: 'NVIDIA',
+      city: 'Bengaluru',
+      countryCode: 'IN',
+      employmentType: 'internship',
+      fresherEligible: true
+    });
+    expect(wd.jobs[0]?.postedAt).not.toBeNull();
+    // "Posted 30+ Days Ago" is imprecise -> never fabricated as a timestamp
+    expect(wd.jobs[1]?.postedAt).toBeNull();
+
+    const registry = loadCompanyRegistry();
+    expect(registry.length).toBeGreaterThanOrEqual(100);
+    expect(registry.some((b) => b.sourceType === 'workday' && b.workday?.tenant === 'nvidia')).toBe(
+      true
+    );
+
+    const recentIso = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const cooldownSync = await runDiscoverySync({
+      mode: 'full',
+      respectRefreshTiers: true,
+      boards: [
+        {
+          sourceType: 'workday',
+          slug: 'nvidia:NVIDIAExternalCareerSite',
+          displayName: 'NVIDIA',
+          regionFocus: 'hybrid',
+          refreshTier: 'high_volume',
+          workday: {
+            host: 'nvidia.wd5.myworkdayjobs.com',
+            tenant: 'nvidia',
+            site: 'NVIDIAExternalCareerSite'
+          },
+          enabled: true
+        },
+        {
+          sourceType: 'greenhouse',
+          slug: 'missing-skipped-standard',
+          displayName: 'Standard Co',
+          regionFocus: 'global',
+          refreshTier: 'standard',
+          enabled: true
+        }
+      ],
+      existingSourceCache: new Map([
+        [
+          'workday:nvidia:NVIDIAExternalCareerSite',
+          { etag: null, lastModified: null, lastCrawledAt: recentIso, consecutiveFailures: 0 }
+        ],
+        [
+          'greenhouse:missing-skipped-standard',
+          { etag: null, lastModified: null, lastCrawledAt: recentIso, consecutiveFailures: 0 }
+        ]
+      ]),
+      http
+    });
+    expect(cooldownSync.stats.boardsSelected).toBe(0);
+    expect(cooldownSync.stats.boardsSkippedCooldown).toBe(2);
   });
 });

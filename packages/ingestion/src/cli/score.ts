@@ -88,7 +88,7 @@ async function main() {
     .is('owner_user_id', null)
     .eq('is_active', true)
     .order('posted_at', { ascending: false, nullsFirst: false })
-    .limit(200);
+    .limit(1000);
 
   const jobs: JobForMatching[] = ((rawJobs ?? []) as Array<Record<string, unknown>>).map((r) => ({
     ...JobRecordSchema.parse({
@@ -109,6 +109,11 @@ async function main() {
       countryCode: r['country_code'] ?? null,
       workMode: r['work_mode'] ?? 'unknown',
       seniority: r['seniority'] ?? 'unknown',
+      employmentType: r['employment_type'] ?? 'unknown',
+      fresherEligible: r['fresher_eligible'] == null ? null : Boolean(r['fresher_eligible']),
+      stipendMonthlyInr: r['stipend_monthly_inr'] != null ? Number(r['stipend_monthly_inr']) : null,
+      careerCategory: r['career_category'] ?? 'other',
+      boardKey: r['board_key'] ?? null,
       experienceMinYears: r['experience_min_years'] != null ? Number(r['experience_min_years']) : null,
       experienceMaxYears: r['experience_max_years'] != null ? Number(r['experience_max_years']) : null,
       salaryMin: r['salary_min'] != null ? Number(r['salary_min']) : null,

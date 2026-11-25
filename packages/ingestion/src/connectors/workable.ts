@@ -64,6 +64,7 @@ export async function fetchWorkableBoard(params: {
         title: item.title ?? '',
         locationRaw: locationParts.join(', '),
         workModeHint: item.telecommuting ? 'remote' : item.workplace_type ?? null,
+        boardKey: `workable:${params.slug}`,
         descriptionHtmlOrText: item.description ?? `${item.title ?? ''} ${item.department ?? ''}`,
         postedAt: item.published_on ?? null,
         rawPayload: item as unknown as Record<string, unknown>

@@ -26,6 +26,18 @@ interface SmartRecruitersResponse {
   }>;
 }
 
+interface SmartRecruitersDetailResponse {
+  jobAd?: {
+    sections?: {
+      companyDescription?: { text?: string };
+      jobDescription?: { text?: string };
+      qualifications?: { text?: string };
+      additionalInformation?: { text?: string };
+    };
+  };
+  applyUrl?: string;
+}
+
 const ISO_COUNTRY_NAMES: Record<string, string> = {
   in: 'India',
   us: 'United States',
@@ -45,8 +57,9 @@ export async function fetchSmartRecruitersBoard(params: {
   companyName: string;
   http: PoliteHttpClient;
   conditional?: HttpConditionalHeaders;
+  enrichDetailLimit?: number;
 }): Promise<ConnectorFetchResult> {
-  const url = `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(params.slug)}/postings?limit=50`;
+  const url = `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(params.slug)}/postings?limit=100`;
   const res = await params.http.getJson<SmartRecruitersResponse>(url, {
     conditional: params.conditional
   });
@@ -60,7 +73,37 @@ export async function fetchSmartRecruitersBoard(params: {
     };
   }
 
-  const jobs = (res.data.content ?? [])
+  const items = (res.data.content ?? []).filter((item) => Boolean(item.id));
+  const detailLimit = Math.max(0, Math.min(params.enrichDetailLimit ?? 12, 25));
+  const detailMap = new Map<string, SmartRecruitersDetailResponse>();
+
+  // Prioritize India & engineering/product/AI postings for detail description enrichment
+  const candidatesForDetail = [...items]
+    .sort((a, b) => {
+      const aIn = a.location?.country?.toLowerCase() === 'in' ? 0 : 1;
+      const bIn = b.location?.country?.toLowerCase() === 'in' ? 0 : 1;
+      return aIn - bIn;
+    })
+    .slice(0, detailLimit);
+
+  await Promise.all(
+    candidatesForDetail.map(async (item) => {
+      if (!item.id) return;
+      try {
+        const detailUrl = `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(params.slug)}/postings/${encodeURIComponent(String(item.id))}`;
+        const detailRes = await params.http.getJson<SmartRecruitersDetailResponse>(detailUrl);
+        if (detailRes.data) {
+          detailMap.set(String(item.id), detailRes.data);
+        }
+      } catch {
+        // Fall back cleanly to summary metadata when detail fetch fails
+      }
+    })
+  );
+
+  const boardKey = `smartrecruiters:${params.slug}`;
+
+  const jobs = items
     .map((item) => {
       if (!item.id) return null;
       const publicUrl = `https://jobs.smartrecruiters.com/${encodeURIComponent(params.slug)}/${encodeURIComponent(String(item.id))}`;
@@ -82,16 +125,28 @@ export async function fetchSmartRecruitersBoard(params: {
         `Location: ${locationRaw}`
       ].filter(Boolean);
 
+      const detail = detailMap.get(String(item.id));
+      const sections = detail?.jobAd?.sections;
+      const richHtml = [
+        sections?.jobDescription?.text,
+        sections?.qualifications?.text,
+        sections?.additionalInformation?.text
+      ]
+        .filter(Boolean)
+        .join('\n');
+
       return buildNormalizedJob({
         sourceType: 'smartrecruiters',
         externalId: String(item.id),
         sourceUrl: publicUrl,
-        applyUrl: publicUrl,
+        applyUrl: detail?.applyUrl ?? publicUrl,
         companyName: params.companyName,
         title: item.name ?? '',
         locationRaw,
         workModeHint: item.location?.remote ? 'remote' : null,
-        descriptionHtmlOrText: summaryLines.join('\n'),
+        explicitEmploymentType: item.typeOfEmployment?.label ?? null,
+        boardKey,
+        descriptionHtmlOrText: richHtml || summaryLines.join('\n'),
         postedAt: item.releasedDate ?? null,
         rawPayload: item as unknown as Record<string, unknown>
       });

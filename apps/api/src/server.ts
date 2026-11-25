@@ -81,6 +81,13 @@ async function main() {
   await app.listen({ port: config.port, host: config.host });
 
   if (config.autoSyncIntervalHours > 0) {
+    const startupTimer = setTimeout(() => {
+      void jobSync.syncNow({ mode: 'full', force: false }).catch((err) => {
+        console.warn('Initial background job sync failed:', err);
+      });
+    }, 15_000);
+    startupTimer.unref();
+
     const intervalMs = config.autoSyncIntervalHours * 60 * 60 * 1000;
     const timer = setInterval(() => {
       void jobSync.syncNow({ mode: 'full', force: false }).catch((err) => {

@@ -4,6 +4,7 @@ export * from './lever.js';
 export * from './ashby.js';
 export * from './workable.js';
 export * from './smartrecruiters.js';
+export * from './workday.js';
 export * from './adzuna.js';
 export * from './jooble.js';
 export * from './remotive.js';

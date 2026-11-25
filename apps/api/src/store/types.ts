@@ -50,6 +50,7 @@ import type {
   DedupedJobBundle,
   DiscoverySourceUpdate,
   JobForMatching,
+  ReconcilableBoardSnapshot,
   SourceCacheEntry
 } from '@jobpilot/ingestion';
 import type { LlmCallLogEntry } from '@jobpilot/llm';
@@ -249,6 +250,10 @@ export interface DataStore {
   upsertPublicJobsBatch(
     bundles: DedupedJobBundle[]
   ): Promise<{ insertedCount: number; updatedCount: number }>;
+  reconcileExpiredPublicJobs(
+    boards: ReconcilableBoardSnapshot[],
+    staleDays?: number
+  ): Promise<number>;
   upsertJobSourceStatus(input: UpsertJobSourceStatusInput): Promise<void>;
   startCrawlRun(jobName: string): Promise<string>;
   finishCrawlRun(

@@ -23,6 +23,10 @@ services:
         value: gemini
       - key: MANAGED_PRECISION_MODEL
         value: gemini-3.8-flash
+      - key: AUTO_SYNC_INTERVAL_HOURS
+        value: 3
+      - key: JOB_SYNC_STALE_HOURS
+        value: 3
       - key: GEMINI_API_KEY
         sync: false
       - key: CORS_ORIGIN

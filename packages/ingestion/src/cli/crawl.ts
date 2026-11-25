@@ -1,8 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
-import { SeedBoardSchema, type SeedBoard } from '@jobpilot/shared';
-import { DEFAULT_SEED_BOARDS } from '../discovery/seed-boards.js';
+import { loadCompanyRegistry } from '../discovery/seed-boards.js';
 import { runDiscoverySync, type SourceCacheEntry } from '../discovery/sync-runner.js';
 import { PoliteHttpClient } from '../http/polite-fetch.js';
 
@@ -19,17 +18,6 @@ function loadEnvIfPresent() {
   }
 }
 
-function loadSeedBoards(): SeedBoard[] {
-  const candidates = [
-    resolve(process.cwd(), 'data/seed-boards.json'),
-    resolve(process.cwd(), '../../data/seed-boards.json')
-  ];
-  const found = candidates.find((p) => existsSync(p));
-  if (!found) return DEFAULT_SEED_BOARDS;
-  const raw = JSON.parse(readFileSync(found, 'utf8')) as unknown[];
-  return raw.map((item) => SeedBoardSchema.parse(item)).filter((b) => b.enabled);
-}
-
 async function main() {
   loadEnvIfPresent();
   const supabaseUrl = process.env['SUPABASE_URL']?.trim();
@@ -44,7 +32,7 @@ async function main() {
     auth: { persistSession: false, autoRefreshToken: false }
   });
   const http = new PoliteHttpClient({ timeoutMs: 10000 });
-  const boards = loadSeedBoards();
+  const boards = loadCompanyRegistry();
 
   const { data: runRow } = await supabase
     .from('crawl_runs')
@@ -68,6 +56,7 @@ async function main() {
     mode: 'full',
     boards,
     existingSourceCache: sourceCache,
+    respectRefreshTiers: process.env['CRAWL_FORCE_ALL'] !== 'true',
     envKeys: {
       adzunaAppId: process.env['ADZUNA_APP_ID'],
       adzunaAppKey: process.env['ADZUNA_APP_KEY'],
@@ -130,7 +119,12 @@ async function main() {
       p_description_clean: j.descriptionClean,
       p_extracted_skills: j.extractedSkills,
       p_posted_at: j.postedAt,
-      p_raw_payload: j.rawPayload ?? null
+      p_raw_payload: j.rawPayload ?? null,
+      p_employment_type: j.employmentType ?? 'unknown',
+      p_fresher_eligible: j.fresherEligible ?? null,
+      p_stipend_monthly_inr: j.stipendMonthlyInr ?? null,
+      p_career_category: j.careerCategory ?? 'other',
+      p_board_key: j.boardKey ?? null
     });
 
     if (!error && Array.isArray(data) && data[0]) {
@@ -153,10 +147,33 @@ async function main() {
     }
   }
 
+  let expiredCount = 0;
+  for (const boardSnap of syncResult.reconcilableBoards) {
+    if (boardSnap.activeExternalIds.length === 0) continue;
+    const { data: reconciled, error: reconcileErr } = await supabase.rpc(
+      'reconcile_board_expired_jobs',
+      {
+        p_board_key: boardSnap.boardKey,
+        p_active_external_ids: boardSnap.activeExternalIds
+      }
+    );
+    if (!reconcileErr && reconciled != null) {
+      expiredCount += Number(reconciled) || 0;
+    }
+  }
+  const { data: staleExpired, error: staleErr } = await supabase.rpc(
+    'expire_stale_public_jobs',
+    { p_stale_days: 14 }
+  );
+  if (!staleErr && staleExpired != null) {
+    expiredCount += Number(staleExpired) || 0;
+  }
+
   const stats = {
     ...syncResult.stats,
     insertedCount,
-    updatedCount
+    updatedCount,
+    expiredCount
   };
 
   if (runRow?.id) {

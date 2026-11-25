@@ -828,7 +828,7 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
       store.getOrCreateProfile(opts.user),
       store.listStories(opts.user.id),
       store.getProfileEmbedding(opts.user.id),
-      store.listActiveJobsForMatching(opts.user.id, 600)
+      store.listActiveJobsForMatching(opts.user.id, 1500)
     ]);
 
     const existingMatches = await store.listMatchesForProfileVersion(
@@ -972,7 +972,7 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
     const user = request.authUser!;
     let [profile, activeJobs, existingMatches, apps] = await Promise.all([
       store.getOrCreateProfile(user),
-      store.listActiveJobsForMatching(user.id, 600),
+      store.listActiveJobsForMatching(user.id, 1500),
       Promise.resolve([] as JobMatch[]),
       store.listApplications(user.id)
     ]);

@@ -28,6 +28,11 @@ function makeSeedJob(id: string, overrides: Partial<JobForMatching> = {}): JobFo
     countryCode: 'IN',
     workMode: 'hybrid',
     seniority: 'junior',
+    employmentType: 'full_time',
+    fresherEligible: null,
+    stipendMonthlyInr: null,
+    careerCategory: 'software_engineering',
+    boardKey: null,
     experienceMinYears: 0,
     experienceMaxYears: 2,
     salaryMin: 1_400_000,
@@ -497,5 +502,56 @@ describe('Phase 2 API: Jobs feed, 3-stage matching, caching, save & dismiss', ()
         (i: { job: { title: string } }) => i.job.title === 'Platform Backend Engineer'
       );
     expect(siblingAfter.match.llmScore).toBeLessThan(siblingBefore.match.llmScore);
+  });
+
+  it('reconciles expired listings from removed board IDs and stale feeds so inactive jobs stay hidden', async () => {
+    const store = new MemoryDataStore();
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const headers = { authorization: 'Bearer valid-jwt' };
+
+    const activeBoardJob = makeSeedJob('30000000-0000-4000-8000-000000000001', {
+      externalId: 'gh-live-1',
+      boardKey: 'greenhouse:razorpaysoftwareprivatelimited',
+      title: 'Live Backend Role'
+    });
+    const removedBoardJob = makeSeedJob('30000000-0000-4000-8000-000000000002', {
+      externalId: 'gh-closed-2',
+      boardKey: 'greenhouse:razorpaysoftwareprivatelimited',
+      title: 'Closed Backend Role'
+    });
+    const staleOldJob = makeSeedJob('30000000-0000-4000-8000-000000000003', {
+      externalId: 'agg-stale-3',
+      sourceType: 'adzuna',
+      boardKey: null,
+      title: 'Stale Aggregator Role',
+      lastSeenAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString()
+    });
+    store.seedJobsForTest([activeBoardJob, removedBoardJob, staleOldJob]);
+
+    const expired = await store.reconcileExpiredPublicJobs(
+      [{ boardKey: 'greenhouse:razorpaysoftwareprivatelimited', activeExternalIds: ['gh-live-1'] }],
+      14
+    );
+    expect(expired).toBe(2);
+
+    const authVerifier: AuthVerifier = {
+      verifyToken: vi.fn(async () => ({ id: userId, email: 'dev@example.com' }))
+    };
+    const app = await buildApp({
+      config: loadConfig({
+        PORT: '0',
+        HOST: '127.0.0.1',
+        CORS_ORIGIN: 'http://localhost:3000',
+        APP_ENCRYPTION_KEY: randomBytes(32).toString('hex')
+      }),
+      store,
+      authVerifier
+    });
+
+    const feedRes = await app.inject({ method: 'GET', url: '/api/jobs', headers });
+    expect(feedRes.statusCode).toBe(200);
+    const items = feedRes.json().items as Array<{ job: { id: string; title: string } }>;
+    expect(items).toHaveLength(1);
+    expect(items[0]?.job.title).toBe('Live Backend Role');
   });
 });

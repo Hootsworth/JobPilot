@@ -965,6 +965,11 @@ export class MemoryDataStore implements DataStore {
           salaryPeriod: c.salaryPeriod,
           salaryMinLpa: c.salaryMinLpa,
           salaryMaxLpa: c.salaryMaxLpa,
+          employmentType: c.employmentType ?? 'unknown',
+          fresherEligible: c.fresherEligible ?? null,
+          stipendMonthlyInr: c.stipendMonthlyInr ?? null,
+          careerCategory: c.careerCategory ?? 'other',
+          boardKey: c.boardKey ?? null,
           descriptionClean: c.descriptionClean,
           extractedSkills: c.extractedSkills,
           postedAt: c.postedAt,
@@ -995,6 +1000,17 @@ export class MemoryDataStore implements DataStore {
           countryCode: prev.countryCode ?? c.countryCode,
           salaryMinLpa: prev.salaryMinLpa ?? c.salaryMinLpa,
           salaryMaxLpa: prev.salaryMaxLpa ?? c.salaryMaxLpa,
+          employmentType:
+            prev.employmentType && prev.employmentType !== 'unknown'
+              ? prev.employmentType
+              : (c.employmentType ?? 'unknown'),
+          fresherEligible: prev.fresherEligible ?? c.fresherEligible ?? null,
+          stipendMonthlyInr: prev.stipendMonthlyInr ?? c.stipendMonthlyInr ?? null,
+          careerCategory:
+            prev.careerCategory && prev.careerCategory !== 'other'
+              ? prev.careerCategory
+              : (c.careerCategory ?? 'other'),
+          boardKey: prev.boardKey ?? c.boardKey ?? null,
           descriptionClean:
             c.descriptionClean.length > prev.descriptionClean.length
               ? c.descriptionClean
@@ -1009,6 +1025,36 @@ export class MemoryDataStore implements DataStore {
     }
 
     return { insertedCount, updatedCount };
+  }
+
+  async reconcileExpiredPublicJobs(
+    boards: Array<{ boardKey: string; activeExternalIds: string[] }>,
+    staleDays: number = 14
+  ): Promise<number> {
+    const boardActiveIds = new Map<string, Set<string>>();
+    for (const b of boards) {
+      if (b.activeExternalIds.length > 0) {
+        boardActiveIds.set(b.boardKey, new Set(b.activeExternalIds));
+      }
+    }
+    const staleCutoffMs = Date.now() - Math.max(1, staleDays) * 24 * 60 * 60 * 1000;
+    let expiredCount = 0;
+
+    for (let i = 0; i < this.jobs.length; i++) {
+      const j = this.jobs[i]!;
+      if (j.ownerUserId || !j.isActive) continue;
+
+      const activeSet = j.boardKey ? boardActiveIds.get(j.boardKey) : undefined;
+      const missingFromBoard = Boolean(activeSet && j.externalId && !activeSet.has(j.externalId));
+      const seenMs = Date.parse(j.lastSeenAt);
+      const isStale = Number.isFinite(seenMs) && seenMs < staleCutoffMs;
+
+      if (missingFromBoard || isStale) {
+        this.jobs[i] = { ...j, isActive: false };
+        expiredCount++;
+      }
+    }
+    return expiredCount;
   }
 
   async upsertJobSourceStatus(input: UpsertJobSourceStatusInput): Promise<void> {
@@ -1475,6 +1521,11 @@ export class MemoryDataStore implements DataStore {
         countryCode: null,
         workMode: 'unknown',
         seniority: 'unknown',
+        employmentType: 'unknown',
+        fresherEligible: null,
+        stipendMonthlyInr: null,
+        careerCategory: 'other',
+        boardKey: null,
         experienceMinYears: null,
         experienceMaxYears: null,
         salaryMin: null,
@@ -1613,6 +1664,11 @@ export class MemoryDataStore implements DataStore {
       countryCode: null,
       workMode: 'unknown',
       seniority: 'unknown',
+      employmentType: 'unknown',
+      fresherEligible: null,
+      stipendMonthlyInr: null,
+      careerCategory: 'other',
+      boardKey: null,
       experienceMinYears: null,
       experienceMaxYears: null,
       salaryMin: null,

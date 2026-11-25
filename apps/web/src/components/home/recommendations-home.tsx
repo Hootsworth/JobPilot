@@ -84,12 +84,11 @@ export function RecommendationsHome() {
   const [activeTab, setActiveTab] = useState<BucketKey>('for_you');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [ranking, setRanking] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const autoSyncTriggeredRef = useRef(false);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const applySelectedDefault = useCallback(
@@ -127,47 +126,18 @@ export function RecommendationsHome() {
     }
   }, [activeTab, applySelectedDefault]);
 
-  const runSync = useCallback(
-    async (force: boolean) => {
-      setSyncing(true);
-      setErrorMsg(null);
-      try {
-        const res = await api.syncJobs({ mode: 'quick', force });
-        if (!res.skipped && force) {
-          setStatusMsg(
-            res.insertedCount > 0
-              ? `Added ${pluralize(res.insertedCount, 'new job')} to your feed.`
-              : 'Job catalog is up to date.'
-          );
-        }
-        await loadRecommendations();
-      } catch (err) {
-        setErrorMsg(err instanceof Error ? err.message : 'Could not refresh job feeds.');
-      } finally {
-        setSyncing(false);
-      }
-    },
-    [loadRecommendations]
-  );
+  const handleRefreshFeed = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadRecommendations();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadRecommendations]);
 
   useEffect(() => {
-    let active = true;
-    async function boot() {
-      const res = await loadRecommendations();
-      if (!active || !res) return;
-      if (
-        !autoSyncTriggeredRef.current &&
-        (res.syncStatus.isStale || res.syncStatus.totalActiveJobs === 0)
-      ) {
-        autoSyncTriggeredRef.current = true;
-        await runSync(false);
-      }
-    }
-    void boot();
-    return () => {
-      active = false;
-    };
-    // Run once on initial mount so tab switches do not re-trigger auto-sync
+    void loadRecommendations();
+    // Run once on initial mount; background scheduler refreshes job sources automatically
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -333,10 +303,10 @@ export function RecommendationsHome() {
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => void runSync(true)}
-            disabled={syncing}
+            onClick={() => void handleRefreshFeed()}
+            disabled={refreshing}
           >
-            {syncing ? 'Refreshing...' : 'Refresh'}
+            {refreshing ? 'Refreshing...' : 'Refresh'}
           </Button>
           <Button
             size="sm"
@@ -350,14 +320,14 @@ export function RecommendationsHome() {
         </div>
       }
     >
-      {syncing ? (
+      {refreshing ? (
         <div
           role="status"
           aria-live="polite"
           className="border border-[var(--hairline)] bg-[var(--surface-soft)] px-3.5 py-2.5 text-xs text-[var(--body)] flex items-center gap-2.5"
         >
           <MoSpinner name="braille" className="text-[var(--accent-text)] font-bold" />
-          <span>Checking for new openings...</span>
+          <span>Refreshing recommendations...</span>
         </div>
       ) : null}
 
@@ -527,7 +497,11 @@ export function RecommendationsHome() {
                         <p className="text-xs text-[var(--body)] truncate">
                           {item.job.city ?? item.job.locationRaw ?? 'Location flexible'}
                           {workMode ? ` · ${workMode}` : ''}
-                          {salaryText !== 'Not disclosed' ? ` · ${salaryText}` : ''}
+                          {salaryText !== 'Not disclosed'
+                            ? ` · ${salaryText}`
+                            : item.job.stipendMonthlyInr != null
+                              ? ` · ₹${Math.round(item.job.stipendMonthlyInr / 1000)}k/mo`
+                              : ''}
                         </p>
 
                         <p className="text-xs text-[var(--mute)] line-clamp-2 min-h-[32px]">
@@ -535,6 +509,11 @@ export function RecommendationsHome() {
                         </p>
 
                         <div className="flex flex-wrap gap-1 min-h-[24px]">
+                          {item.job.employmentType === 'internship' ? (
+                            <Badge tone="accent">Internship</Badge>
+                          ) : item.job.fresherEligible ? (
+                            <Badge tone="success">Fresher</Badge>
+                          ) : null}
                           {(item.match?.matchedSkills ?? []).slice(0, 3).map((s) => (
                             <Badge key={s} tone="success">
                               {s}
@@ -583,16 +562,21 @@ export function RecommendationsHome() {
 
           {visibleItems.length === 0 ? (
             <EmptyState
-              title={syncing ? 'Loading job openings...' : 'No roles match this view'}
+              title={refreshing ? 'Loading job openings...' : 'No roles match this view'}
               description={
-                syncing
-                  ? 'Fetching live roles from connected company boards and feeds.'
-                  : 'Refresh the catalog or check Near Matches to see roles slightly outside your filters.'
+                refreshing
+                  ? 'Reloading live roles from connected company boards and feeds.'
+                  : 'Reload the feed or check Near Matches to see roles slightly outside your filters.'
               }
               action={
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="primary" size="sm" onClick={() => void runSync(true)} disabled={syncing}>
-                    {syncing ? 'Refreshing...' : 'Refresh'}
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => void handleRefreshFeed()}
+                    disabled={refreshing}
+                  >
+                    {refreshing ? 'Refreshing...' : 'Refresh'}
                   </Button>
                   <Button
                     variant="secondary"
@@ -881,6 +865,16 @@ function renderListRow(
             <span>·</span>
             <span className="tabular-nums">{salaryText}</span>
           </>
+        ) : item.job.stipendMonthlyInr != null ? (
+          <>
+            <span>·</span>
+            <span className="tabular-nums">₹{Math.round(item.job.stipendMonthlyInr / 1000)}k/mo</span>
+          </>
+        ) : null}
+        {item.job.employmentType === 'internship' ? (
+          <Badge tone="accent">Internship</Badge>
+        ) : item.job.fresherEligible ? (
+          <Badge tone="success">Fresher</Badge>
         ) : null}
         {item.applicationStatus ? <Badge tone="accent">{item.applicationStatus}</Badge> : null}
       </div>

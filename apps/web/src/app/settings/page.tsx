@@ -26,6 +26,7 @@ import {
   SkeletonBlock
 } from '@/components/ui/primitives';
 import { api, ApiError, getApiBaseUrl } from '@/lib/api';
+import { setCachedBillingSnapshot } from '@/lib/billing-cache';
 import { getSupabaseClient, getSupabasePublishableKey } from '@/lib/supabase';
 
 const PROVIDER_META: Record<
@@ -127,6 +128,9 @@ export default function SettingsPage() {
       setDefaultEnvProvider(llmRes.defaultEnvProvider);
       setProfile(prof);
       setBilling(billingSnap);
+      if (billingSnap) {
+        setCachedBillingSnapshot(billingSnap);
+      }
       if (billingSnap?.subscription.useByokOverride) {
         setByokOpen(true);
       }
@@ -272,6 +276,7 @@ export default function SettingsPage() {
     try {
       const updated = await api.updateBillingPreferences(patch);
       setBilling(updated);
+      setCachedBillingSnapshot(updated);
       if (patch.useByokOverride) {
         setByokOpen(true);
       }

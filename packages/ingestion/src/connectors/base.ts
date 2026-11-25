@@ -10,6 +10,9 @@ import {
   extractExperienceYears,
   extractSalary,
   extractSkillsFromText,
+  inferCareerCategory,
+  inferEmploymentType,
+  inferFresherEligibility,
   inferSeniority,
   parseLocation
 } from '../normalize/extractors.js';
@@ -33,6 +36,8 @@ export function buildNormalizedJob(input: {
   title: string;
   locationRaw?: string | null;
   workModeHint?: string | null;
+  explicitEmploymentType?: string | null;
+  boardKey?: string | null;
   descriptionHtmlOrText?: string | null;
   explicitTags?: string[];
   postedAt?: string | null;
@@ -50,6 +55,13 @@ export function buildNormalizedJob(input: {
   const loc = parseLocation(input.locationRaw, input.workModeHint);
   const seniority = inferSeniority(title, descriptionClean);
   const exp = extractExperienceYears(title, descriptionClean);
+  const employmentType = inferEmploymentType(title, descriptionClean, input.explicitEmploymentType);
+  const fresherEligible = inferFresherEligibility(
+    title,
+    descriptionClean,
+    seniority,
+    exp.minYears
+  );
   const sal = extractSalary({
     description: `${title}\n${descriptionClean}`,
     explicitMin: input.explicitSalaryMin,
@@ -62,6 +74,7 @@ export function buildNormalizedJob(input: {
   const extractedSkills = Array.from(
     new Set([...(input.explicitTags ?? []).map((t) => t.trim()).filter(Boolean), ...inferredSkills])
   );
+  const careerCategory = inferCareerCategory(title, extractedSkills, descriptionClean);
 
   let postedAt: string | null = null;
   if (input.postedAt) {
@@ -84,6 +97,11 @@ export function buildNormalizedJob(input: {
     countryCode: loc.countryCode,
     workMode: loc.workMode,
     seniority,
+    employmentType,
+    fresherEligible,
+    stipendMonthlyInr: sal.stipendMonthlyInr,
+    careerCategory,
+    boardKey: input.boardKey ?? null,
     experienceMinYears: exp.minYears,
     experienceMaxYears: exp.maxYears,
     salaryMin: sal.salaryMin,

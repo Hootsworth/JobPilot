@@ -21,6 +21,7 @@ import {
   SkeletonBlock
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
+import { setCachedBillingSnapshot } from '@/lib/billing-cache';
 
 const PLAN_ORDER: PlanId[] = ['free', 'pro', 'sprint_90', 'plus'];
 const PACK_ORDER: CreditPackId[] = ['pack_150', 'pack_500'];
@@ -63,6 +64,7 @@ export default function BillingPage() {
     try {
       const data = await api.getBillingStatus();
       setSnapshot(data);
+      setCachedBillingSnapshot(data);
       setCurrency(data.subscription.billingCurrency);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to load plan & credits.');
@@ -81,6 +83,7 @@ export default function BillingPage() {
     try {
       const updated = await api.updateBillingPreferences({ billingCurrency: next });
       setSnapshot(updated);
+      setCachedBillingSnapshot(updated);
     } catch {
       // Keep local currency selection even if preference update fails transiently
     }
@@ -97,6 +100,7 @@ export default function BillingPage() {
         return;
       }
       setSnapshot(res.snapshot);
+      setCachedBillingSnapshot(res.snapshot);
       setStatusMsg(res.message);
       moToast(res.message);
     } catch (err) {
@@ -117,6 +121,7 @@ export default function BillingPage() {
         return;
       }
       setSnapshot(res.snapshot);
+      setCachedBillingSnapshot(res.snapshot);
       setStatusMsg(res.message);
       moToast(res.message);
     } catch (err) {

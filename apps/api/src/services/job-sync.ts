@@ -1,5 +1,5 @@
 import type { JobSyncStatus, MasterProfile } from '@jobpilot/shared';
-import { runDiscoverySync } from '@jobpilot/ingestion';
+import { loadCompanyRegistry, runDiscoverySync } from '@jobpilot/ingestion';
 import type { ApiConfig } from '../config.js';
 import type { DataStore } from '../store/types.js';
 
@@ -126,8 +126,10 @@ export class JobSyncService {
 
       const discovery = await this.syncRunner({
         mode: params.mode,
+        boards: loadCompanyRegistry(),
         existingSourceCache: sourceCache,
         profile: params.profile,
+        respectRefreshTiers: !params.force,
         envKeys: {
           adzunaAppId: this.config.adzunaAppId,
           adzunaAppKey: this.config.adzunaAppKey,
@@ -147,11 +149,15 @@ export class JobSyncService {
       const { insertedCount, updatedCount } = await this.store.upsertPublicJobsBatch(
         discovery.bundles
       );
+      const expiredCount = await this.store
+        .reconcileExpiredPublicJobs(discovery.reconcilableBoards ?? [], 14)
+        .catch(() => 0);
 
       const stats = {
         ...discovery.stats,
         insertedCount,
-        updatedCount
+        updatedCount,
+        expiredCount
       };
 
       if (runId) {

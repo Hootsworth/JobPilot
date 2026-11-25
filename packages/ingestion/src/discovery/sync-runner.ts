@@ -15,12 +15,13 @@ import {
   fetchSmartRecruitersBoard,
   fetchTheMuseFeed,
   fetchWorkableBoard,
+  fetchWorkdayBoard,
   type ConnectorFetchResult
 } from '../connectors/index.js';
 import { PoliteHttpClient } from '../http/polite-fetch.js';
 import { dedupeNormalizedJobs, type DedupedJobBundle } from '../normalize/dedupe.js';
 import { buildDiscoveryQueriesFromProfile } from './profile-queries.js';
-import { DEFAULT_SEED_BOARDS } from './seed-boards.js';
+import { loadCompanyRegistry } from './seed-boards.js';
 
 export interface SourceCacheEntry {
   etag: string | null;
@@ -44,11 +45,17 @@ export interface DiscoverySourceUpdate {
   failed: boolean;
 }
 
+export interface ReconcilableBoardSnapshot {
+  boardKey: string;
+  activeExternalIds: string[];
+}
+
 export interface RunDiscoverySyncParams {
   mode: 'quick' | 'full';
   boards?: SeedBoard[];
   existingSourceCache?: Map<string, SourceCacheEntry>;
   profile?: MasterProfile | null;
+  respectRefreshTiers?: boolean;
   envKeys?: {
     adzunaAppId?: string;
     adzunaAppKey?: string;
@@ -64,10 +71,12 @@ export interface RunDiscoverySyncParams {
 export interface RunDiscoverySyncResult {
   bundles: DedupedJobBundle[];
   sourceUpdates: DiscoverySourceUpdate[];
+  reconcilableBoards: ReconcilableBoardSnapshot[];
   stats: {
     mode: 'quick' | 'full';
     boardsSelected: number;
     boardsTotal: number;
+    boardsSkippedCooldown: number;
     boardSuccess: number;
     boardFailures: number;
     aggregatorCount: number;
@@ -87,17 +96,38 @@ function regionRank(regionFocus: SeedBoard['regionFocus'], priority: 'india' | '
   return 2;
 }
 
+const HIGH_VOLUME_COOLDOWN_MS = 3 * 60 * 60 * 1000;
+const STANDARD_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
+function isBoardDue(
+  board: SeedBoard,
+  cacheEntry: SourceCacheEntry | undefined,
+  nowMs: number
+): boolean {
+  if (!cacheEntry?.lastCrawledAt) return true;
+  const crawledMs = Date.parse(cacheEntry.lastCrawledAt);
+  if (!Number.isFinite(crawledMs)) return true;
+  const cooldownMs =
+    board.refreshTier === 'standard' ? STANDARD_COOLDOWN_MS : HIGH_VOLUME_COOLDOWN_MS;
+  return nowMs - crawledMs >= cooldownMs;
+}
+
 function prioritizeBoards(
   boards: SeedBoard[],
   cache: Map<string, SourceCacheEntry>,
   regionPriority: 'india' | 'global',
   mode: 'quick' | 'full',
-  maxQuickBoards: number
-): SeedBoard[] {
+  maxQuickBoards: number,
+  respectRefreshTiers: boolean
+): { selected: SeedBoard[]; skippedCooldown: number } {
   const enabled = boards.filter((b) => b.enabled);
-  if (mode === 'full') return enabled;
+  const nowMs = Date.now();
+  const dueBoards = respectRefreshTiers
+    ? enabled.filter((b) => isBoardDue(b, cache.get(`${b.sourceType}:${b.slug}`), nowMs))
+    : enabled;
+  const skippedCooldown = enabled.length - dueBoards.length;
 
-  const sorted = [...enabled].sort((a, b) => {
+  const sorted = [...dueBoards].sort((a, b) => {
     const ca = cache.get(`${a.sourceType}:${a.slug}`);
     const cb = cache.get(`${b.sourceType}:${b.slug}`);
 
@@ -115,10 +145,15 @@ function prioritizeBoards(
       regionRank(a.regionFocus, regionPriority) - regionRank(b.regionFocus, regionPriority);
     if (rDiff !== 0) return rDiff;
 
+    const aTier = a.refreshTier === 'standard' ? 1 : 0;
+    const bTier = b.refreshTier === 'standard' ? 1 : 0;
+    if (aTier !== bTier) return aTier - bTier;
+
     return aTime - bTime;
   });
 
-  return sorted.slice(0, maxQuickBoards);
+  if (mode === 'full') return { selected: sorted, skippedCooldown };
+  return { selected: sorted.slice(0, maxQuickBoards), skippedCooldown };
 }
 
 async function runWithConcurrency<T>(
@@ -156,6 +191,19 @@ async function fetchAtsBoard(
       return fetchWorkableBoard({ slug: board.slug, companyName: board.displayName, http, conditional });
     case 'smartrecruiters':
       return fetchSmartRecruitersBoard({ slug: board.slug, companyName: board.displayName, http, conditional });
+    case 'workday': {
+      if (!board.workday) {
+        throw new Error(`Workday board ${board.slug} is missing host/tenant/site config`);
+      }
+      return fetchWorkdayBoard({
+        slug: board.slug,
+        host: board.workday.host,
+        tenant: board.workday.tenant,
+        site: board.workday.site,
+        companyName: board.displayName,
+        http
+      });
+    }
   }
 }
 
@@ -163,7 +211,7 @@ export async function runDiscoverySync(
   params: RunDiscoverySyncParams
 ): Promise<RunDiscoverySyncResult> {
   const mode = params.mode;
-  const allBoards = params.boards ?? DEFAULT_SEED_BOARDS;
+  const allBoards = params.boards ?? loadCompanyRegistry();
   const cache = params.existingSourceCache ?? new Map<string, SourceCacheEntry>();
   const http =
     params.http ??
@@ -171,19 +219,22 @@ export async function runDiscoverySync(
       timeoutMs: mode === 'quick' ? 6000 : 10000
     });
   const queries = buildDiscoveryQueriesFromProfile(params.profile);
-  const maxQuickBoards = params.maxQuickBoards ?? 18;
+  const maxQuickBoards = params.maxQuickBoards ?? 24;
   const concurrency = params.concurrency ?? 6;
+  const respectRefreshTiers = params.respectRefreshTiers ?? false;
 
-  const selectedBoards = prioritizeBoards(
+  const { selected: selectedBoards, skippedCooldown: boardsSkippedCooldown } = prioritizeBoards(
     allBoards,
     cache,
     queries.regionPriority,
     mode,
-    maxQuickBoards
+    maxQuickBoards,
+    respectRefreshTiers
   );
 
   const rawJobs: NormalizedJobInput[] = [];
   const sourceUpdates: DiscoverySourceUpdate[] = [];
+  const reconcilableBoards: ReconcilableBoardSnapshot[] = [];
   let boardSuccess = 0;
   let boardFailures = 0;
   let aggregatorCount = 0;
@@ -347,6 +398,14 @@ export async function runDiscoverySync(
         lastModified: prev?.lastModified
       });
       rawJobs.push(...res.jobs);
+      if (!res.notModified && res.jobs.length > 0) {
+        reconcilableBoards.push({
+          boardKey: key,
+          activeExternalIds: Array.from(
+            new Set(res.jobs.map((j) => j.externalId).filter((id): id is string => Boolean(id)))
+          )
+        });
+      }
       boardSuccess++;
       sourceUpdates.push({
         sourceType: board.sourceType,
@@ -433,10 +492,12 @@ export async function runDiscoverySync(
   return {
     bundles,
     sourceUpdates,
+    reconcilableBoards,
     stats: {
       mode,
       boardsSelected: selectedBoards.length,
       boardsTotal: allBoards.filter((b) => b.enabled).length,
+      boardsSkippedCooldown,
       boardSuccess,
       boardFailures,
       aggregatorCount,

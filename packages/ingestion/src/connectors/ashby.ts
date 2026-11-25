@@ -55,6 +55,7 @@ export async function fetchAshbyBoard(params: {
         title: item.title ?? '',
         locationRaw,
         workModeHint,
+        boardKey: `ashby:${params.slug}`,
         descriptionHtmlOrText: item.descriptionHtml ?? item.descriptionPlain ?? '',
         postedAt: item.publishedAt ?? null,
         rawPayload: item as unknown as Record<string, unknown>

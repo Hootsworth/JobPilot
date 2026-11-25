@@ -72,6 +72,26 @@ export const JobSenioritySchema = z.enum([
 ]);
 export type JobSeniority = z.infer<typeof JobSenioritySchema>;
 
+export const JobEmploymentTypeSchema = z.enum([
+  'full_time',
+  'internship',
+  'contract',
+  'part_time',
+  'unknown'
+]);
+export type JobEmploymentType = z.infer<typeof JobEmploymentTypeSchema>;
+
+export const JobCareerCategorySchema = z.enum([
+  'software_engineering',
+  'ai_ml',
+  'data_science',
+  'product_management',
+  'design_ux',
+  'cybersecurity',
+  'other'
+]);
+export type JobCareerCategory = z.infer<typeof JobCareerCategorySchema>;
+
 export const NormalizedJobInputSchema = z.object({
   sourceType: JobSourceTypeSchema,
   externalId: z.string().min(1),
@@ -87,6 +107,11 @@ export const NormalizedJobInputSchema = z.object({
   countryCode: z.string().nullable().default(null),
   workMode: JobWorkModeSchema.default('unknown'),
   seniority: JobSenioritySchema.default('unknown'),
+  employmentType: JobEmploymentTypeSchema.default('unknown'),
+  fresherEligible: z.boolean().nullable().default(null),
+  stipendMonthlyInr: z.number().min(0).nullable().default(null),
+  careerCategory: JobCareerCategorySchema.default('other'),
+  boardKey: z.string().nullable().default(null),
   experienceMinYears: z.number().min(0).max(50).nullable().default(null),
   experienceMaxYears: z.number().min(0).max(50).nullable().default(null),
   salaryMin: z.number().min(0).nullable().default(null),
@@ -129,6 +154,11 @@ export const JobRecordSchema = z.object({
   countryCode: z.string().nullable().default(null),
   workMode: JobWorkModeSchema.default('unknown'),
   seniority: JobSenioritySchema.default('unknown'),
+  employmentType: JobEmploymentTypeSchema.default('unknown'),
+  fresherEligible: z.boolean().nullable().default(null),
+  stipendMonthlyInr: z.number().nullable().default(null),
+  careerCategory: JobCareerCategorySchema.default('other'),
+  boardKey: z.string().nullable().default(null),
   experienceMinYears: z.number().nullable().default(null),
   experienceMaxYears: z.number().nullable().default(null),
   salaryMin: z.number().nullable().default(null),
@@ -213,10 +243,26 @@ export const LlmMatchRerankOutputSchema = z.object({
 export type LlmMatchRerankOutput = z.infer<typeof LlmMatchRerankOutputSchema>;
 
 export const SeedBoardSchema = z.object({
-  sourceType: z.enum(['greenhouse', 'lever', 'ashby', 'workable', 'smartrecruiters']),
+  sourceType: z.enum([
+    'greenhouse',
+    'lever',
+    'ashby',
+    'workable',
+    'smartrecruiters',
+    'workday'
+  ]),
   slug: z.string().min(1),
   displayName: z.string().min(1),
   regionFocus: z.enum(['india', 'global', 'hybrid']),
+  careersUrl: z.string().url().optional(),
+  refreshTier: z.enum(['high_volume', 'standard']).default('standard'),
+  workday: z
+    .object({
+      host: z.string().min(1),
+      tenant: z.string().min(1),
+      site: z.string().min(1)
+    })
+    .optional(),
   enabled: z.boolean().default(true)
 });
 export type SeedBoard = z.infer<typeof SeedBoardSchema>;

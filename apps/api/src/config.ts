@@ -68,8 +68,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     env['SUPABASE_SERVICE_ROLE_KEY']?.trim() ||
     '';
 
-  const rawAutoSync = Number.parseInt(env['AUTO_SYNC_INTERVAL_HOURS'] ?? '6', 10);
-  const rawStale = Number.parseInt(env['JOB_SYNC_STALE_HOURS'] ?? '6', 10);
+  const rawAutoSync = Number.parseInt(env['AUTO_SYNC_INTERVAL_HOURS'] ?? '3', 10);
+  const rawStale = Number.parseInt(env['JOB_SYNC_STALE_HOURS'] ?? '3', 10);
 
   const corsOrigin = env['CORS_ORIGIN'] ?? 'http://localhost:3000';
   const firstCorsOrigin = corsOrigin

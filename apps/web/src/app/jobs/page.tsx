@@ -42,7 +42,7 @@ export default function JobsFeedPage() {
   const [total, setTotal] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [matching, setMatching] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -60,7 +60,6 @@ export default function JobsFeedPage() {
   const [onlyPassed, setOnlyPassed] = useState(true);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const autoSyncTriggeredRef = useRef(false);
 
   const loadJobs = useCallback(async () => {
     setLoading(true);
@@ -100,49 +99,14 @@ export default function JobsFeedPage() {
     void loadJobs();
   }, [loadJobs]);
 
-  const handleSyncSources = useCallback(
-    async (force: boolean) => {
-      setSyncing(true);
-      setErrorMsg(null);
-      try {
-        const res = await api.syncJobs({ mode: 'quick', force });
-        if (!res.skipped && force) {
-          setStatusMsg(
-            res.insertedCount > 0
-              ? `Added ${pluralize(res.insertedCount, 'new job')} to catalog.`
-              : 'Job catalog is up to date.'
-          );
-        }
-        await loadJobs();
-      } catch (err) {
-        setErrorMsg(err instanceof Error ? err.message : 'Could not refresh job feeds.');
-      } finally {
-        setSyncing(false);
-      }
-    },
-    [loadJobs]
-  );
-
-  useEffect(() => {
-    let active = true;
-    async function checkAndAutoSync() {
-      if (autoSyncTriggeredRef.current) return;
-      try {
-        const status = await api.getJobSyncStatus();
-        if (!active || autoSyncTriggeredRef.current) return;
-        if (status.isStale || status.totalActiveJobs === 0) {
-          autoSyncTriggeredRef.current = true;
-          await handleSyncSources(false);
-        }
-      } catch {
-        // ignore initial probe error
-      }
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadJobs();
+    } finally {
+      setRefreshing(false);
     }
-    void checkAndAutoSync();
-    return () => {
-      active = false;
-    };
-  }, [handleSyncSources]);
+  }, [loadJobs]);
 
   const selectedItem = items.find((i) => i.job.id === selectedId) ?? items[0] ?? null;
 
@@ -243,10 +207,10 @@ export default function JobsFeedPage() {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => void handleSyncSources(true)}
-            disabled={syncing}
+            onClick={() => void handleRefresh()}
+            disabled={refreshing}
           >
-            {syncing ? 'Refreshing...' : 'Refresh'}
+            {refreshing ? 'Refreshing...' : 'Refresh'}
           </Button>
           <Button variant="primary" size="sm" onClick={handleRescore} disabled={matching}>
             {matching ? 'Re-scoring...' : 'Re-score'}
@@ -254,14 +218,14 @@ export default function JobsFeedPage() {
         </div>
       }
     >
-      {syncing ? (
+      {refreshing ? (
         <div
           role="status"
           aria-live="polite"
           className="border border-[var(--hairline)] bg-[var(--surface-soft)] px-3.5 py-2.5 text-xs text-[var(--body)] flex items-center gap-2.5"
         >
           <MoSpinner name="braille" className="text-[var(--accent-text)] font-bold" />
-          <span>Checking for new openings...</span>
+          <span>Reloading job catalog...</span>
         </div>
       ) : null}
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
@@ -365,6 +329,7 @@ export default function JobsFeedPage() {
                     <option value="ashby">Ashby</option>
                     <option value="workable">Workable</option>
                     <option value="smartrecruiters">SmartRecruiters</option>
+                    <option value="workday">Workday</option>
                     <option value="himalayas">Himalayas</option>
                     <option value="jobicy">Jobicy</option>
                     <option value="themuse">The Muse</option>
@@ -452,17 +417,17 @@ export default function JobsFeedPage() {
         </div>
       ) : items.length === 0 ? (
         <EmptyState
-          title={syncing ? 'Loading job openings...' : 'No jobs match these filters'}
-          description="Refresh your job catalog or include near matches outside strict location or experience filters."
+          title={refreshing ? 'Loading job openings...' : 'No jobs match these filters'}
+          description="Reload the job catalog or include near matches outside strict location or experience filters."
           action={
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="primary"
                 size="sm"
-                onClick={() => void handleSyncSources(true)}
-                disabled={syncing}
+                onClick={() => void handleRefresh()}
+                disabled={refreshing}
               >
-                {syncing ? 'Refreshing...' : 'Refresh'}
+                {refreshing ? 'Refreshing...' : 'Refresh'}
               </Button>
               {onlyPassed ? (
                 <Button variant="secondary" size="sm" onClick={() => setOnlyPassed(false)}>
@@ -526,6 +491,18 @@ export default function JobsFeedPage() {
                         <span>·</span>
                         <span className="tabular-nums">{salaryText}</span>
                       </>
+                    ) : item.job.stipendMonthlyInr != null ? (
+                      <>
+                        <span>·</span>
+                        <span className="tabular-nums">
+                          ₹{Math.round(item.job.stipendMonthlyInr / 1000)}k/mo
+                        </span>
+                      </>
+                    ) : null}
+                    {item.job.employmentType === 'internship' ? (
+                      <Badge tone="accent">Internship</Badge>
+                    ) : item.job.fresherEligible ? (
+                      <Badge tone="success">Fresher</Badge>
                     ) : null}
                     {item.applicationStatus ? (
                       <Badge tone="accent">{item.applicationStatus}</Badge>

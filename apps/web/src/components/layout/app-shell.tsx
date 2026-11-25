@@ -1,10 +1,18 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import type { BillingSnapshot } from '@jobpilot/shared';
 import { api } from '@/lib/api';
+import {
+  clearBillingCache,
+  getCachedBillingSnapshot,
+  getCachedUserEmail,
+  setCachedBillingSnapshot,
+  setCachedUserEmail,
+  subscribeBillingSnapshot
+} from '@/lib/billing-cache';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 import { ThemeQuickToggle } from '../theme-toggle';
 import { AlertBanner, AsciiWordmark, Button, SkeletonBlock, cn } from '../ui/primitives';
@@ -193,9 +201,24 @@ export function AppShell({
   const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(() => getCachedUserEmail());
   const [authChecked, setAuthChecked] = useState(false);
-  const [billing, setBilling] = useState<BillingSnapshot | null>(null);
+  const [billing, setBilling] = useState<BillingSnapshot | null>(() =>
+    getCachedBillingSnapshot()
+  );
+
+  useLayoutEffect(() => {
+    const cachedSnap = getCachedBillingSnapshot();
+    if (cachedSnap) setBilling((prev) => prev ?? cachedSnap);
+    const cachedEmail = getCachedUserEmail();
+    if (cachedEmail) setUserEmail((prev) => prev ?? cachedEmail);
+  }, []);
+
+  useEffect(() => {
+    return subscribeBillingSnapshot((snap) => {
+      setBilling(snap);
+    });
+  }, []);
 
   const shortcutsDialogRef = useRef<HTMLDialogElement>(null);
   const pressedOutsideRef = useRef(false);
@@ -279,13 +302,19 @@ export function AppShell({
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
       if (!data.session) {
+        clearBillingCache();
         router.replace('/login');
       } else {
-        setUserEmail(data.session.user.email ?? null);
+        const email = data.session.user.email ?? null;
+        setUserEmail(email);
+        setCachedUserEmail(email);
         void api
           .getBillingStatus()
           .then((snap) => {
-            if (mounted) setBilling(snap);
+            if (mounted) {
+              setBilling(snap);
+              setCachedBillingSnapshot(snap);
+            }
           })
           .catch(() => {});
       }
@@ -294,9 +323,12 @@ export function AppShell({
 
     const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
       if (!session) {
+        clearBillingCache();
         router.replace('/login');
       } else {
-        setUserEmail(session.user.email ?? null);
+        const email = session.user.email ?? null;
+        setUserEmail(email);
+        setCachedUserEmail(email);
       }
     });
 
@@ -307,6 +339,7 @@ export function AppShell({
   }, [router]);
 
   const handleSignOut = async () => {
+    clearBillingCache();
     const supabase = getSupabaseClient();
     await supabase?.auth.signOut();
     router.replace('/');

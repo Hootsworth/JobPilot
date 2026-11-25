@@ -1,4 +1,11 @@
-import { toInrLpa, type JobSeniority, type JobWorkMode, type SalaryPeriod } from '@jobpilot/shared';
+import {
+  toInrLpa,
+  type JobCareerCategory,
+  type JobEmploymentType,
+  type JobSeniority,
+  type JobWorkMode,
+  type SalaryPeriod
+} from '@jobpilot/shared';
 
 interface CityRule {
   canonical: string;
@@ -108,6 +115,111 @@ export function inferSeniority(title: string, description: string = ''): JobSeni
   return 'unknown';
 }
 
+export function inferEmploymentType(
+  title: string,
+  description: string = '',
+  explicitHint?: string | null
+): JobEmploymentType {
+  const hint = (explicitHint ?? '').trim().toLowerCase();
+  const titleLower = title.toLowerCase();
+  const lead = `${titleLower} ${hint} ${description.slice(0, 600).toLowerCase()}`;
+
+  if (/\bintern\b|\binternship\b|\bsummer analyst\b|\bapprentice\b/.test(`${titleLower} ${hint}`)) {
+    return 'internship';
+  }
+  if (/\bcontract\b|\bfreelance\b|\bconsultant\b|\btemp\b/.test(`${titleLower} ${hint}`)) {
+    return 'contract';
+  }
+  if (/\bpart[- ]?time\b/.test(`${titleLower} ${hint}`)) {
+    return 'part_time';
+  }
+  if (/\bfull[- ]?time\b|\bpermanent\b|\bregular\b/.test(lead)) {
+    return 'full_time';
+  }
+  if (/\binternship\b/.test(lead)) {
+    return 'internship';
+  }
+  return 'unknown';
+}
+
+export function inferFresherEligibility(
+  title: string,
+  description: string = '',
+  seniority: JobSeniority,
+  expMinYears: number | null
+): boolean | null {
+  if (seniority === 'intern' || seniority === 'fresher') return true;
+  if (['senior', 'staff', 'lead', 'manager'].includes(seniority)) return false;
+  if (expMinYears != null) {
+    if (expMinYears <= 1) return true;
+    if (expMinYears >= 2) return false;
+  }
+
+  const combined = `${title}\n${description.slice(0, 2000)}`.toLowerCase();
+  if (
+    /\bfreshers?\b|\bnew grad(?:uate)?s?\b|\bcampus\b|\b2025\s*(?:grad|batch)\b|\b2026\s*(?:grad|batch)\b|\bentry[- ]level\b|\b0\s*(?:-|–|to)\s*[12]\s*(?:years?|yrs?)\b/.test(
+      combined
+    )
+  ) {
+    return true;
+  }
+  return null;
+}
+
+export function inferCareerCategory(
+  title: string,
+  skills: string[] = [],
+  description: string = ''
+): JobCareerCategory {
+  const t = title.toLowerCase();
+  const body = `${t} ${skills.join(' ').toLowerCase()} ${description.slice(0, 600).toLowerCase()}`;
+
+  if (
+    /\bcyber\s?security\b|\bsecurity engineer\b|\bappsec\b|\binfosec\b|\bsoc analyst\b|\bpenetration\b|\bvulnerability\b|\bdevsecops\b/.test(
+      t
+    )
+  ) {
+    return 'cybersecurity';
+  }
+  if (
+    /\b(?:ai|ml|machine learning|deep learning|llm|nlp|computer vision|genai|generative ai|research scientist|ai engineer|mlops)\b/.test(
+      t
+    )
+  ) {
+    return 'ai_ml';
+  }
+  if (
+    /\bdata scientist\b|\bdata analyst\b|\bdata engineer\b|\banalytics\b|\bbi engineer\b|\bbusiness intelligence\b|\bquantitative\b/.test(
+      t
+    )
+  ) {
+    return 'data_science';
+  }
+  if (/\bproduct manager\b|\bproduct management\b|\bassociate pm\b|\bapm\b|\bproduct owner\b/.test(t)) {
+    return 'product_management';
+  }
+  if (
+    /\bproduct designer\b|\bux\b|\bui\/ux\b|\bux\/ui\b|\bvisual designer\b|\binteraction designer\b|\bdesign systems\b|\buser researcher\b/.test(
+      t
+    )
+  ) {
+    return 'design_ux';
+  }
+  if (
+    /\b(software|sde|swe|backend|front[- ]?end|full[- ]?stack|platform|devops|sre|cloud|mobile|android|ios|systems|developer|engineer)\b/.test(
+      t
+    )
+  ) {
+    return 'software_engineering';
+  }
+
+  if (/\bcybersecurity\b|\bappsec\b|\bsiem\b|\bowasp\b/.test(body)) return 'cybersecurity';
+  if (/\bpytorch\b|\btensorflow\b|\bllms\b|\brag\b/.test(body)) return 'ai_ml';
+  if (/\bpandas\b|\bdbt\b|\bsnowflake\b|\btableau\b|\bpower bi\b/.test(body)) return 'data_science';
+  if (/\bfigma\b|\buser research\b|\bwireframing\b/.test(body)) return 'design_ux';
+  return 'other';
+}
+
 export function extractExperienceYears(
   title: string,
   description: string = ''
@@ -166,19 +278,23 @@ export function extractSalary(params: {
   salaryPeriod: SalaryPeriod | null;
   salaryMinLpa: number | null;
   salaryMaxLpa: number | null;
+  stipendMonthlyInr: number | null;
 } {
   if (params.explicitMin != null || params.explicitMax != null) {
     const currency = (params.explicitCurrency ?? 'INR').toUpperCase();
     const period: SalaryPeriod = params.explicitPeriod ?? 'year';
     const min = params.explicitMin ?? null;
     const max = params.explicitMax ?? null;
+    const stipendMonthlyInr =
+      currency === 'INR' && period === 'month' ? (max ?? min) : null;
     return {
       salaryMin: min,
       salaryMax: max,
       salaryCurrency: currency,
       salaryPeriod: period,
       salaryMinLpa: min != null ? toInrLpa(min, currency, period) : null,
-      salaryMaxLpa: max != null ? toInrLpa(max, currency, period) : null
+      salaryMaxLpa: max != null ? toInrLpa(max, currency, period) : null,
+      stipendMonthlyInr
     };
   }
 
@@ -198,7 +314,8 @@ export function extractSalary(params: {
         salaryCurrency: 'INR',
         salaryPeriod: 'year',
         salaryMinLpa: minLpa,
-        salaryMaxLpa: maxLpa
+        salaryMaxLpa: maxLpa,
+        stipendMonthlyInr: null
       };
     }
   }
@@ -213,12 +330,33 @@ export function extractSalary(params: {
         salaryCurrency: 'INR',
         salaryPeriod: 'year',
         salaryMinLpa: lpa,
-        salaryMaxLpa: lpa
+        salaryMaxLpa: lpa,
+        stipendMonthlyInr: null
       };
     }
   }
 
-  // 2. INR monthly stipend / salary: "₹50,000 / month" or "INR 40k/mo"
+  // 2. INR monthly stipend / salary range: "₹30,000 - ₹50,000 / month" or "INR 25k-45k/mo"
+  const inrMonthRange = text.match(
+    /(?:₹|INR|Rs\.?)\s*([\d,]+(?:\.\d+)?k?)\s*(?:-|–|to)\s*(?:₹|INR|Rs\.?)?\s*([\d,]+(?:\.\d+)?k?)\s*(?:\/|\s*per\s*)(?:month|mo)\b/i
+  );
+  if (inrMonthRange?.[1] && inrMonthRange[2]) {
+    const minM = parseShorthandNumber(inrMonthRange[1]);
+    const maxM = parseShorthandNumber(inrMonthRange[2]);
+    if (minM && maxM && minM >= 2000 && maxM >= minM && maxM <= 2_000_000) {
+      return {
+        salaryMin: minM,
+        salaryMax: maxM,
+        salaryCurrency: 'INR',
+        salaryPeriod: 'month',
+        salaryMinLpa: toInrLpa(minM, 'INR', 'month'),
+        salaryMaxLpa: toInrLpa(maxM, 'INR', 'month'),
+        stipendMonthlyInr: maxM
+      };
+    }
+  }
+
+  // 2b. INR single monthly stipend / salary: "₹50,000 / month" or "INR 40k/mo"
   const inrMonth = text.match(
     /(?:₹|INR|Rs\.?)\s*([\d,]+(?:\.\d+)?k?)\s*(?:\/|\s*per\s*)(?:month|mo)\b/i
   );
@@ -232,7 +370,28 @@ export function extractSalary(params: {
         salaryCurrency: 'INR',
         salaryPeriod: 'month',
         salaryMinLpa: lpa,
-        salaryMaxLpa: lpa
+        salaryMaxLpa: lpa,
+        stipendMonthlyInr: monthly
+      };
+    }
+  }
+
+  // 2c. INR annual absolute range: "₹12,00,000 - ₹18,00,000" or "INR 1000000 - 1500000"
+  const inrAnnualRange = text.match(
+    /(?:₹|INR|Rs\.?)\s*([\d,]{6,10})\s*(?:-|–|to)\s*(?:₹|INR|Rs\.?)?\s*([\d,]{6,10})(?:\s*(?:\/|\s*per\s*)(?:year|yr|annum|p\.?a\.?))?/i
+  );
+  if (inrAnnualRange?.[1] && inrAnnualRange[2]) {
+    const minY = parseShorthandNumber(inrAnnualRange[1]);
+    const maxY = parseShorthandNumber(inrAnnualRange[2]);
+    if (minY && maxY && minY >= 150_000 && maxY >= minY && maxY <= 30_000_000) {
+      return {
+        salaryMin: minY,
+        salaryMax: maxY,
+        salaryCurrency: 'INR',
+        salaryPeriod: 'year',
+        salaryMinLpa: toInrLpa(minY, 'INR', 'year'),
+        salaryMaxLpa: toInrLpa(maxY, 'INR', 'year'),
+        stipendMonthlyInr: null
       };
     }
   }
@@ -251,7 +410,8 @@ export function extractSalary(params: {
         salaryCurrency: 'USD',
         salaryPeriod: 'year',
         salaryMinLpa: toInrLpa(rawMin, 'USD', 'year'),
-        salaryMaxLpa: toInrLpa(rawMax, 'USD', 'year')
+        salaryMaxLpa: toInrLpa(rawMax, 'USD', 'year'),
+        stipendMonthlyInr: null
       };
     }
   }
@@ -262,7 +422,8 @@ export function extractSalary(params: {
     salaryCurrency: null,
     salaryPeriod: null,
     salaryMinLpa: null,
-    salaryMaxLpa: null
+    salaryMaxLpa: null,
+    stipendMonthlyInr: null
   };
 }
 
@@ -323,7 +484,47 @@ const SKILL_CATALOG: Array<{ label: string; pattern: RegExp }> = [
   { label: 'Flutter', pattern: /\bflutter\b/i },
   { label: 'React Native', pattern: /\breact native\b/i },
   { label: 'Kotlin', pattern: /\bkotlin\b/i },
-  { label: 'Swift', pattern: /\bswift\b/i }
+  { label: 'Swift', pattern: /\bswift\b/i },
+  // AI / ML & Data Science
+  { label: 'Scikit-learn', pattern: /\bscikit[- ]?learn\b|\bsklearn\b/i },
+  { label: 'Hugging Face', pattern: /\bhugging\s?face\b|\btransformers\b/i },
+  { label: 'LangChain', pattern: /\blangchain\b|\blanggraph\b/i },
+  { label: 'Computer Vision', pattern: /\bcomputer vision\b|\bopencv\b/i },
+  { label: 'NLP', pattern: /\bnlp\b|\bnatural language processing\b/i },
+  { label: 'MLOps', pattern: /\bmlops\b|\bmlflow\b/i },
+  { label: 'CUDA', pattern: /\bcuda\b/i },
+  { label: 'Pandas', pattern: /\bpandas\b/i },
+  { label: 'dbt', pattern: /\bdbt\b/i },
+  { label: 'Tableau', pattern: /\btableau\b/i },
+  { label: 'Power BI', pattern: /\bpower\s?bi\b/i },
+  { label: 'BigQuery', pattern: /\bbigquery\b/i },
+  { label: 'Databricks', pattern: /\bdatabricks\b/i },
+  { label: 'Looker', pattern: /\blooker\b/i },
+  // Product Management
+  { label: 'Product Strategy', pattern: /\bproduct strategy\b|\bproduct vision\b/i },
+  { label: 'Roadmapping', pattern: /\broadmap(?:ping|s)?\b/i },
+  { label: 'A/B Testing', pattern: /\ba\/b testing\b|\bexperimentation\b/i },
+  { label: 'Jira', pattern: /\bjira\b/i },
+  { label: 'Mixpanel', pattern: /\bmixpanel\b/i },
+  { label: 'Amplitude', pattern: /\bamplitude\b/i },
+  { label: 'Agile', pattern: /\bagile\b|\bscrum\b/i },
+  // Design & UX
+  { label: 'Figma', pattern: /\bfigma\b/i },
+  { label: 'UI/UX', pattern: /\bui\/ux\b|\bux\/ui\b|\buser experience\b/i },
+  { label: 'Design Systems', pattern: /\bdesign systems?\b/i },
+  { label: 'Prototyping', pattern: /\bprototyping\b/i },
+  { label: 'User Research', pattern: /\buser research\b|\busability testing\b/i },
+  { label: 'Wireframing', pattern: /\bwirefram(?:e|ing)\b/i },
+  // Cybersecurity
+  { label: 'AppSec', pattern: /\bappsec\b|\bapplication security\b/i },
+  { label: 'Cybersecurity', pattern: /\bcyber\s?security\b|\binfosec\b/i },
+  { label: 'Penetration Testing', pattern: /\bpenetration testing\b|\bpentest(?:ing)?\b/i },
+  { label: 'SIEM', pattern: /\bsiem\b|\bsplunk\b/i },
+  { label: 'OWASP', pattern: /\bowasp\b/i },
+  { label: 'IAM', pattern: /\biam\b|\bidentity and access management\b/i },
+  { label: 'Cloud Security', pattern: /\bcloud security\b|\bdevsecops\b/i },
+  { label: 'Zero Trust', pattern: /\bzero trust\b/i },
+  { label: 'SOC', pattern: /\bsoc analyst\b|\bsecurity operations\b/i }
 ];
 
 export function extractSkillsFromText(text: string): string[] {
