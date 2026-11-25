@@ -2706,10 +2706,30 @@ export function App() {
             <div className="jp-panel">
               <div className="jp-label">Inline Button Visibility (&quot;Autofill via JobPilot&quot;)</div>
               <p className="jp-meta">
-                Control which websites show the inline button beside Apply CTAs. Side panel and
-                right-click autofill always remain available.
+                Off by default so non-job pages stay clean. Side panel and right-click Autofill
+                always work on any website without enabling this.
               </p>
-              {scan?.url && /^https?:\/\//i.test(scan.url) ? (
+              <label className="jp-row" style={{ cursor: 'pointer', minHeight: 32 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.showInlineApplyButton}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    void saveExtensionSettings({ showInlineApplyButton: checked }).then((next) => {
+                      setSettings(next);
+                      setStatusMsg(
+                        checked
+                          ? 'Enabled opt-in inline "Autofill via JobPilot" button beside job Apply CTAs.'
+                          : 'Disabled inline "Autofill via JobPilot" button on web pages.'
+                      );
+                    });
+                  }}
+                />
+                <span>
+                  Show inline &quot;Autofill via JobPilot&quot; button beside Apply CTAs (Opt-in)
+                </span>
+              </label>
+              {settings.showInlineApplyButton && scan?.url && /^https?:\/\//i.test(scan.url) ? (
                 (() => {
                   let currentHost = '';
                   try {
@@ -2735,7 +2755,7 @@ export function App() {
                   );
                 })()
               ) : null}
-              {settings.hiddenCtaDomains.length > 0 ? (
+              {settings.showInlineApplyButton && settings.hiddenCtaDomains.length > 0 ? (
                 <div className="jp-field-list">
                   {settings.hiddenCtaDomains.map((domain) => (
                     <div
@@ -2754,9 +2774,7 @@ export function App() {
                     </div>
                   ))}
                 </div>
-              ) : (
-                <div className="jp-meta">No websites hidden right now.</div>
-              )}
+              ) : null}
             </div>
           </div>
         ) : null}

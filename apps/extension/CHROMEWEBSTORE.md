@@ -15,7 +15,7 @@ This document contains the ready-to-paste Chrome Web Store listing copy, permiss
 JobPilot helps software engineers, students, and job seekers complete job applications across any company career site or job board in seconds without sacrificing accuracy or control.
 
 **Key Capabilities**
-- **Autofill via JobPilot on Any Website**: Adds an inline **"Autofill via JobPilot"** button beside Apply buttons and works directly from the Side Panel on both popular application platforms and custom company career portals.
+- **Autofill via JobPilot on Any Website**: Trigger Autofill directly from the Chrome Side Panel or right-click menu on any company career portal or job board, plus an **opt-in** inline **"Autofill via JobPilot"** button beside Apply CTAs (off by default, with zero unprompted floating badges or field counters).
 - **AI Field Identification & Grounded Filling**: Scans forms across any site, maps fields to your Master Profile and tailored resume, and fills answers grounded in your Story Bank and Saved Answer Bank.
 - **Asks Only What Is Required**: Automatically fills everything known from your profile and asks quick follow-up questions **only** for genuinely required fields that cannot be filled automatically—skipping optional guesswork.
 - **Built for India & Global Applications**: Native support for Current/Expected CTC (in LPA), notice period, preferred cities, willingness to relocate, fresher/internship status, CGPA, college, and 10th/12th board marks.

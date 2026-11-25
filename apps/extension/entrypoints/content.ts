@@ -19,7 +19,6 @@ import type {
   PageValidationError,
   PdfBytesResponse
 } from '../src/lib/messaging';
-import { JobPilotOverlayController } from '../src/lib/overlay';
 import { getExtensionSettings } from '../src/lib/storage';
 
 const HIGHLIGHT_CLASS_OK = '2px solid #007aff';
@@ -160,7 +159,7 @@ export default defineContentScript({
     const isTopFrame = window === window.top;
     const currentHostname = window.location.hostname.toLowerCase();
 
-    const triggerAutofillFromPage = (source: 'apply_cta' | 'overlay') => {
+    const triggerAutofillFromPage = (source: 'apply_cta') => {
       void chrome.runtime
         .sendMessage({
           type: 'TRIGGER_AUTOFILL_VIA_JOBPILOT',
@@ -168,10 +167,6 @@ export default defineContentScript({
         } satisfies ExtensionMessage)
         .catch(() => {});
     };
-
-    const overlay = new JobPilotOverlayController(() => {
-      triggerAutofillFromPage('overlay');
-    });
 
     const injector = isTopFrame
       ? new ApplyButtonInjector(
@@ -192,14 +187,28 @@ export default defineContentScript({
     const syncInjectorHiddenState = async () => {
       if (!injector) return;
       const settings = await getExtensionSettings();
-      const isHidden = settings.hiddenCtaDomains.includes(currentHostname);
-      injector.setPaused(isHidden);
+      const shouldShow =
+        settings.showInlineApplyButton &&
+        !settings.hiddenCtaDomains.includes(currentHostname) &&
+        isLikelyJobOrApplicationPage(window.location.href, document);
+      injector.setPaused(!shouldShow);
     };
 
     if (isTopFrame) {
       chrome.storage.onChanged.addListener((changes, areaName) => {
         if (areaName === 'local' && changes['jobpilot_ext_settings']) {
-          void syncInjectorHiddenState();
+          void (async () => {
+            await syncInjectorHiddenState();
+            const updatedSettings = await getExtensionSettings();
+            if (
+              updatedSettings.showInlineApplyButton &&
+              !observerStarted &&
+              !updatedSettings.hiddenCtaDomains.includes(currentHostname) &&
+              isLikelyJobOrApplicationPage(window.location.href, document)
+            ) {
+              await startPageMonitoring();
+            }
+          })();
         }
       });
     }
@@ -254,7 +263,6 @@ export default defineContentScript({
       });
 
       if (scan.disabledByUser) {
-        overlay.unmount();
         lastScan = null;
         return {
           adapterId: scan.adapterId,
@@ -269,14 +277,6 @@ export default defineContentScript({
       }
 
       lastScan = scan;
-
-      if (isTopFrame && scan.fields.length > 0) {
-        overlay.mount(scan.adapterId.toUpperCase(), `${scan.fields.length} fields detected`);
-      } else if (!isTopFrame && scan.fields.length > 0) {
-        overlay.mount(scan.adapterId.toUpperCase(), `${scan.fields.length} embedded fields`);
-      } else {
-        overlay.unmount();
-      }
 
       return {
         adapterId: scan.adapterId,
@@ -365,53 +365,67 @@ export default defineContentScript({
       { capture: true, passive: true }
     );
 
+    const ensureMultiStepObserver = (disabledByUser: boolean) => {
+      if (observerStarted || disabledByUser || !document.body) return;
+      observerStarted = true;
+      observeMultiStepForm(document.body, () => {
+        checkPostSubmitConfirmation();
+        void syncInjectorHiddenState();
+        void (async () => {
+          const updated = await performScan();
+          const newFieldsCount = updated.fields.filter(
+            (f) => !previousFieldIds.has(f.fieldId)
+          ).length;
+          const stepChanged = hasExecutedFillOnPage && newFieldsCount >= 2;
+          previousFieldIds = new Set(updated.fields.map((f) => f.fieldId));
+          const validationErrors = collectPageValidationErrors(document, lastScan);
+          try {
+            await chrome.runtime.sendMessage({
+              type: 'PAGE_STRUCTURE_UPDATED',
+              adapterId: updated.adapterId,
+              fieldCount: updated.fields.length,
+              stepChanged,
+              validationErrors
+            } satisfies ExtensionMessage);
+          } catch {
+            // Side panel not open
+          }
+        })();
+      });
+    };
+
     const startPageMonitoring = async () => {
       if (observerStarted) return;
-      observerStarted = true;
       const initial = await performScan();
       previousFieldIds = new Set(initial.fields.map((f) => f.fieldId));
       await syncInjectorHiddenState();
       checkPostSubmitConfirmation();
-      if (!initial.disabledByUser && document.body) {
-        observeMultiStepForm(document.body, () => {
-          checkPostSubmitConfirmation();
-          void syncInjectorHiddenState();
-          void (async () => {
-            const updated = await performScan();
-            const newFieldsCount = updated.fields.filter(
-              (f) => !previousFieldIds.has(f.fieldId)
-            ).length;
-            const stepChanged = hasExecutedFillOnPage && newFieldsCount >= 2;
-            previousFieldIds = new Set(updated.fields.map((f) => f.fieldId));
-            const validationErrors = collectPageValidationErrors(document, lastScan);
-            try {
-              await chrome.runtime.sendMessage({
-                type: 'PAGE_STRUCTURE_UPDATED',
-                adapterId: updated.adapterId,
-                fieldCount: updated.fields.length,
-                stepChanged,
-                validationErrors
-              } satisfies ExtensionMessage);
-            } catch {
-              // Side panel not open
-            }
-          })();
-        });
-      }
+      ensureMultiStepObserver(initial.disabledByUser);
     };
 
-    const initialRelevant = isTopFrame
-      ? isLikelyJobOrApplicationPage(window.location.href, document)
-      : collectRawFormControls(document).length > 0;
+    const initialSettings = await getExtensionSettings();
+    const initialRelevant =
+      isTopFrame &&
+      initialSettings.showInlineApplyButton &&
+      !initialSettings.hiddenCtaDomains.includes(currentHostname) &&
+      isLikelyJobOrApplicationPage(window.location.href, document);
 
     if (initialRelevant) {
       await startPageMonitoring();
     } else if (isTopFrame) {
       checkPostSubmitConfirmation();
       const recheckJobPage = () => {
-        if (!observerStarted && isLikelyJobOrApplicationPage(window.location.href, document)) {
-          void startPageMonitoring();
-        }
+        void (async () => {
+          const latest = await getExtensionSettings();
+          if (
+            !observerStarted &&
+            latest.showInlineApplyButton &&
+            !latest.hiddenCtaDomains.includes(currentHostname) &&
+            isLikelyJobOrApplicationPage(window.location.href, document)
+          ) {
+            await startPageMonitoring();
+          }
+        })();
       };
       window.addEventListener('popstate', recheckJobPage);
       window.addEventListener('hashchange', recheckJobPage);
@@ -425,6 +439,7 @@ export default defineContentScript({
         (async () => {
           const payload = await performScan();
           previousFieldIds = new Set(payload.fields.map((f) => f.fieldId));
+          ensureMultiStepObserver(payload.disabledByUser);
           await syncInjectorHiddenState();
           if (isTopFrame && payload.fields.length === 0) {
             await new Promise((r) => setTimeout(r, 40));
@@ -524,11 +539,6 @@ export default defineContentScript({
 
           await batchHighlightElements(toHighlight);
 
-          overlay.mount(
-            current.adapterId.toUpperCase(),
-            `Filled ${exec.filledCount} — Review & click Submit`
-          );
-
           sendResponse({
             ok: true,
             filledCount: exec.filledCount,
@@ -549,8 +559,7 @@ export default defineContentScript({
           const restoredCount = lastUndo ? lastUndo() : 0;
           lastUndo = null;
           await clearAllHighlights();
-          const refreshed = await performScan();
-          overlay.mount(refreshed.adapterId.toUpperCase(), `Undid ${restoredCount} field(s)`);
+          await performScan();
           sendResponse({ ok: true, restoredCount });
         })();
         return true;

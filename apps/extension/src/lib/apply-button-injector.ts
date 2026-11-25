@@ -1,14 +1,20 @@
-const APPLY_CTA_REGEX =
-  /\b(apply(\s+(now|online|today|here|for\s+this\s+(job|role|position|opening)|on\s+company\s+(site|website)))?|easy\s+apply|quick\s+apply|start\s+application|submit\s+application)\b/i;
+const EXPLICIT_APPLY_CTA_REGEX =
+  /\b(apply\s+(now|for\s+this\s+(job|role|position|opening)|on\s+company\s+(site|website))|easy\s+apply|quick\s+apply|start\s+application|submit\s+application)\b/i;
+
+const LOOSE_ATS_APPLY_CTA_REGEX =
+  /^\s*(apply(\s+(now|online|today|here))?|submit\s+application)\s*$/i;
 
 const APPLY_EXCLUDE_REGEX =
-  /\b(already\s+applied|applied|apply\s+(filter|filters|coupon|promo|code|discount|voucher|changes|settings)|filter|filters|save\s+job|bookmark|share|report)\b/i;
+  /\b(already\s+applied|applied|apply\s+(filter|filters|coupon|promo|code|discount|voucher|changes|settings|credit|now\s+for\s+(card|loan))|filter|filters|save\s+job|bookmark|share|report)\b/i;
 
-const KNOWN_JOB_URL_REGEX =
-  /(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|myworkdaysite\.com|naukri\.com|foundit\.in|internshala\.com|instahyre\.com|wellfound\.com|angel\.co|linkedin\.com\/jobs|smartrecruiters\.com|icims\.com|taleo\.net|bamboohr\.com|workable\.com|recruitee\.com|rippling\.com|jobvite\.com|successfactors\.com|dayforcehcm\.com|zohorecruit\.com|darwinbox\.|keka\.com|pinpointhq\.com|dover\.com|gem\.com|\/careers?\b|\/jobs?\b|\/apply\b|\/application\b|\/opening\b|\/requisition\b)/i;
+const KNOWN_ATS_HOST_REGEX =
+  /(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|myworkdaysite\.com|naukri\.com|foundit\.in|internshala\.com|instahyre\.com|wellfound\.com|angel\.co|linkedin\.com\/jobs|smartrecruiters\.com|icims\.com|taleo\.net|bamboohr\.com|workable\.com|recruitee\.com|rippling\.com|jobvite\.com|successfactors\.com|dayforcehcm\.com|zohorecruit\.com|darwinbox\.|keka\.com|pinpointhq\.com|dover\.com|gem\.com)/i;
 
-const APPLICATION_FIELD_HINT_REGEX =
-  /(resume|cv|cover\s+letter|linkedin|portfolio|github|notice\s+period|expected\s+ctc|current\s+ctc|work\s+authorization|sponsorship|first\s+name|last\s+name|full\s+name|email|phone|cgpa|graduation)/i;
+const JOB_PATH_REGEX =
+  /\/(careers?|jobs?|job-openings?|positions?|openings?|requisitions?)\b/i;
+
+const JOB_SPECIFIC_FIELD_HINT_REGEX =
+  /\b(resume|cv|cover\s+letter|notice\s+period|expected\s+ctc|current\s+ctc|work\s+authorization|visa\s+sponsorship|cgpa)\b/i;
 
 const CTA_TAG = 'jobpilot-apply-cta';
 const OVERLAY_HOST_ID = 'jobpilot-overlay-host';
@@ -36,6 +42,7 @@ function isElementVisiblyInteractable(el: HTMLElement): boolean {
 }
 
 export function findPrimaryApplyTargets(doc: Document): HTMLElement[] {
+  const isKnownAts = KNOWN_ATS_HOST_REGEX.test(doc.location?.href ?? window.location.href);
   const candidates = Array.from(
     doc.querySelectorAll<HTMLElement>(
       'button, a[href], [role="button"], input[type="button"], input[type="submit"]'
@@ -49,7 +56,10 @@ export function findPrimaryApplyTargets(doc: Document): HTMLElement[] {
     const text = getControlLabel(el);
     if (!text || text.length > 64) continue;
     if (APPLY_EXCLUDE_REGEX.test(text)) continue;
-    if (!APPLY_CTA_REGEX.test(text)) continue;
+
+    const isExplicitApply = EXPLICIT_APPLY_CTA_REGEX.test(text);
+    const isLooseAtsApply = isKnownAts && LOOSE_ATS_APPLY_CTA_REGEX.test(text);
+    if (!isExplicitApply && !isLooseAtsApply) continue;
 
     let score = 1;
     if (/\b(apply\s+now|easy\s+apply|quick\s+apply|apply\s+for\s+this)\b/i.test(text)) {
@@ -72,8 +82,13 @@ export function findPrimaryApplyTargets(doc: Document): HTMLElement[] {
 export function isLikelyJobOrApplicationPage(url: string, doc: Document): boolean {
   if (!/^https?:\/\//i.test(url)) return false;
 
-  if (KNOWN_JOB_URL_REGEX.test(url)) {
+  if (KNOWN_ATS_HOST_REGEX.test(url)) {
     return true;
+  }
+
+  // On non-ATS custom websites, require a career/job URL path AND either a clear Apply CTA or job-specific fields
+  if (!JOB_PATH_REGEX.test(url)) {
+    return false;
   }
 
   if (findPrimaryApplyTargets(doc).length > 0) {
@@ -82,7 +97,6 @@ export function isLikelyJobOrApplicationPage(url: string, doc: Document): boolea
 
   const controls = doc.querySelectorAll('input:not([type="hidden"]), select, textarea, [contenteditable="true"]');
   if (controls.length >= 2) {
-    let hintMatches = 0;
     const sampleLimit = Math.min(controls.length, 30);
     for (let i = 0; i < sampleLimit; i += 1) {
       const el = controls[i] as HTMLElement;
@@ -90,24 +104,21 @@ export function isLikelyJobOrApplicationPage(url: string, doc: Document): boolea
         el.getAttribute('name'),
         el.getAttribute('id'),
         el.getAttribute('placeholder'),
-        el.getAttribute('aria-label'),
-        el.getAttribute('autocomplete')
+        el.getAttribute('aria-label')
       ]
         .filter(Boolean)
         .join(' ');
-      if (APPLICATION_FIELD_HINT_REGEX.test(attrs)) {
-        hintMatches += 1;
+      if (JOB_SPECIFIC_FIELD_HINT_REGEX.test(attrs)) {
+        return true;
       }
-      if (hintMatches >= 2) return true;
     }
 
     const labels = doc.querySelectorAll('label');
     const labelLimit = Math.min(labels.length, 25);
     for (let i = 0; i < labelLimit; i += 1) {
-      if (APPLICATION_FIELD_HINT_REGEX.test(labels[i]?.textContent ?? '')) {
-        hintMatches += 1;
+      if (JOB_SPECIFIC_FIELD_HINT_REGEX.test(labels[i]?.textContent ?? '')) {
+        return true;
       }
-      if (hintMatches >= 2) return true;
     }
   }
 

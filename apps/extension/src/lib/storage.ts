@@ -24,6 +24,7 @@ export interface ExtensionSettingsState {
   supabaseUrl: string;
   supabaseAnonKey: string;
   enabledAdapters: AdapterEnabledMap;
+  showInlineApplyButton: boolean;
   hiddenCtaDomains: string[];
 }
 
@@ -66,6 +67,7 @@ export const DEFAULT_SETTINGS: ExtensionSettingsState = {
   supabaseAnonKey:
     extEnv['VITE_SUPABASE_PUBLISHABLE_KEY'] || extEnv['VITE_SUPABASE_ANON_KEY'] || '',
   enabledAdapters: getDefaultEnabledAdapterMap(),
+  showInlineApplyButton: false,
   hiddenCtaDomains: []
 };
 
@@ -101,6 +103,7 @@ export async function getExtensionSettings(): Promise<ExtensionSettingsState> {
       wellfound: raw?.enabledAdapters?.wellfound ?? defaults.wellfound,
       linkedin: raw?.enabledAdapters?.linkedin ?? defaults.linkedin
     },
+    showInlineApplyButton: Boolean(raw?.showInlineApplyButton ?? false),
     hiddenCtaDomains: normalizeHiddenDomains(raw?.hiddenCtaDomains)
   };
 }
@@ -119,6 +122,7 @@ export async function saveExtensionSettings(
       ...current.enabledAdapters,
       ...(patch.enabledAdapters ?? {})
     },
+    showInlineApplyButton: patch.showInlineApplyButton ?? current.showInlineApplyButton,
     hiddenCtaDomains: normalizeHiddenDomains(patch.hiddenCtaDomains ?? current.hiddenCtaDomains)
   };
   await chrome.storage.local.set({ [STORAGE_KEYS.settings]: next });
