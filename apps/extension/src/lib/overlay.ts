@@ -5,7 +5,7 @@ template.innerHTML = `
   <div class="jp-chip" part="chip">
     <span class="jp-badge" id="jp-ats">JP</span>
     <span class="jp-label" id="jp-text">Scanning form...</span>
-    <button type="button" class="jp-btn" id="jp-open-btn" part="button">Review</button>
+    <button type="button" class="jp-btn" id="jp-open-btn" part="button">Autofill via JobPilot</button>
   </div>
 `;
 
@@ -118,6 +118,7 @@ export class JobPilotOverlayController {
     if (!document.body) return;
     if (!this.host) {
       const host = document.createElement('jobpilot-status-chip');
+      host.id = 'jobpilot-overlay-host';
       host.setAttribute(HOST_ATTR, 'true');
       const shadow = host.attachShadow({ mode: 'open', delegatesFocus: true });
       const sheet = getSharedStyleSheet();

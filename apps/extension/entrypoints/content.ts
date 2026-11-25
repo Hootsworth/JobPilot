@@ -8,6 +8,10 @@ import {
 } from '@jobpilot/form-engine';
 import type { FillExecutionItemResult } from '@jobpilot/shared';
 import { base64ToUint8 } from '../src/lib/api-client';
+import {
+  ApplyButtonInjector,
+  isLikelyJobOrApplicationPage
+} from '../src/lib/apply-button-injector';
 import type {
   ApiProxyResponse,
   ExtensionMessage,
@@ -66,30 +70,46 @@ async function clearAllHighlights(): Promise<void> {
 }
 
 export default defineContentScript({
-  matches: [
-    'https://boards.greenhouse.io/*',
-    'https://job-boards.greenhouse.io/*',
-    'https://boards.eu.greenhouse.io/*',
-    'https://job-boards.eu.greenhouse.io/*',
-    'https://jobs.lever.co/*',
-    'https://jobs.eu.lever.co/*',
-    'https://jobs.ashbyhq.com/*'
-  ],
+  matches: ['https://*/*', 'http://*/*'],
+  excludeMatches: ['https://jobpilot.singulr.tech/*'],
   allFrames: true,
   runAt: 'document_idle',
 
   async main() {
+    if (
+      window.location.hostname === 'localhost' &&
+      (window.location.port === '3000' || window.location.port === '4000')
+    ) {
+      return;
+    }
+
     const winFlag = window as unknown as { __jobpilotContentLoaded?: boolean };
     if (winFlag.__jobpilotContentLoaded) return;
     winFlag.__jobpilotContentLoaded = true;
 
     let lastScan: PageScanResult | null = null;
     let lastUndo: (() => number) | null = null;
+    let observerStarted = false;
     const isTopFrame = window === window.top;
 
+    const triggerAutofillFromPage = (source: 'apply_cta' | 'overlay') => {
+      void chrome.runtime
+        .sendMessage({
+          type: 'TRIGGER_AUTOFILL_VIA_JOBPILOT',
+          source
+        } satisfies ExtensionMessage)
+        .catch(() => {});
+    };
+
     const overlay = new JobPilotOverlayController(() => {
-      void chrome.runtime.sendMessage({ type: 'OPEN_SIDEPANEL' });
+      triggerAutofillFromPage('overlay');
     });
+
+    const injector = isTopFrame
+      ? new ApplyButtonInjector(() => {
+          triggerAutofillFromPage('apply_cta');
+        })
+      : null;
 
     const checkPostSubmitConfirmation = () => {
       if (!isTopFrame) return;
@@ -204,24 +224,47 @@ export default defineContentScript({
       { capture: true, passive: true }
     );
 
-    const initial = await performScan();
-    checkPostSubmitConfirmation();
-    if (!initial.disabledByUser && document.body) {
-      observeMultiStepForm(document.body, () => {
-        checkPostSubmitConfirmation();
-        void (async () => {
-          const updated = await performScan();
-          try {
-            await chrome.runtime.sendMessage({
-              type: 'PAGE_STRUCTURE_UPDATED',
-              adapterId: updated.adapterId,
-              fieldCount: updated.fields.length
-            });
-          } catch {
-            // Side panel not open
-          }
-        })();
-      });
+    const startPageMonitoring = async () => {
+      if (observerStarted) return;
+      observerStarted = true;
+      const initial = await performScan();
+      injector?.scheduleSync();
+      checkPostSubmitConfirmation();
+      if (!initial.disabledByUser && document.body) {
+        observeMultiStepForm(document.body, () => {
+          checkPostSubmitConfirmation();
+          injector?.scheduleSync();
+          void (async () => {
+            const updated = await performScan();
+            try {
+              await chrome.runtime.sendMessage({
+                type: 'PAGE_STRUCTURE_UPDATED',
+                adapterId: updated.adapterId,
+                fieldCount: updated.fields.length
+              });
+            } catch {
+              // Side panel not open
+            }
+          })();
+        });
+      }
+    };
+
+    const initialRelevant = isTopFrame
+      ? isLikelyJobOrApplicationPage(window.location.href, document)
+      : collectRawFormControls(document).length > 0;
+
+    if (initialRelevant) {
+      await startPageMonitoring();
+    } else if (isTopFrame) {
+      checkPostSubmitConfirmation();
+      const recheckJobPage = () => {
+        if (!observerStarted && isLikelyJobOrApplicationPage(window.location.href, document)) {
+          void startPageMonitoring();
+        }
+      };
+      window.addEventListener('popstate', recheckJobPage);
+      window.addEventListener('hashchange', recheckJobPage);
     }
 
     chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
@@ -231,6 +274,7 @@ export default defineContentScript({
         }
         (async () => {
           const payload = await performScan();
+          injector?.scheduleSync();
           if (isTopFrame && payload.fields.length === 0) {
             await new Promise((r) => setTimeout(r, 40));
           }

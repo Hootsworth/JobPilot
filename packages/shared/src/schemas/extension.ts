@@ -249,7 +249,7 @@ export const FallbackFillRequestSchema = z.object({
   jobTitle: z.string().min(1).max(300),
   companyName: z.string().min(1).max(200),
   jobDescription: z.string().max(20_000).optional(),
-  fields: z.array(FallbackFillFieldInputSchema).min(1).max(30),
+  fields: z.array(FallbackFillFieldInputSchema).min(1).max(40),
   aiMode: AiQualityModeSchema.optional()
 });
 export type FallbackFillRequest = z.infer<typeof FallbackFillRequestSchema>;
@@ -260,13 +260,28 @@ export const FallbackFillSuggestionSchema = z.object({
   proposedValue: z.string(),
   confidence: z.number().min(0).max(0.85),
   rationale: z.string().default(''),
-  groundedIn: z.string().default('')
+  groundedIn: z.string().default(''),
+  needsUserInput: z.boolean().optional(),
+  questionForUser: z.string().max(400).optional()
 });
 export type FallbackFillSuggestion = z.infer<typeof FallbackFillSuggestionSchema>;
+
+export const MissingRequiredQuestionSchema = z.object({
+  fieldId: z.string().min(1),
+  label: z.string().min(1).max(500),
+  controlType: FieldControlTypeSchema,
+  options: z.array(z.string()).max(60).optional(),
+  maxLength: z.number().int().min(1).max(5000).optional(),
+  canonicalKey: CanonicalFieldKeySchema.optional(),
+  question: z.string().min(1).max(400),
+  reason: z.string().max(300).optional()
+});
+export type MissingRequiredQuestion = z.infer<typeof MissingRequiredQuestionSchema>;
 
 export const FallbackFillResponseSchema = z.object({
   suggestions: z.array(FallbackFillSuggestionSchema),
   usedLlm: z.boolean(),
+  missingRequired: z.array(MissingRequiredQuestionSchema).default([]),
   note: z.string().optional()
 });
 export type FallbackFillResponse = z.infer<typeof FallbackFillResponseSchema>;

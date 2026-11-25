@@ -324,7 +324,7 @@ export default defineBackground(() => {
     chrome.contextMenus.removeAll(() => {
       chrome.contextMenus.create({
         id: MENU_OPEN_PANEL,
-        title: 'Open JobPilot Autofill Review',
+        title: 'Autofill via JobPilot',
         contexts: ['page', 'editable']
       });
       chrome.contextMenus.create({
@@ -431,12 +431,29 @@ export default defineBackground(() => {
   chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (info.menuItemId === MENU_OPEN_PANEL && tab?.windowId != null) {
       const openPromise = chrome.sidePanel.open({ windowId: tab.windowId });
+      const pendingPromise =
+        tab.id != null
+          ? chrome.storage.session.set({
+              pendingAutofill: {
+                tabId: tab.id,
+                url: tab.url ?? '',
+                requestedAt: Date.now()
+              }
+            })
+          : Promise.resolve();
       void (async () => {
         try {
-          await openPromise;
+          await Promise.all([openPromise, pendingPromise]);
           if (tab.id != null) {
             await chrome.action.setBadgeText({ tabId: tab.id, text: 'JP' });
             await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#007aff' });
+            void chrome.runtime
+              .sendMessage({
+                type: 'RUN_AUTOFILL_VIA_JOBPILOT',
+                tabId: tab.id,
+                url: tab.url
+              } satisfies ExtensionMessage)
+              .catch(() => {});
           }
         } catch (err) {
           console.warn('Failed opening side panel from context menu:', err);
@@ -495,6 +512,42 @@ export default defineBackground(() => {
       void (async () => {
         try {
           await openPromise;
+          sendResponse({ ok: true });
+        } catch (err) {
+          sendResponse({ ok: false, error: String(err) });
+        }
+      })();
+      return true;
+    }
+
+    if (message?.type === 'TRIGGER_AUTOFILL_VIA_JOBPILOT') {
+      const windowId = sender.tab?.windowId;
+      const tabId = sender.tab?.id;
+      const tabUrl = sender.tab?.url;
+      if (windowId == null || tabId == null) {
+        sendResponse({ ok: false, error: 'Missing active tab or windowId' });
+        return false;
+      }
+      const openPromise = chrome.sidePanel.open({ windowId });
+      const pendingPromise = chrome.storage.session.set({
+        pendingAutofill: {
+          tabId,
+          url: tabUrl ?? '',
+          requestedAt: Date.now()
+        }
+      });
+      void (async () => {
+        try {
+          await Promise.all([openPromise, pendingPromise]);
+          await chrome.action.setBadgeText({ tabId, text: 'JP' });
+          await chrome.action.setBadgeBackgroundColor({ tabId, color: '#007aff' });
+          void chrome.runtime
+            .sendMessage({
+              type: 'RUN_AUTOFILL_VIA_JOBPILOT',
+              tabId,
+              url: tabUrl
+            } satisfies ExtensionMessage)
+            .catch(() => {});
           sendResponse({ ok: true });
         } catch (err) {
           sendResponse({ ok: false, error: String(err) });

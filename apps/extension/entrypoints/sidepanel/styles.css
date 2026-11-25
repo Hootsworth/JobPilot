@@ -390,3 +390,17 @@ textarea {
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
 }
+
+.jp-hero-card {
+  border-color: var(--strong);
+}
+
+.jp-questions-card {
+  border-color: var(--warning);
+}
+
+.jp-btn-lg {
+  min-height: 40px;
+  padding: 8px 14px;
+  font-size: 12px;
+}

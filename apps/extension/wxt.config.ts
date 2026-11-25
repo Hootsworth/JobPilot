@@ -6,11 +6,11 @@ export default defineConfig({
       jsx: 'automatic'
     }
   }),
-  manifest: ({ mode }) => ({
+  manifest: () => ({
     name: 'JobPilot — AI Application Assistant',
     version: '0.1.0',
     description:
-      'Detects Greenhouse, Lever, and Ashby application forms, autofills from your JobPilot profile and tailored resume, and pauses for your review before submit.',
+      'Adds "Autofill via JobPilot" beside Apply buttons and in the side panel on any website, filling fields with AI and asking only required missing questions.',
     action: {
       default_title: 'Open JobPilot Autofill Review',
       default_icon: {
@@ -36,29 +36,6 @@ export default defineConfig({
         description: 'Save current page job to JobPilot Tracker'
       }
     },
-    host_permissions: [
-      'https://boards.greenhouse.io/*',
-      'https://job-boards.greenhouse.io/*',
-      'https://boards.eu.greenhouse.io/*',
-      'https://job-boards.eu.greenhouse.io/*',
-      'https://jobs.lever.co/*',
-      'https://jobs.eu.lever.co/*',
-      'https://jobs.ashbyhq.com/*',
-      'https://jobpilot.singulr.tech/*',
-      'https://jobpilot-moek.onrender.com/*',
-      'https://*.supabase.co/*',
-      ...(mode === 'development' ? ['http://localhost:3000/*', 'http://localhost:4000/*'] : [])
-    ],
-    optional_host_permissions: [
-      'https://*.myworkdayjobs.com/*',
-      'https://*.myworkdaysite.com/*',
-      'https://*.naukri.com/*',
-      'https://*.foundit.in/*',
-      'https://*.internshala.com/*',
-      'https://*.instahyre.com/*',
-      'https://*.wellfound.com/*',
-      'https://*.angel.co/*',
-      'https://*.linkedin.com/*'
-    ]
+    host_permissions: ['https://*/*', 'http://*/*']
   })
 });

@@ -337,5 +337,147 @@ describe('Phase 4 API: Chrome Extension CORS, draft-answers & capture-job', () =
     expect(noKeyRes.statusCode).toBe(200);
     expect(noKeyRes.json().usedLlm).toBe(false);
     expect(noKeyRes.json().suggestions).toHaveLength(0);
+    expect(noKeyRes.json().missingRequired).toEqual([]);
+  });
+
+  it('supports generic custom portals: pre-matches Saved Answers and returns missingRequired ONLY for missing required fields', async () => {
+    const store = new MemoryDataStore();
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const headers = { authorization: 'Bearer valid-jwt' };
+
+    const generateStructured = vi.fn(async (input: { userPrompt: string }) => {
+      const parsedPrompt = JSON.parse(input.userPrompt) as {
+        fields: Array<{ fieldId: string }>;
+      };
+      // Saved answer field should already have been satisfied deterministically
+      expect(parsedPrompt.fields.map((f) => f.fieldId)).not.toContain('custom-notice');
+
+      return {
+        data: {
+          suggestions: [
+            {
+              fieldId: 'custom-portfolio',
+              canonicalKey: 'portfolio_url',
+              proposedValue: 'https://github.com/kabir-dev',
+              confidence: 0.84,
+              rationale: 'Matched GitHub URL from profile',
+              groundedIn: 'Master Profile links',
+              needsUserInput: false
+            },
+            {
+              fieldId: 'custom-work-auth',
+              canonicalKey: 'work_authorization',
+              proposedValue: '',
+              confidence: 0.2,
+              rationale: 'Work authorization status not stored in profile.',
+              groundedIn: '',
+              needsUserInput: true,
+              questionForUser: 'Are you authorized to work in India without visa sponsorship?'
+            },
+            {
+              fieldId: 'custom-hobby',
+              canonicalKey: 'unknown',
+              proposedValue: '',
+              confidence: 0.1,
+              rationale: 'Optional personal field',
+              groundedIn: '',
+              needsUserInput: false
+            }
+          ]
+        },
+        provider: 'gemini' as const,
+        model: 'gemini-3.5-flash-lite',
+        inputTokens: 100,
+        outputTokens: 50,
+        latencyMs: 60,
+        estimatedCostUsd: 0.0001,
+        retryCount: 0,
+        usedRepair: false
+      };
+    });
+
+    const app = await buildApp({
+      config: loadConfig({
+        APP_ENCRYPTION_KEY: randomBytes(32).toString('hex'),
+        LLM_PROVIDER: 'gemini',
+        GEMINI_API_KEY: 'gm-server-key'
+      }),
+      store,
+      authVerifier: {
+        verifyToken: async (jwt) => (jwt === 'valid-jwt' ? { id: userId, fullName: 'Kabir' } : null)
+      },
+      providerFactory: (cfg: { provider: LlmProviderId }) =>
+        ({
+          providerId: cfg.provider,
+          generateStructured
+        }) as unknown as LlmProvider,
+      enableLogger: false
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/answers',
+      headers,
+      payload: {
+        questionKey: 'notice_period',
+        questionPattern: 'What is your current notice period?',
+        answer: 'Immediate joiner (0 days)',
+        tags: ['generic']
+      }
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/extension/fallback-fill',
+      headers,
+      payload: {
+        atsAdapter: 'generic',
+        jobTitle: 'Full Stack Engineer',
+        companyName: 'Custom Portal Co',
+        fields: [
+          {
+            fieldId: 'custom-notice',
+            label: 'What is your current notice period?',
+            controlType: 'text',
+            required: true
+          },
+          {
+            fieldId: 'custom-portfolio',
+            label: 'GitHub or Portfolio Link',
+            controlType: 'text',
+            required: false
+          },
+          {
+            fieldId: 'custom-work-auth',
+            label: 'Work authorization status',
+            controlType: 'select',
+            options: ['Yes, authorized', 'No, require sponsorship'],
+            required: true
+          },
+          {
+            fieldId: 'custom-hobby',
+            label: 'Favorite side project or hobby (Optional)',
+            controlType: 'textarea',
+            required: false
+          }
+        ]
+      }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.usedLlm).toBe(true);
+    expect(body.suggestions).toHaveLength(2);
+    expect(body.suggestions.map((s: { fieldId: string }) => s.fieldId).sort()).toEqual([
+      'custom-notice',
+      'custom-portfolio'
+    ]);
+    // Only the genuinely missing REQUIRED field is returned in missingRequired
+    expect(body.missingRequired).toHaveLength(1);
+    expect(body.missingRequired[0]).toMatchObject({
+      fieldId: 'custom-work-auth',
+      question: 'Are you authorized to work in India without visa sponsorship?',
+      options: ['Yes, authorized', 'No, require sponsorship']
+    });
   });
 });

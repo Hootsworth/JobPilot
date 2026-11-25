@@ -52,6 +52,15 @@ export interface SubmitDetectedPayload {
 
 export type ExtensionMessage =
   | { type: 'OPEN_SIDEPANEL' }
+  | {
+      type: 'TRIGGER_AUTOFILL_VIA_JOBPILOT';
+      source?: 'apply_cta' | 'overlay' | 'context_menu';
+    }
+  | {
+      type: 'RUN_AUTOFILL_VIA_JOBPILOT';
+      tabId: number;
+      url?: string;
+    }
   | { type: 'SCAN_PAGE' }
   | {
       type: 'EXECUTE_FILL';

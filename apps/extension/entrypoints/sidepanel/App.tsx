@@ -16,6 +16,7 @@ import type {
   FillExecutionItemResult,
   FillPlanItem,
   MasterProfile,
+  MissingRequiredQuestion,
   ResumeTemplateId
 } from '@jobpilot/shared';
 import { AtsMatchCard } from '../../src/components/AtsMatchCard';
@@ -93,6 +94,12 @@ export function App() {
   const [markingApplied, setMarkingApplied] = useState(false);
 
   const [scanning, setScanning] = useState(false);
+  const [autofilling, setAutofilling] = useState(false);
+  const [waitingForForm, setWaitingForForm] = useState(false);
+  const [pendingQuestions, setPendingQuestions] = useState<MissingRequiredQuestion[]>([]);
+  const [questionAnswers, setQuestionAnswers] = useState<Record<string, string>>({});
+  const [saveQuestionIds, setSaveQuestionIds] = useState<Record<string, boolean>>({});
+  const [submittingAnswers, setSubmittingAnswers] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [detectingWebAuth, setDetectingWebAuth] = useState(false);
   const [drafting, setDrafting] = useState(false);
@@ -120,6 +127,10 @@ export function App() {
   const lastFallbackRef = useRef<FallbackFillSuggestion[]>([]);
   const scanRef = useRef<PageScanPayload | null>(null);
   scanRef.current = scan;
+  const autofillInFlightRef = useRef(false);
+  const waitingForFormRef = useRef(false);
+  waitingForFormRef.current = waitingForForm;
+  const runAutofillRef = useRef<() => Promise<void>>(async () => {});
 
   const effectiveProfile: MasterProfile | null = useMemo(() => {
     if (!cachedData?.profile) return null;
@@ -141,10 +152,10 @@ export function App() {
       resumeId: string,
       coverLetterId: string,
       nextFallbackSuggestions?: FallbackFillSuggestion[]
-    ) => {
+    ): FillPlanItem[] => {
       if (!nextScan || !data) {
         setPlanItems([]);
-        return;
+        return [];
       }
       const variant = data.profileVariants.find((v) => v.id === variantId);
       const profileForFill: MasterProfile = variant
@@ -168,22 +179,22 @@ export function App() {
       });
 
       const urlKey = normalizeUrlKey(nextScan.url);
-      setPlanItems(
-        computed.map((item) => {
-          const remembered = savedEditsRef.current.get(`${urlKey}::${item.fieldId}`);
-          if (remembered && !item.alreadyFilled && remembered.proposedValue.trim()) {
-            return {
-              ...item,
-              proposedValue: remembered.proposedValue,
-              displayValue: remembered.displayValue,
-              source: remembered.source,
-              confidence: remembered.confidence,
-              included: remembered.included
-            };
-          }
-          return item;
-        })
-      );
+      const mergedItems = computed.map((item) => {
+        const remembered = savedEditsRef.current.get(`${urlKey}::${item.fieldId}`);
+        if (remembered && !item.alreadyFilled && remembered.proposedValue.trim()) {
+          return {
+            ...item,
+            proposedValue: remembered.proposedValue,
+            displayValue: remembered.displayValue,
+            source: remembered.source,
+            confidence: remembered.confidence,
+            included: remembered.included
+          };
+        }
+        return item;
+      });
+      setPlanItems(mergedItems);
+      return mergedItems;
     },
     []
   );
@@ -195,7 +206,7 @@ export function App() {
       resumeIdOverride?: string,
       coverLetterIdOverride?: string,
       settingsOverride?: ExtensionSettingsState
-    ) => {
+    ): Promise<PageScanPayload | null> => {
       setScanning(true);
       setErrorMsg(null);
       setPendingPermissionAdapterId(null);
@@ -203,7 +214,7 @@ export function App() {
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!activeTab?.id) {
           setScan(null);
-          return;
+          return null;
         }
 
         const nextUrlKey = activeTab.url ? normalizeUrlKey(activeTab.url) : '';
@@ -211,6 +222,10 @@ export function App() {
         if (!samePage) {
           lastFallbackRef.current = [];
           setAtsReport(null);
+          setPendingQuestions([]);
+          setQuestionAnswers({});
+          setSaveQuestionIds({});
+          setWaitingForForm(false);
         }
 
         let response: PageScanPayload | undefined;
@@ -220,12 +235,12 @@ export function App() {
           } satisfies ExtensionMessage)) as PageScanPayload | undefined;
         } catch {
           const activeSettings = settingsOverride ?? (await getExtensionSettings());
-          if (activeTab.url) {
+          if (activeTab.url && /^https?:\/\//i.test(activeTab.url)) {
             const resolved = resolveAdapterForUrl(activeTab.url, activeSettings.enabledAdapters);
             const meta = getAdapterById(resolved.detectedId);
 
             if (resolved.disabledByUser) {
-              setScan({
+              const disabledPayload: PageScanPayload = {
                 adapterId: resolved.detectedId,
                 disabledByUser: true,
                 tosRiskLevel: meta.tosRiskLevel,
@@ -239,22 +254,14 @@ export function App() {
                 },
                 fields: [],
                 hasSubmitControl: false
-              });
+              };
+              setScan(disabledPayload);
               lastScanUrlRef.current = nextUrlKey;
               setPlanItems([]);
-              return;
+              return disabledPayload;
             }
 
-            if (resolved.adapter && meta.hostOriginPatterns.length > 0) {
-              const hasHostAccess = await chrome.permissions.contains({
-                origins: [...meta.hostOriginPatterns]
-              });
-              if (!hasHostAccess) {
-                setPendingPermissionAdapterId(meta.id);
-                setScan(null);
-                setPlanItems([]);
-                return;
-              }
+            try {
               await chrome.scripting.executeScript({
                 target: { tabId: activeTab.id, allFrames: true },
                 files: ['content-scripts/content.js']
@@ -262,6 +269,8 @@ export function App() {
               response = (await chrome.tabs.sendMessage(activeTab.id, {
                 type: 'SCAN_PAGE'
               } satisfies ExtensionMessage)) as PageScanPayload | undefined;
+            } catch {
+              response = undefined;
             }
           }
         }
@@ -269,7 +278,7 @@ export function App() {
         if (!response) {
           setScan(null);
           lastScanUrlRef.current = nextUrlKey;
-          return;
+          return null;
         }
         setScan(response);
         lastScanUrlRef.current = normalizeUrlKey(response.url);
@@ -284,8 +293,10 @@ export function App() {
           coverLetterIdOverride ?? selectedCoverLetterId,
           samePage ? lastFallbackRef.current : []
         );
+        return response;
       } catch {
         setScan(null);
+        return null;
       } finally {
         setScanning(false);
       }
@@ -337,16 +348,40 @@ export function App() {
 
       if (!sess) {
         setTab('connect');
+        await scanActiveTab(data, defaultVariantId, defaultResumeId, defaultCoverId, s);
+        return;
       }
-      await scanActiveTab(data, defaultVariantId, defaultResumeId, defaultCoverId, s);
+
+      const storedSessionState = await chrome.storage.session
+        .get('pendingAutofill')
+        .catch(() => ({}));
+      const pending = (
+        storedSessionState as {
+          pendingAutofill?: { tabId?: number; url?: string; requestedAt?: number };
+        }
+      )?.pendingAutofill;
+      if (pending?.requestedAt && Date.now() - pending.requestedAt < 30_000) {
+        await chrome.storage.session.remove('pendingAutofill').catch(() => {});
+        await runAutofillRef.current();
+      } else {
+        await scanActiveTab(data, defaultVariantId, defaultResumeId, defaultCoverId, s);
+      }
     })();
   }, []);
 
   // Keep Side Panel reactive to tab switches, URL changes, Web Auth sync, & Post-Submit confirmation (#4, #6)
   useEffect(() => {
     const onMessage = (message: ExtensionMessage) => {
-      if (message?.type === 'PAGE_STRUCTURE_UPDATED') {
-        void scanActiveTab();
+      if (message?.type === 'RUN_AUTOFILL_VIA_JOBPILOT') {
+        void chrome.storage.session.remove('pendingAutofill').catch(() => {});
+        void runAutofillRef.current();
+      } else if (message?.type === 'PAGE_STRUCTURE_UPDATED') {
+        if (waitingForFormRef.current && message.fieldCount > 0) {
+          setWaitingForForm(false);
+          void runAutofillRef.current();
+        } else {
+          void scanActiveTab();
+        }
       } else if (message?.type === 'APPLICATION_SUBMIT_DETECTED') {
         setSubmitPrompt(message.payload);
       } else if (message?.type === 'AUTH_SESSION_UPDATED') {
@@ -753,7 +788,7 @@ export function App() {
           jobTitle: scan.jobMetadata.title,
           companyName: scan.jobMetadata.companyName,
           jobDescription: scan.jobMetadata.descriptionClean,
-          fields: unresolved.slice(0, 30).map((f) => ({
+          fields: unresolved.slice(0, 40).map((f) => ({
             fieldId: f.fieldId,
             label: f.label || f.placeholder || f.name || 'Field',
             controlType: f.controlType,
@@ -788,6 +823,14 @@ export function App() {
         selectedCoverLetterId,
         merged
       );
+      if (res.data.missingRequired && res.data.missingRequired.length > 0) {
+        setPendingQuestions(res.data.missingRequired);
+        setSaveQuestionIds(
+          Object.fromEntries(
+            res.data.missingRequired.map((q) => [q.fieldId, q.controlType !== 'checkbox'])
+          )
+        );
+      }
       setStatusMsg(
         res.data.note ||
           `LLM fallback mapped ${res.data.suggestions.length} additional field(s) (confidence capped <= 85% for review).`
@@ -897,6 +940,279 @@ export function App() {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to fill form on this tab.');
     } finally {
       setFilling(false);
+    }
+  };
+
+  const runAutofillViaJobPilot = useCallback(async () => {
+    if (autofillInFlightRef.current) return;
+
+    const activeSession = session ?? (await getExtensionSession());
+    const activeData = cachedData ?? (await getCachedUserData());
+    const activeSettings = settings ?? (await getExtensionSettings());
+
+    if (!activeSession || !activeData) {
+      setTab('connect');
+      setStatusMsg('Connect your JobPilot account first, then click Autofill via JobPilot.');
+      return;
+    }
+
+    const vId =
+      selectedVariantId ||
+      activeData.profileVariants.find((v) => v.isDefault)?.id ||
+      activeData.profileVariants[0]?.id ||
+      '';
+    const rId = selectedResumeId || activeData.resumeVersions[0]?.id || '';
+    const cId = selectedCoverLetterId || activeData.coverLetters[0]?.id || '';
+
+    autofillInFlightRef.current = true;
+    setTab('review');
+    setAutofilling(true);
+    setErrorMsg(null);
+    setUpgradePrompt(null);
+    setPendingQuestions([]);
+    setQuestionAnswers({});
+    setStatusMsg('Scanning page for application fields...');
+
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!activeTab?.id) {
+        throw new Error('No active browser tab found.');
+      }
+
+      const scanned = await scanActiveTab(activeData, vId, rId, cId, activeSettings);
+      if (!scanned || scanned.disabledByUser || scanned.fields.length === 0) {
+        setWaitingForForm(true);
+        setStatusMsg(
+          'No form inputs detected on this view yet — click Apply / Next on the page and JobPilot will autofill as soon as the form opens.'
+        );
+        return;
+      }
+
+      setWaitingForForm(false);
+      let workingPlan = recomputePlan(scanned, activeData, vId, rId, cId, lastFallbackRef.current);
+
+      const unresolved = scanned.fields.filter((f) => {
+        const item = workingPlan.find((p) => p.fieldId === f.fieldId);
+        return item && !item.alreadyFilled && item.controlType !== 'file' && !item.proposedValue.trim();
+      });
+
+      let aiMissing: MissingRequiredQuestion[] = [];
+      let aiNote: string | undefined;
+
+      if (unresolved.length > 0) {
+        setStatusMsg(`Identifying & mapping ${unresolved.length} additional field(s) with AI...`);
+        const aiRes = (await chrome.runtime.sendMessage({
+          type: 'API_FALLBACK_FILL',
+          payload: {
+            atsAdapter: scanned.adapterId,
+            jobTitle: scanned.jobMetadata.title || 'Open Role',
+            companyName: scanned.jobMetadata.companyName || 'Company',
+            jobDescription: scanned.jobMetadata.descriptionClean,
+            fields: unresolved.slice(0, 40).map((f) => ({
+              fieldId: f.fieldId,
+              label: f.label || f.placeholder || f.name || 'Field',
+              controlType: f.controlType,
+              placeholder: f.placeholder || undefined,
+              name: f.name || undefined,
+              options: f.options.length > 0 ? f.options : undefined,
+              required: f.required
+            }))
+          }
+        } satisfies ExtensionMessage)) as ApiProxyResponse<FallbackFillResponse>;
+
+        if (aiRes?.ok) {
+          const merged = [...lastFallbackRef.current];
+          for (const s of aiRes.data.suggestions) {
+            const idx = merged.findIndex((m) => m.fieldId === s.fieldId);
+            if (idx >= 0) merged[idx] = s;
+            else merged.push(s);
+          }
+          lastFallbackRef.current = merged;
+          workingPlan = recomputePlan(scanned, activeData, vId, rId, cId, merged);
+          aiMissing = aiRes.data.missingRequired ?? [];
+          aiNote = aiRes.data.note;
+        } else if (aiRes?.status === 402 || aiRes?.status === 403) {
+          setUpgradePrompt(aiRes.error);
+        }
+      }
+
+      const scannedFieldById = new Map(scanned.fields.map((f) => [f.fieldId, f]));
+      const emptyRequiredPlanItems = workingPlan.filter((p) => {
+        const meta = scannedFieldById.get(p.fieldId);
+        return (
+          Boolean(meta?.required) &&
+          !p.alreadyFilled &&
+          p.controlType !== 'file' &&
+          !p.proposedValue.trim()
+        );
+      });
+      const emptyRequiredIds = new Set(emptyRequiredPlanItems.map((p) => p.fieldId));
+      const finalQuestions: MissingRequiredQuestion[] = aiMissing.filter((q) =>
+        emptyRequiredIds.has(q.fieldId)
+      );
+      const seenQuestionIds = new Set(finalQuestions.map((q) => q.fieldId));
+
+      for (const item of emptyRequiredPlanItems) {
+        if (seenQuestionIds.has(item.fieldId)) continue;
+        const fieldMeta = scannedFieldById.get(item.fieldId);
+        finalQuestions.push({
+          fieldId: item.fieldId,
+          label: item.label,
+          controlType: item.controlType,
+          ...(fieldMeta?.options && fieldMeta.options.length > 0 ? { options: fieldMeta.options } : {}),
+          canonicalKey: item.canonicalKey,
+          question: item.label,
+          reason: 'Required field was not found in your profile or saved answers.'
+        });
+      }
+
+      let filledCount = 0;
+      if (workingPlan.some((p) => p.included)) {
+        const execRes = (await chrome.tabs.sendMessage(activeTab.id, {
+          type: 'EXECUTE_FILL',
+          planItems: workingPlan,
+          resumeVersionId: rId || null,
+          coverLetterId: cId || null
+        } satisfies ExtensionMessage)) as ExecuteFillTabResponse;
+
+        if (!execRes?.ok) {
+          throw new Error(execRes?.error || 'Form fill failed on active page.');
+        }
+        filledCount = execRes.filledCount;
+        setExecResults(new Map(execRes.results.map((r) => [r.fieldId, r])));
+      }
+
+      setPendingQuestions(finalQuestions);
+      setQuestionAnswers(Object.fromEntries(finalQuestions.map((q) => [q.fieldId, ''])));
+      setSaveQuestionIds(
+        Object.fromEntries(finalQuestions.map((q) => [q.fieldId, q.controlType !== 'checkbox']))
+      );
+
+      if (finalQuestions.length > 0) {
+        setStatusMsg(
+          `Filled ${filledCount} field(s). Please answer ${finalQuestions.length} required question(s) below (optional fields skipped).`
+        );
+      } else if (aiNote && filledCount === 0) {
+        setStatusMsg(aiNote);
+      } else {
+        setStatusMsg(
+          `Autofilled ${filledCount} field(s). All required fields complete — review and click Submit on the page when ready.`
+        );
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Autofill via JobPilot failed.');
+    } finally {
+      setAutofilling(false);
+      autofillInFlightRef.current = false;
+    }
+  }, [
+    cachedData,
+    recomputePlan,
+    scanActiveTab,
+    selectedCoverLetterId,
+    selectedResumeId,
+    selectedVariantId,
+    session,
+    settings
+  ]);
+  runAutofillRef.current = runAutofillViaJobPilot;
+
+  const handleSubmitMissingQuestions = async () => {
+    if (!scan || pendingQuestions.length === 0) return;
+
+    const answeredQuestions = pendingQuestions.filter(
+      (q) => (questionAnswers[q.fieldId] ?? '').trim().length > 0
+    );
+    if (answeredQuestions.length === 0) return;
+
+    setSubmittingAnswers(true);
+    setErrorMsg(null);
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!activeTab?.id) throw new Error('No active browser tab.');
+
+      const answerMap = new Map(
+        answeredQuestions.map((q) => [q.fieldId, questionAnswers[q.fieldId].trim()])
+      );
+
+      const updatedPlan = planItems.map((item) => {
+        const val = answerMap.get(item.fieldId);
+        if (!val) return item;
+        const nextItem: FillPlanItem = {
+          ...item,
+          proposedValue: val,
+          displayValue: val,
+          source: 'user_edited',
+          confidence: 1,
+          included: true
+        };
+        persistFieldEdit(item.fieldId, nextItem);
+        return nextItem;
+      });
+      setPlanItems(updatedPlan);
+
+      const subsetToFill = updatedPlan.filter((item) => answerMap.has(item.fieldId));
+      const execRes = (await chrome.tabs.sendMessage(activeTab.id, {
+        type: 'EXECUTE_FILL',
+        planItems: subsetToFill,
+        resumeVersionId: selectedResumeId || null,
+        coverLetterId: selectedCoverLetterId || null
+      } satisfies ExtensionMessage)) as ExecuteFillTabResponse;
+
+      if (!execRes?.ok) {
+        throw new Error(execRes?.error || 'Could not fill required answers.');
+      }
+
+      setExecResults((prev) => {
+        const next = new Map(prev);
+        for (const r of execRes.results) next.set(r.fieldId, r);
+        return next;
+      });
+
+      const newlySavedAnswers = [];
+      for (const q of answeredQuestions) {
+        if (!saveQuestionIds[q.fieldId]) continue;
+        const val = answerMap.get(q.fieldId) ?? '';
+        if (!val) continue;
+        const questionKey =
+          !q.canonicalKey || q.canonicalKey === 'unknown' || q.canonicalKey === 'custom_question'
+            ? slugAnswerKey(q.label)
+            : q.canonicalKey;
+        const savedRes = (await chrome.runtime.sendMessage({
+          type: 'API_SAVE_ANSWER',
+          payload: {
+            questionKey,
+            questionPattern: q.label,
+            answer: val,
+            tags: [scan.adapterId]
+          }
+        } satisfies ExtensionMessage)) as SaveAnswerProxyResponse;
+        if (savedRes?.ok) {
+          newlySavedAnswers.push(savedRes.data);
+        }
+      }
+
+      if (newlySavedAnswers.length > 0 && cachedData) {
+        const updatedCache: CachedUserData = {
+          ...cachedData,
+          savedAnswers: [...newlySavedAnswers, ...cachedData.savedAnswers]
+        };
+        setCachedData(updatedCache);
+        await saveCachedUserData(updatedCache);
+      }
+
+      const answeredIds = new Set(answeredQuestions.map((q) => q.fieldId));
+      const remaining = pendingQuestions.filter((q) => !answeredIds.has(q.fieldId));
+      setPendingQuestions(remaining);
+      setStatusMsg(
+        remaining.length === 0
+          ? `Filled ${execRes.filledCount} required answer(s). Review & click Submit when ready.`
+          : `Filled ${execRes.filledCount} answer(s); ${remaining.length} required field(s) remaining.`
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to fill answers.');
+    } finally {
+      setSubmittingAnswers(false);
     }
   };
 
@@ -1052,19 +1368,21 @@ export function App() {
       );
       return;
     }
-    const permPromise =
-      enabled && meta.hostOriginPatterns.length > 0
-        ? chrome.permissions.request({ origins: [...meta.hostOriginPatterns] })
-        : null;
-
     void (async () => {
       setErrorMsg(null);
-      if (permPromise) {
+      if (enabled && meta.hostOriginPatterns.length > 0) {
         try {
-          const granted = await permPromise;
-          if (!granted) {
-            setErrorMsg(`Permission denied — ${meta.displayName} remains disabled.`);
-            return;
+          const alreadyAllowed = await chrome.permissions.contains({
+            origins: [...meta.hostOriginPatterns]
+          });
+          if (!alreadyAllowed) {
+            const granted = await chrome.permissions.request({
+              origins: [...meta.hostOriginPatterns]
+            });
+            if (!granted) {
+              setErrorMsg(`Permission denied — ${meta.displayName} remains disabled.`);
+              return;
+            }
           }
         } catch (err) {
           setErrorMsg(
@@ -1076,7 +1394,7 @@ export function App() {
         try {
           await chrome.permissions.remove({ origins: [...meta.hostOriginPatterns] });
         } catch {
-          // Optional permission already absent
+          // Host access is managed via host_permissions
         }
       }
 
@@ -1140,7 +1458,7 @@ export function App() {
           </div>
         ) : (
           <div className="jp-meta">
-            Supports Greenhouse, Lever, Ashby, Workday + Alt+Shift+S job capture anywhere.
+            Works on any job portal or custom career site · Never submits automatically.
           </div>
         )}
       </header>
@@ -1276,20 +1594,32 @@ export function App() {
                 </button>
               </div>
             ) : !scan ? (
-              <div className="jp-panel">
-                <div className="jp-label">No Application Form Detected</div>
+              <div className="jp-panel jp-hero-card">
+                <div className="jp-row" style={{ justifyContent: 'space-between' }}>
+                  <div className="jp-label">Autofill via JobPilot</div>
+                  <span className="jp-badge jp-badge-accent">ANY SITE</span>
+                </div>
                 <p className="jp-meta">
-                  Save any job page via <strong>Alt+Shift+S</strong>, right-click menu, or below —
-                  or use the Quick Copy Palette above on locked portals.
+                  {waitingForForm
+                    ? 'Waiting for application inputs to appear — click Apply or Next on the page, or click below once inputs render.'
+                    : 'Scan and autofill any job portal or company career page using AI, asking only missing required questions.'}
                 </p>
                 <div className="jp-row" style={{ gap: '8px', flexWrap: 'wrap' }}>
                   <button
                     type="button"
-                    className="jp-btn jp-btn-primary"
+                    className="jp-btn jp-btn-primary jp-btn-lg"
+                    disabled={autofilling || scanning}
+                    onClick={() => void runAutofillViaJobPilot()}
+                  >
+                    {autofilling ? 'Autofilling...' : 'Autofill via JobPilot'}
+                  </button>
+                  <button
+                    type="button"
+                    className="jp-btn"
                     disabled={savingJob}
                     onClick={() => void handleSaveAnyActivePage()}
                   >
-                    {savingJob ? 'Saving...' : '[+] Save Active Page'}
+                    {savingJob ? 'Saving...' : '[+] Save Page'}
                   </button>
                   <button
                     type="button"
@@ -1297,7 +1627,7 @@ export function App() {
                     disabled={scanning}
                     onClick={() => void scanActiveTab()}
                   >
-                    {scanning ? 'Scanning...' : 'Rescan Tab'}
+                    {scanning ? 'Scanning...' : 'Scan Tab'}
                   </button>
                 </div>
               </div>
@@ -1337,6 +1667,161 @@ export function App() {
                   <div className="jp-banner jp-banner-warn">
                     <strong>[{scan.tosRiskLevel.toUpperCase()} ToS NOTICE]</strong> {scan.tosWarning}
                   </div>
+                ) : null}
+
+                <section className="jp-panel jp-hero-card" aria-label="Autofill via JobPilot">
+                  <div className="jp-row" style={{ justifyContent: 'space-between' }}>
+                    <div className="jp-label">Autofill via JobPilot</div>
+                    <span className="jp-badge jp-badge-accent">
+                      {scan.adapterId === 'generic' ? 'UNIVERSAL' : scan.adapterId.toUpperCase()} ·{' '}
+                      {scan.fields.length} FIELD(S)
+                    </span>
+                  </div>
+                  <p className="jp-meta">
+                    {waitingForForm
+                      ? 'No form inputs visible yet — click Apply on this job page and JobPilot will fill automatically.'
+                      : 'Maps known fields + AI-matched answers automatically, skipping optional guesswork.'}
+                  </p>
+                  <div className="jp-row">
+                    <button
+                      type="button"
+                      className="jp-btn jp-btn-primary jp-btn-lg"
+                      disabled={autofilling}
+                      onClick={() => void runAutofillViaJobPilot()}
+                    >
+                      {autofilling ? 'Autofilling...' : 'Autofill via JobPilot'}
+                    </button>
+                    <button
+                      type="button"
+                      className="jp-btn"
+                      disabled={scanning}
+                      onClick={() => void scanActiveTab()}
+                    >
+                      {scanning ? 'Scanning...' : 'Rescan'}
+                    </button>
+                    <button
+                      type="button"
+                      className="jp-btn"
+                      disabled={scan.fields.length === 0}
+                      onClick={() => void handleUndoFill()}
+                    >
+                      Undo
+                    </button>
+                  </div>
+                </section>
+
+                {pendingQuestions.length > 0 ? (
+                  <section className="jp-panel jp-questions-card" aria-label="Required questions needed">
+                    <div className="jp-row" style={{ justifyContent: 'space-between' }}>
+                      <span className="jp-label">
+                        Quick Questions Needed ({pendingQuestions.length})
+                      </span>
+                      <span className="jp-badge jp-badge-warn">REQUIRED ONLY</span>
+                    </div>
+                    <div className="jp-meta">
+                      Optional fields were skipped. Answer these required items to finish filling:
+                    </div>
+                    <div className="jp-field-list">
+                      {pendingQuestions.map((q) => {
+                        const answerVal = questionAnswers[q.fieldId] ?? '';
+                        return (
+                          <div key={q.fieldId} className="jp-field-card">
+                            <div className="jp-field-top">
+                              <span className="jp-label">{q.question}</span>
+                              <span className="jp-badge jp-badge-warn">REQUIRED</span>
+                            </div>
+                            {q.reason ? <div className="jp-meta">{q.reason}</div> : null}
+                            {q.options && q.options.length > 0 ? (
+                              <div className="jp-select-wrap">
+                                <select
+                                  className="jp-select"
+                                  aria-label={q.question}
+                                  value={answerVal}
+                                  onChange={(e) =>
+                                    setQuestionAnswers((prev) => ({
+                                      ...prev,
+                                      [q.fieldId]: e.target.value
+                                    }))
+                                  }
+                                >
+                                  <option value="">-- Select an option --</option>
+                                  {q.options.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                      {opt}
+                                    </option>
+                                  ))}
+                                </select>
+                                <span className="jp-select-chevron" aria-hidden="true">
+                                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                    <path
+                                      d="M4 6L8 10L12 6"
+                                      stroke="currentColor"
+                                      strokeWidth="1.5"
+                                      strokeLinecap="square"
+                                    />
+                                  </svg>
+                                </span>
+                              </div>
+                            ) : q.controlType === 'textarea' ? (
+                              <textarea
+                                rows={2}
+                                className="jp-textarea"
+                                aria-label={q.question}
+                                placeholder="Type your answer..."
+                                value={answerVal}
+                                onChange={(e) =>
+                                  setQuestionAnswers((prev) => ({
+                                    ...prev,
+                                    [q.fieldId]: e.target.value
+                                  }))
+                                }
+                              />
+                            ) : (
+                              <input
+                                type="text"
+                                className="jp-input"
+                                aria-label={q.question}
+                                placeholder="Type your answer..."
+                                value={answerVal}
+                                onChange={(e) =>
+                                  setQuestionAnswers((prev) => ({
+                                    ...prev,
+                                    [q.fieldId]: e.target.value
+                                  }))
+                                }
+                              />
+                            )}
+                            <label className="jp-row" style={{ cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(saveQuestionIds[q.fieldId])}
+                                onChange={(e) =>
+                                  setSaveQuestionIds((prev) => ({
+                                    ...prev,
+                                    [q.fieldId]: e.target.checked
+                                  }))
+                                }
+                              />
+                              <span className="jp-meta">Save to Answer Bank for future portals</span>
+                            </label>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <button
+                      type="button"
+                      className="jp-btn jp-btn-primary"
+                      disabled={
+                        submittingAnswers ||
+                        pendingQuestions.every((q) => !(questionAnswers[q.fieldId] ?? '').trim())
+                      }
+                      onClick={() => void handleSubmitMissingQuestions()}
+                    >
+                      {submittingAnswers
+                        ? 'Filling Answers...'
+                        : `Fill ${pendingQuestions.filter((q) => (questionAnswers[q.fieldId] ?? '').trim()).length} Answer(s)`}
+                    </button>
+                  </section>
                 ) : null}
 
                 {/* Save This Job card */}
@@ -1583,7 +2068,11 @@ export function App() {
                   </div>
                 </section>
 
-                <section className="jp-field-list" aria-label="Detected form fields">
+                <details className="jp-details">
+                  <summary>
+                    Review All Detected Fields ({planItems.length}) · {includedCount} Ready
+                  </summary>
+                  <section className="jp-field-list" aria-label="Detected form fields">
                   {planItems.map((item) => {
                     const conf = confidenceLabel(item.confidence, item.alreadyFilled);
                     const result = execResults.get(item.fieldId);
@@ -1714,7 +2203,8 @@ export function App() {
                       </div>
                     );
                   })}
-                </section>
+                  </section>
+                </details>
               </>
             )}
           </>

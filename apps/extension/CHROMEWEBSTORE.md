@@ -8,18 +8,18 @@ This document contains the ready-to-paste Chrome Web Store listing copy, permiss
 
 - **Extension Name**: JobPilot — AI Job Application Autofill & India CTC/CGPA Assistant
 - **Short Description (<= 132 chars)**:
-  Autofill job applications from your grounded profile & tailored resume with per-field confidence scores and mandatory review before submit.
+  Autofill job applications on any website with "Autofill via JobPilot", AI field matching, and required-only prompts.
 - **Category**: Productivity
 
 ### Detailed Description
-JobPilot helps software engineers, students, and job seekers complete repetitive job applications in seconds without sacrificing accuracy or control.
+JobPilot helps software engineers, students, and job seekers complete job applications across any company career site or job board in seconds without sacrificing accuracy or control.
 
 **Key Capabilities**
-- **One-Click Application Form Scan & Autofill**: Automatically maps your Master Profile and tailored resume onto Greenhouse, Lever, Ashby, and Workday application forms.
-- **Built for India & Global Applications**: Native support for Current/Expected CTC (in LPA), notice period (days / serving notice), preferred cities, willingness to relocate, fresher/internship status, CGPA (10-point or 4-point scale), college, and 10th/12th board marks.
-- **Grounded Free-Text Answer Drafting**: Drafts role-specific answers to open-ended application questions using only your verified STAR Story Bank and Saved Answers.
-- **Opt-In Indian Job Portal Assist**: Save job postings directly to your JobPilot tracker and assist with apply drawers on Naukri, Internshala, LinkedIn, Foundit, Instahyre, and Wellfound—isolated per site and disabled by default until you explicitly enable an adapter and grant host permission.
-- **Mandatory Human Review Gate**: Every proposed field displays a confidence badge (`HIGH`, `MEDIUM`, `LOW`) and source attribution (`PROFILE`, `INDIA_PROFILE`, `SAVED_ANSWER`, `LLM_DRAFT`, `LLM_FALLBACK`). JobPilot **never** clicks submit and **never** overwrites fields you have already typed into.
+- **Autofill via JobPilot on Any Website**: Adds an inline **"Autofill via JobPilot"** button beside Apply buttons and works directly from the Side Panel on both popular application platforms and custom company career portals.
+- **AI Field Identification & Grounded Filling**: Scans forms across any site, maps fields to your Master Profile and tailored resume, and fills answers grounded in your Story Bank and Saved Answer Bank.
+- **Asks Only What Is Required**: Automatically fills everything known from your profile and asks quick follow-up questions **only** for genuinely required fields that cannot be filled automatically—skipping optional guesswork.
+- **Built for India & Global Applications**: Native support for Current/Expected CTC (in LPA), notice period, preferred cities, willingness to relocate, fresher/internship status, CGPA, college, and 10th/12th board marks.
+- **Review & Control Before Submit**: JobPilot **never** clicks Submit and **never** overwrites fields you have already typed into. You stay in control of every field and can save new answers for future applications.
 
 ---
 
@@ -27,14 +27,13 @@ JobPilot helps software engineers, students, and job seekers complete repetitive
 
 | Permission / Host Pattern | Plain-English Justification for Reviewers |
 | :--- | :--- |
-| `storage` | Stores the user's JobPilot API connection settings, selected tailored resume version preference, and per-site opt-in adapter toggles locally in `chrome.storage.local`. |
-| `tabs` | Reads the active tab's URL and title when the user clicks "Scan Form" or "Save Job to Tracker" in the side panel so the matching ATS adapter and job metadata can be loaded. |
-| `activeTab` | Grants temporary, user-gesture-scoped access to the currently active tab ONLY when the user explicitly clicks `"Save this job to JobPilot Tracker"` in the right-click menu, presses `Alt+Shift+S`, or clicks `"Save Active Page to Tracker"` in the side panel. Never runs in the background or across browsing history. |
-| `sidePanel` | Displays the persistent JobPilot review checklist alongside the job application form so the user can inspect confidence scores, edit proposed values, and approve fields before filling. |
-| `contextMenus` | Provides a right-click "Open JobPilot Review Side Panel" and "Save this job to JobPilot Tracker" menu action initiated by the user. |
-| `scripting` | Injects the form-scanning/autofill script or the one-click job metadata extractor only upon explicit user action or per-site opt-in toggle. |
-| `host_permissions` (`*://*.greenhouse.io/*`, `*://*.lever.co/*`, `*://*.ashbyhq.com/*`, `https://jobpilot.singulr.tech/*`, `https://jobpilot-moek.onrender.com/*`, `https://*.supabase.co/*`) | Enables automatic form detection and user-approved autofill on Greenhouse, Lever, and Ashby; receives seamless sign-in state from the user's open JobPilot web session; and communicates with the JobPilot API and Supabase Auth endpoints. |
-| `optional_host_permissions` (`*://*.myworkdayjobs.com/*`, `*://*.myworkdaysite.com/*`, `*://*.naukri.com/*`, `*://*.foundit.in/*`, `*://*.internshala.com/*`, `*://*.instahyre.com/*`, `*://*.wellfound.com/*`, `*://*.angel.co/*`, `*://*.linkedin.com/*`) | Requested at runtime via `chrome.permissions.request()` **only** when the user explicitly toggles on Workday or an individual job portal adapter in the Side Panel to capture a viewed job or assist with an apply drawer. |
+| `storage` | Stores the user's JobPilot connection settings, selected tailored resume version preference, saved preferences locally in extension storage, and short-lived session trigger state when opening the side panel from an Apply button. |
+| `tabs` | Reads the active tab's URL and title when the user triggers "Autofill via JobPilot" or saves a job so the right application context and job metadata are loaded. |
+| `activeTab` | Grants temporary user-gesture access to the active tab when saving a job or inspecting a page via context menu or keyboard shortcut (`Alt+Shift+S`). |
+| `sidePanel` | Displays the JobPilot side panel alongside any application page so users can run "Autofill via JobPilot", answer required missing questions, and review filled values before submitting. |
+| `contextMenus` | Provides right-click **"Autofill via JobPilot"** and **"Save this job to JobPilot Tracker"** actions initiated by the user. |
+| `scripting` | Injects the form-scanning/autofill script or job metadata extractor on demand when triggered by the user on the active tab. |
+| `host_permissions` (`https://*/*`, `http://*/*`) | Enables **"Autofill via JobPilot"** beside Apply buttons and in the Side Panel on any custom company career portal or job board, syncs your signed-in JobPilot web session, and communicates with the JobPilot backend. |
 
 ---
 
@@ -42,9 +41,9 @@ JobPilot helps software engineers, students, and job seekers complete repetitive
 
 - **Privacy Policy URL**: `https://jobpilot.singulr.tech/privacy`
 
-- **Single Purpose**: Assisting the user in capturing job postings to their personal tracker and autofilling job application forms with mandatory human review before submission.
+- **Single Purpose**: Helping users capture job postings and autofill job application forms across any website with AI assistance and mandatory user review before submission.
 - **Data Collection & Transmission**:
-  - Form labels, option lists, and user-initiated job capture metadata are sent **only** to the user's own configured JobPilot API endpoint.
+  - Form field labels, option lists, and user-initiated job capture metadata are sent **only** when the user triggers JobPilot on that page and **only** to the JobPilot API.
   - No browsing history, background tab activity, or analytics telemetry is collected.
   - No third-party advertising, tracking pixels, or remote code execution is used.
-- **Automated Submission Policy**: The extension is hard-coded never to submit forms (`form.submit()` or clicking submit buttons is prohibited in `packages/form-engine`). Every fill action requires the user to click **"Fill Approved Fields"** in the review UI and manually submit the application on the host page.
+- **Automated Submission Policy**: The extension is hard-coded never to submit forms or click final submit buttons. Users review the filled form and submit each application themselves.
