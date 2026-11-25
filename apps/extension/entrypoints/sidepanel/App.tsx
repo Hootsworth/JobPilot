@@ -26,7 +26,9 @@ import type {
   ApiProxyResponse,
   AtsScoreProxyResponse,
   ExtensionMessage,
+  LearnedFieldEdit,
   PageScanPayload,
+  PageValidationError,
   SaveAnswerProxyResponse,
   SubmitDetectedPayload,
   TailorResumeProxyResponse,
@@ -38,9 +40,11 @@ import {
   getCachedUserData,
   getExtensionSession,
   getExtensionSettings,
+  getTailorHandoff,
   saveCachedUserData,
   saveExtensionSession,
   saveExtensionSettings,
+  saveTailorHandoff,
   type AdapterEnabledMap,
   type CachedUserData,
   type ExtensionAuthSession,
@@ -96,6 +100,11 @@ export function App() {
   const [scanning, setScanning] = useState(false);
   const [autofilling, setAutofilling] = useState(false);
   const [waitingForForm, setWaitingForForm] = useState(false);
+  const [nextStepFieldCount, setNextStepFieldCount] = useState<number | null>(null);
+  const [pageValidationErrors, setPageValidationErrors] = useState<PageValidationError[]>([]);
+  const [learnedEdits, setLearnedEdits] = useState<LearnedFieldEdit[]>([]);
+  const [savingLearnedFieldId, setSavingLearnedFieldId] = useState<string | null>(null);
+  const [tailorHandoffNote, setTailorHandoffNote] = useState<string | null>(null);
   const [pendingQuestions, setPendingQuestions] = useState<MissingRequiredQuestion[]>([]);
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string>>({});
   const [saveQuestionIds, setSaveQuestionIds] = useState<Record<string, boolean>>({});
@@ -226,6 +235,74 @@ export function App() {
           setQuestionAnswers({});
           setSaveQuestionIds({});
           setWaitingForForm(false);
+          setNextStepFieldCount(null);
+          setPageValidationErrors([]);
+          setLearnedEdits([]);
+          setTailorHandoffNote(null);
+        }
+
+        let effectiveData = dataOverride ?? cachedData;
+        let resolvedVariantId = variantIdOverride ?? selectedVariantId;
+        let resolvedResumeId = resumeIdOverride ?? selectedResumeId;
+        let resolvedCoverLetterId = coverLetterIdOverride ?? selectedCoverLetterId;
+
+        // Check for web Tailor & Apply handoff targeting this application tab
+        if (activeTab.url && /^https?:\/\//i.test(activeTab.url) && effectiveData) {
+          const handoff = await getTailorHandoff();
+          if (handoff) {
+            let tabHost = '';
+            let applyHost = '';
+            try {
+              tabHost = new URL(activeTab.url).hostname.replace(/^www\./, '').toLowerCase();
+              applyHost = new URL(handoff.applyUrl).hostname.replace(/^www\./, '').toLowerCase();
+            } catch {
+              // Ignore malformed URLs
+            }
+            const isWebAppTab =
+              tabHost === 'jobpilot.singulr.tech' ||
+              (tabHost === 'localhost' && activeTab.url.includes(':3000'));
+            const recentRedirect = Date.now() - handoff.createdAt < 120_000;
+            if (!isWebAppTab && ((tabHost && tabHost === applyHost) || recentRedirect)) {
+              const needsSync =
+                (handoff.resumeVersionId &&
+                  !effectiveData.resumeVersions.some((r) => r.id === handoff.resumeVersionId)) ||
+                (handoff.coverLetterId &&
+                  !effectiveData.coverLetters.some((c) => c.id === handoff.coverLetterId));
+              if (needsSync) {
+                try {
+                  effectiveData = await syncExtensionUserData();
+                  setCachedData(effectiveData);
+                } catch {
+                  // Use cached data if sync fails
+                }
+              }
+              if (
+                handoff.profileVariantId &&
+                effectiveData.profileVariants.some((v) => v.id === handoff.profileVariantId)
+              ) {
+                resolvedVariantId = handoff.profileVariantId;
+                setSelectedVariantId(resolvedVariantId);
+              }
+              if (
+                handoff.resumeVersionId &&
+                effectiveData.resumeVersions.some((r) => r.id === handoff.resumeVersionId)
+              ) {
+                resolvedResumeId = handoff.resumeVersionId;
+                setSelectedResumeId(resolvedResumeId);
+              }
+              if (
+                handoff.coverLetterId &&
+                effectiveData.coverLetters.some((c) => c.id === handoff.coverLetterId)
+              ) {
+                resolvedCoverLetterId = handoff.coverLetterId;
+                setSelectedCoverLetterId(resolvedCoverLetterId);
+              }
+              setTailorHandoffNote(
+                `Tailored resume pre-selected${handoff.companyName ? ` for ${handoff.companyName}` : ''}.`
+              );
+              await saveTailorHandoff(null);
+            }
+          }
         }
 
         let response: PageScanPayload | undefined;
@@ -287,10 +364,10 @@ export function App() {
         }
         recomputePlan(
           response,
-          dataOverride ?? cachedData,
-          variantIdOverride ?? selectedVariantId,
-          resumeIdOverride ?? selectedResumeId,
-          coverLetterIdOverride ?? selectedCoverLetterId,
+          effectiveData,
+          resolvedVariantId,
+          resolvedResumeId,
+          resolvedCoverLetterId,
           samePage ? lastFallbackRef.current : []
         );
         return response;
@@ -376,12 +453,21 @@ export function App() {
         void chrome.storage.session.remove('pendingAutofill').catch(() => {});
         void runAutofillRef.current();
       } else if (message?.type === 'PAGE_STRUCTURE_UPDATED') {
+        setPageValidationErrors(message.validationErrors ?? []);
+        if (message.stepChanged && message.fieldCount > 0) {
+          setNextStepFieldCount(message.fieldCount);
+        }
         if (waitingForFormRef.current && message.fieldCount > 0) {
           setWaitingForForm(false);
           void runAutofillRef.current();
         } else {
           void scanActiveTab();
         }
+      } else if (message?.type === 'USER_EDITED_FILLED_FIELD') {
+        setLearnedEdits((prev) => {
+          const filtered = prev.filter((item) => item.fieldId !== message.payload.fieldId);
+          return [message.payload, ...filtered].slice(0, 5);
+        });
       } else if (message?.type === 'APPLICATION_SUBMIT_DETECTED') {
         setSubmitPrompt(message.payload);
       } else if (message?.type === 'AUTH_SESSION_UPDATED') {
@@ -933,6 +1019,11 @@ export function App() {
 
       if (!res?.ok) throw new Error(res?.error || 'Fill execution failed.');
       setExecResults(new Map(res.results.map((r) => [r.fieldId, r])));
+      const valRes = (await chrome.tabs
+        .sendMessage(activeTab.id, { type: 'GET_PAGE_VALIDATION_ERRORS' } satisfies ExtensionMessage)
+        .catch(() => null)) as { ok: boolean; errors?: PageValidationError[] } | null;
+      setPageValidationErrors(valRes?.errors ?? []);
+      setNextStepFieldCount(null);
       setStatusMsg(
         `Filled ${res.filledCount} field(s) (preserved ${res.skippedAlreadyFilledCount} pre-filled). Review & click Submit when ready.`
       );
@@ -941,6 +1032,56 @@ export function App() {
     } finally {
       setFilling(false);
     }
+  };
+
+  const handleSaveLearnedEdit = async (edit: LearnedFieldEdit) => {
+    if (!cachedData) return;
+    setSavingLearnedFieldId(edit.fieldId);
+    setErrorMsg(null);
+    try {
+      const questionKey =
+        edit.canonicalKey === 'unknown' || edit.canonicalKey === 'custom_question'
+          ? slugAnswerKey(edit.label)
+          : edit.canonicalKey;
+      const res = (await chrome.runtime.sendMessage({
+        type: 'API_SAVE_ANSWER',
+        payload: {
+          questionKey,
+          questionPattern: edit.label,
+          answer: edit.value.trim(),
+          tags: scan ? [scan.adapterId] : []
+        }
+      } satisfies ExtensionMessage)) as SaveAnswerProxyResponse;
+
+      if (!res?.ok) throw new Error(res?.error || 'Failed to save learned answer.');
+      const updatedCache: CachedUserData = {
+        ...cachedData,
+        savedAnswers: [res.data, ...cachedData.savedAnswers]
+      };
+      setCachedData(updatedCache);
+      await saveCachedUserData(updatedCache);
+      setLearnedEdits((prev) => prev.filter((item) => item.fieldId !== edit.fieldId));
+      setStatusMsg(`Saved "${edit.label}" to your Answer Bank for future applications.`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to save correction.');
+    } finally {
+      setSavingLearnedFieldId(null);
+    }
+  };
+
+  const handleToggleHiddenDomain = async (hostname: string, hide: boolean) => {
+    const clean = hostname.trim().toLowerCase();
+    if (!clean) return;
+    const nextList = hide
+      ? Array.from(new Set([...settings.hiddenCtaDomains, clean]))
+      : settings.hiddenCtaDomains.filter((d) => d !== clean);
+    const next = await saveExtensionSettings({ hiddenCtaDomains: nextList });
+    setSettings(next);
+    setStatusMsg(
+      hide
+        ? `Hid inline "Autofill via JobPilot" button on ${clean}.`
+        : `Restored inline "Autofill via JobPilot" button on ${clean}.`
+    );
   };
 
   const runAutofillViaJobPilot = useCallback(async () => {
@@ -1080,6 +1221,13 @@ export function App() {
         }
         filledCount = execRes.filledCount;
         setExecResults(new Map(execRes.results.map((r) => [r.fieldId, r])));
+        const valRes = (await chrome.tabs
+          .sendMessage(activeTab.id, {
+            type: 'GET_PAGE_VALIDATION_ERRORS'
+          } satisfies ExtensionMessage)
+          .catch(() => null)) as { ok: boolean; errors?: PageValidationError[] } | null;
+        setPageValidationErrors(valRes?.errors ?? []);
+        setNextStepFieldCount(null);
       }
 
       setPendingQuestions(finalQuestions);
@@ -1551,6 +1699,99 @@ export function App() {
             </div>
 
             {effectiveProfile ? <QuickCopyBar profile={effectiveProfile} /> : null}
+
+            {tailorHandoffNote ? (
+              <div className="jp-banner jp-banner-ok" role="status">
+                [tailor] {tailorHandoffNote}
+              </div>
+            ) : null}
+
+            {nextStepFieldCount != null ? (
+              <div className="jp-panel jp-hero-card" role="status" aria-label="Next application step detected">
+                <div className="jp-row" style={{ justifyContent: 'space-between' }}>
+                  <div className="jp-label">Next Step Detected ({nextStepFieldCount} fields)</div>
+                  <span className="jp-badge jp-badge-accent">MULTI-STEP</span>
+                </div>
+                <p className="jp-meta">
+                  New application inputs appeared on this page. Autofill the next step in one click.
+                </p>
+                <div className="jp-row">
+                  <button
+                    type="button"
+                    className="jp-btn jp-btn-primary"
+                    disabled={autofilling}
+                    onClick={() => {
+                      setNextStepFieldCount(null);
+                      void runAutofillViaJobPilot();
+                    }}
+                  >
+                    {autofilling ? 'Autofilling...' : 'Autofill Next Step'}
+                  </button>
+                  <button
+                    type="button"
+                    className="jp-btn"
+                    onClick={() => setNextStepFieldCount(null)}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {pageValidationErrors.length > 0 ? (
+              <div className="jp-panel jp-questions-card" role="alert" aria-label="Page validation warnings">
+                <div className="jp-row" style={{ justifyContent: 'space-between' }}>
+                  <div className="jp-label">
+                    Page Validation Errors ({pageValidationErrors.length})
+                  </div>
+                  <button
+                    type="button"
+                    className="jp-link-btn"
+                    onClick={() => setPageValidationErrors([])}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+                {pageValidationErrors.map((errItem, idx) => (
+                  <div key={`${errItem.label}-${idx}`} className="jp-meta">
+                    <strong>{errItem.label}:</strong> {errItem.message}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {learnedEdits.length > 0 ? (
+              <div className="jp-panel" role="status" aria-label="Save edited answers">
+                <div className="jp-label">Save Your Edits to Answer Bank?</div>
+                {learnedEdits.map((edit) => (
+                  <div key={edit.fieldId} className="jp-field-card">
+                    <div className="jp-label">{edit.label}</div>
+                    <div className="jp-meta">{edit.value}</div>
+                    <div className="jp-row">
+                      <button
+                        type="button"
+                        className="jp-btn jp-btn-primary"
+                        disabled={savingLearnedFieldId === edit.fieldId}
+                        onClick={() => void handleSaveLearnedEdit(edit)}
+                      >
+                        {savingLearnedFieldId === edit.fieldId ? 'Saving...' : 'Save Answer'}
+                      </button>
+                      <button
+                        type="button"
+                        className="jp-btn"
+                        onClick={() =>
+                          setLearnedEdits((prev) =>
+                            prev.filter((item) => item.fieldId !== edit.fieldId)
+                          )
+                        }
+                      >
+                        Ignore
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {!session || !cachedData ? (
               <div className="jp-panel">
@@ -2461,6 +2702,61 @@ export function App() {
                   </div>
                 );
               })}
+            </div>
+            <div className="jp-panel">
+              <div className="jp-label">Inline Button Visibility (&quot;Autofill via JobPilot&quot;)</div>
+              <p className="jp-meta">
+                Control which websites show the inline button beside Apply CTAs. Side panel and
+                right-click autofill always remain available.
+              </p>
+              {scan?.url && /^https?:\/\//i.test(scan.url) ? (
+                (() => {
+                  let currentHost = '';
+                  try {
+                    currentHost = new URL(scan.url).hostname.toLowerCase();
+                  } catch {
+                    currentHost = '';
+                  }
+                  if (!currentHost) return null;
+                  const currentlyHidden = settings.hiddenCtaDomains.includes(currentHost);
+                  return (
+                    <div className="jp-row" style={{ justifyContent: 'space-between' }}>
+                      <span className="jp-meta">Current site: {currentHost}</span>
+                      <button
+                        type="button"
+                        className="jp-btn"
+                        onClick={() =>
+                          void handleToggleHiddenDomain(currentHost, !currentlyHidden)
+                        }
+                      >
+                        {currentlyHidden ? 'Show on This Site' : 'Hide on This Site'}
+                      </button>
+                    </div>
+                  );
+                })()
+              ) : null}
+              {settings.hiddenCtaDomains.length > 0 ? (
+                <div className="jp-field-list">
+                  {settings.hiddenCtaDomains.map((domain) => (
+                    <div
+                      key={domain}
+                      className="jp-field-card"
+                      style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                    >
+                      <span className="jp-label">{domain}</span>
+                      <button
+                        type="button"
+                        className="jp-btn"
+                        onClick={() => void handleToggleHiddenDomain(domain, false)}
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="jp-meta">No websites hidden right now.</div>
+              )}
             </div>
           </div>
         ) : null}

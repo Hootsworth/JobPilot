@@ -4,9 +4,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   formatSalaryRange,
+  type CoverLetterRecord,
   type CrawlRunSummary,
   type JobFeedItem,
-  type JobSourceStatus
+  type JobSourceStatus,
+  type ResumeVersionRecord,
+  type SavedJobSearchWithCounts
 } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
 import { MoSpinner } from '@/components/ui/mo';
@@ -21,6 +24,7 @@ import {
   SkeletonBlock
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
+import { handoffToExtensionAndApply } from '@/lib/extension-handoff';
 import {
   formatRelativeTime,
   formatSeniority,
@@ -48,6 +52,21 @@ export default function JobsFeedPage() {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [sources, setSources] = useState<JobSourceStatus[]>([]);
   const [recentRuns, setRecentRuns] = useState<CrawlRunSummary[]>([]);
+  const [savedSearches, setSavedSearches] = useState<SavedJobSearchWithCounts[]>([]);
+  const [resumeVersions, setResumeVersions] = useState<ResumeVersionRecord[]>([]);
+  const [coverLetters, setCoverLetters] = useState<CoverLetterRecord[]>([]);
+
+  // Saved search creation
+  const [saveSearchOpen, setSaveSearchOpen] = useState(false);
+  const [saveSearchName, setSaveSearchName] = useState('');
+  const [savingSearch, setSavingSearch] = useState(false);
+
+  // Company board watchlist
+  const [trackOpen, setTrackOpen] = useState(false);
+  const [boardUrlInput, setBoardUrlInput] = useState('');
+  const [boardNameInput, setBoardNameInput] = useState('');
+  const [boardRegionInput, setBoardRegionInput] = useState<'india' | 'hybrid' | 'global'>('india');
+  const [addingBoard, setAddingBoard] = useState(false);
 
   // Filters
   const [q, setQ] = useState('');
@@ -70,7 +89,7 @@ export default function JobsFeedPage() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const [feedRes, srcRes] = await Promise.all([
+      const [feedRes, srcRes, savedRes, versionsRes, lettersRes] = await Promise.all([
         api.listJobs({
           q: q.trim() || undefined,
           country: country || undefined,
@@ -82,12 +101,18 @@ export default function JobsFeedPage() {
           onlyPassed,
           limit: 50
         }),
-        api.listJobSources()
+        api.listJobSources(),
+        api.listSavedSearches().catch(() => ({ items: [] as SavedJobSearchWithCounts[] })),
+        api.listResumeVersions().catch(() => [] as ResumeVersionRecord[]),
+        api.listCoverLetters().catch(() => [] as CoverLetterRecord[])
       ]);
       setItems(feedRes.items);
       setTotal(feedRes.total);
       setSources(srcRes.sources);
       setRecentRuns(srcRes.recentRuns);
+      setSavedSearches(savedRes.items);
+      setResumeVersions(versionsRes);
+      setCoverLetters(lettersRes);
       setSelectedId((prev) =>
         prev && feedRes.items.some((i) => i.job.id === prev)
           ? prev
@@ -198,6 +223,98 @@ export default function JobsFeedPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [items, selectedId, selectedItem, handleSaveJob, handleDismissJob, router]);
 
+  const handleSaveCurrentSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = saveSearchName.trim();
+    if (!name) return;
+    setSavingSearch(true);
+    setErrorMsg(null);
+    try {
+      await api.createSavedSearch({
+        name,
+        ...(q.trim() ? { q: q.trim() } : {}),
+        ...(country ? { country } : {}),
+        ...(workMode ? { workMode: workMode as 'remote' | 'hybrid' | 'onsite' } : {}),
+        ...(seniority
+          ? {
+              seniority: seniority as
+                | 'intern'
+                | 'fresher'
+                | 'junior'
+                | 'mid'
+                | 'senior'
+                | 'staff'
+                | 'lead'
+                | 'manager'
+            }
+          : {}),
+        ...(source ? { source } : {}),
+        ...(minSalaryLpa ? { minSalaryLpa: Number(minSalaryLpa) } : {}),
+        onlyPassed,
+        sortBy
+      });
+      const updated = await api.listSavedSearches();
+      setSavedSearches(updated.items);
+      setSaveSearchName('');
+      setSaveSearchOpen(false);
+      setStatusMsg(`Saved search "${name}".`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to save search.');
+    } finally {
+      setSavingSearch(false);
+    }
+  };
+
+  const handleApplySavedSearch = async (search: SavedJobSearchWithCounts) => {
+    setQ(search.q ?? '');
+    setCountry(search.country ?? '');
+    setWorkMode(search.workMode ?? '');
+    setSeniority(search.seniority ?? '');
+    setSource(search.source ?? '');
+    setMinSalaryLpa(search.minSalaryLpa != null ? String(search.minSalaryLpa) : '');
+    setOnlyPassed(search.onlyPassed);
+    setSortBy(search.sortBy);
+    setSavedSearches((prev) =>
+      prev.map((s) => (s.id === search.id ? { ...s, newCount: 0 } : s))
+    );
+    await api.markSavedSearchSeen(search.id).catch(() => {});
+  };
+
+  const handleDeleteSavedSearch = async (searchId: string) => {
+    try {
+      await api.deleteSavedSearch(searchId);
+      setSavedSearches((prev) => prev.filter((s) => s.id !== searchId));
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to remove saved search.');
+    }
+  };
+
+  const handleTrackCompanyBoard = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!boardUrlInput.trim()) return;
+    setAddingBoard(true);
+    setErrorMsg(null);
+    setStatusMsg(null);
+    try {
+      const res = await api.addCompanyBoard({
+        boardUrl: boardUrlInput.trim(),
+        ...(boardNameInput.trim() ? { displayName: boardNameInput.trim() } : {}),
+        regionFocus: boardRegionInput
+      });
+      setBoardUrlInput('');
+      setBoardNameInput('');
+      setTrackOpen(false);
+      setStatusMsg(
+        `Tracking ${res.source.displayName} (${res.source.sourceType}) — synced ${pluralize(res.syncedJobsCount, 'job')}.`
+      );
+      await loadJobs();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to track that company board.');
+    } finally {
+      setAddingBoard(false);
+    }
+  };
+
   const activeSourcesCount = sources.filter((s) => s.enabled).length;
   const lastRun = recentRuns[0];
 
@@ -209,6 +326,13 @@ export default function JobsFeedPage() {
           <span className="text-xs text-[var(--mute)] tabular-nums whitespace-nowrap">
             {pluralize(total, 'job')}
           </span>
+          <Button
+            variant={trackOpen ? 'primary' : 'secondary'}
+            size="sm"
+            onClick={() => setTrackOpen((v) => !v)}
+          >
+            + Track company
+          </Button>
           <Button
             variant="secondary"
             size="sm"
@@ -223,6 +347,68 @@ export default function JobsFeedPage() {
         </div>
       }
     >
+      {trackOpen ? (
+        <section
+          aria-label="Track a company careers board"
+          className="border border-[var(--hairline)] bg-[var(--surface-soft)] p-3.5 sm:p-4 space-y-3"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-bold text-[var(--ink)]">Add a Company Careers Board</h2>
+              <p className="text-xs text-[var(--mute)]">
+                Paste a public Greenhouse, Lever, Ashby, SmartRecruiters, or Workable URL to sync now
+                and keep monitoring it automatically.
+              </p>
+            </div>
+          </div>
+          <form onSubmit={handleTrackCompanyBoard} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+            <div className="sm:col-span-6">
+              <label htmlFor="track-board-url" className="sr-only">
+                ATS board URL
+              </label>
+              <Input
+                id="track-board-url"
+                type="url"
+                required
+                value={boardUrlInput}
+                onChange={(e) => setBoardUrlInput(e.target.value)}
+                placeholder="https://boards.greenhouse.io/company or https://jobs.ashbyhq.com/company"
+              />
+            </div>
+            <div className="sm:col-span-3">
+              <label htmlFor="track-board-name" className="sr-only">
+                Company display name
+              </label>
+              <Input
+                id="track-board-name"
+                type="text"
+                value={boardNameInput}
+                onChange={(e) => setBoardNameInput(e.target.value)}
+                placeholder="Company name (optional)"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="track-board-region" className="sr-only">
+                Region focus
+              </label>
+              <Select
+                id="track-board-region"
+                value={boardRegionInput}
+                onChange={(e) => setBoardRegionInput(e.target.value as 'india' | 'hybrid' | 'global')}
+              >
+                <option value="india">India</option>
+                <option value="hybrid">India + Global</option>
+                <option value="global">Global</option>
+              </Select>
+            </div>
+            <div className="sm:col-span-1 flex items-center">
+              <Button type="submit" size="sm" variant="primary" disabled={addingBoard} className="w-full">
+                {addingBoard ? 'Adding...' : 'Add'}
+              </Button>
+            </div>
+          </form>
+        </section>
+      ) : null}
       {refreshing ? (
         <div
           role="status"
@@ -292,22 +478,32 @@ export default function JobsFeedPage() {
               </Button>
 
               {activeFilterCount > 0 || q.trim() ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setQ('');
-                    setCountry('');
-                    setWorkMode('');
-                    setSeniority('');
-                    setSource('');
-                    setMinSalaryLpa('');
-                    setOnlyPassed(true);
-                  }}
-                >
-                  Reset
-                </Button>
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setSaveSearchOpen((v) => !v)}
+                  >
+                    Save search
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setQ('');
+                      setCountry('');
+                      setWorkMode('');
+                      setSeniority('');
+                      setSource('');
+                      setMinSalaryLpa('');
+                      setOnlyPassed(true);
+                    }}
+                  >
+                    Reset
+                  </Button>
+                </>
               ) : null}
 
               {activeSourcesCount > 0 ? (
@@ -436,6 +632,69 @@ export default function JobsFeedPage() {
             ) : null}
           </form>
         </search>
+
+        {saveSearchOpen ? (
+          <form
+            onSubmit={handleSaveCurrentSearch}
+            className="pt-2.5 border-t border-[var(--hairline)] flex flex-wrap items-center gap-2"
+          >
+            <Input
+              type="text"
+              className="max-w-xs"
+              value={saveSearchName}
+              onChange={(e) => setSaveSearchName(e.target.value)}
+              placeholder="Name this alert (e.g. Bengaluru AI Internships)"
+              required
+            />
+            <Button type="submit" size="sm" variant="primary" disabled={savingSearch}>
+              {savingSearch ? 'Saving...' : 'Save Alert'}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setSaveSearchOpen(false)}
+            >
+              Cancel
+            </Button>
+          </form>
+        ) : null}
+
+        {savedSearches.length > 0 ? (
+          <div className="pt-2.5 border-t border-[var(--hairline)] flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--mute)]">
+              Saved alerts:
+            </span>
+            {savedSearches.map((saved) => (
+              <div
+                key={saved.id}
+                className="inline-flex items-center border border-[var(--hairline)] bg-[var(--surface-soft)] rounded-[4px] text-xs overflow-hidden"
+              >
+                <button
+                  type="button"
+                  onClick={() => void handleApplySavedSearch(saved)}
+                  className="px-2.5 py-1 hover:bg-[var(--surface-card)] cursor-pointer flex items-center gap-1.5 text-[var(--ink)] font-medium"
+                >
+                  <span>{saved.name}</span>
+                  <span className="text-[11px] text-[var(--mute)] tabular-nums">
+                    ({saved.matchCount})
+                  </span>
+                  {saved.newCount > 0 ? (
+                    <Badge tone="accent">+{saved.newCount} new</Badge>
+                  ) : null}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Remove saved search ${saved.name}`}
+                  onClick={() => void handleDeleteSavedSearch(saved.id)}
+                  className="px-2 py-1 border-l border-[var(--hairline)] text-[var(--mute)] hover:text-[var(--danger-text)] cursor-pointer"
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       {loading ? (
@@ -584,15 +843,45 @@ export default function JobsFeedPage() {
                     >
                       Tailor
                     </Button>
-                    <a
-                      href={selectedItem.job.applyUrl ?? selectedItem.job.sourceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <Button size="sm" variant="primary">
-                        Apply
-                      </Button>
-                    </a>
+                    {(() => {
+                      const tailoredResume = resumeVersions.find(
+                        (r) => r.jobId === selectedItem.job.id
+                      );
+                      const tailoredCover = coverLetters.find(
+                        (c) => c.jobId === selectedItem.job.id
+                      );
+                      const applyTarget = selectedItem.job.applyUrl ?? selectedItem.job.sourceUrl;
+                      return (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => {
+                            handoffToExtensionAndApply({
+                              applyUrl: applyTarget,
+                              jobId: selectedItem.job.id,
+                              jobTitle: selectedItem.job.title,
+                              companyName: selectedItem.job.companyName,
+                              ...(tailoredResume
+                                ? {
+                                    resumeVersionId: tailoredResume.id,
+                                    profileVariantId: tailoredResume.profileVariantId ?? undefined
+                                  }
+                                : {}),
+                              ...(tailoredCover ? { coverLetterId: tailoredCover.id } : {})
+                            });
+                            if (tailoredResume) {
+                              setStatusMsg(
+                                `Tailored v${tailoredResume.versionNumber} handed off to JobPilot extension.`
+                              );
+                            }
+                          }}
+                        >
+                          {tailoredResume
+                            ? `Apply (Tailored v${tailoredResume.versionNumber})`
+                            : 'Apply'}
+                        </Button>
+                      );
+                    })()}
                   </div>
                 }
               >

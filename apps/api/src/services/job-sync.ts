@@ -1,4 +1,4 @@
-import type { JobSyncStatus, MasterProfile } from '@jobpilot/shared';
+import type { JobSourceStatus, JobSyncStatus, MasterProfile, SeedBoard } from '@jobpilot/shared';
 import { loadCompanyRegistry, runDiscoverySync } from '@jobpilot/ingestion';
 import type { ApiConfig } from '../config.js';
 import type { DataStore } from '../store/types.js';
@@ -111,6 +111,93 @@ export class JobSyncService {
     return work;
   }
 
+  private async buildMergedBoards(): Promise<SeedBoard[]> {
+    const byKey = new Map<string, SeedBoard>();
+    for (const board of loadCompanyRegistry()) {
+      byKey.set(`${board.sourceType}:${board.slug}`, board);
+    }
+    const { sources } = await this.store.listJobSourcesAndRuns().catch(() => ({
+      sources: [] as JobSourceStatus[],
+      recentRuns: []
+    }));
+    for (const src of sources) {
+      if (!src.enabled) continue;
+      if (
+        src.sourceType !== 'greenhouse' &&
+        src.sourceType !== 'lever' &&
+        src.sourceType !== 'ashby' &&
+        src.sourceType !== 'workable' &&
+        src.sourceType !== 'smartrecruiters'
+      ) {
+        continue;
+      }
+      const key = `${src.sourceType}:${src.slug}`;
+      if (byKey.has(key)) continue;
+      byKey.set(key, {
+        sourceType: src.sourceType,
+        slug: src.slug,
+        displayName: src.displayName,
+        regionFocus:
+          src.regionFocus === 'india' || src.regionFocus === 'global' || src.regionFocus === 'hybrid'
+            ? src.regionFocus
+            : 'india',
+        refreshTier: 'high_volume',
+        enabled: true
+      });
+    }
+    return Array.from(byKey.values());
+  }
+
+  async syncSingleBoard(board: SeedBoard): Promise<{
+    source: JobSourceStatus;
+    syncedJobsCount: number;
+    insertedCount: number;
+    updatedCount: number;
+  }> {
+    const discovery = await this.syncRunner({
+      mode: 'full',
+      boards: [board],
+      existingSourceCache: new Map(),
+      respectRefreshTiers: false,
+      skipAggregators: true
+    });
+
+    const update = discovery.sourceUpdates.find(
+      (s) => s.sourceType === board.sourceType && s.slug === board.slug
+    );
+    if (!update || update.failed) {
+      throw new Error(
+        `Could not fetch jobs from ${board.sourceType} board "${board.slug}". Check that the URL points to a public careers board.`
+      );
+    }
+
+    await this.store.upsertJobSourceStatus(update);
+    const { insertedCount, updatedCount } = await this.store.upsertPublicJobsBatch(discovery.bundles);
+    const { sources } = await this.store.listJobSourcesAndRuns().catch(() => ({
+      sources: [] as JobSourceStatus[],
+      recentRuns: []
+    }));
+    const storedSource: JobSourceStatus =
+      sources.find((s) => s.sourceType === board.sourceType && s.slug === board.slug) ?? {
+        id: `${board.sourceType}:${board.slug}`,
+        sourceType: board.sourceType,
+        slug: board.slug,
+        displayName: board.displayName,
+        regionFocus: board.regionFocus,
+        enabled: true,
+        lastCrawledAt: update.lastCrawledAt,
+        lastStatus: update.lastStatus,
+        consecutiveFailures: update.consecutiveFailures
+      };
+
+    return {
+      source: storedSource,
+      syncedJobsCount: discovery.stats.rawJobsCount,
+      insertedCount,
+      updatedCount
+    };
+  }
+
   private async executeSync(params: {
     userId?: string;
     profile?: MasterProfile | null;
@@ -122,11 +209,14 @@ export class JobSyncService {
 
     try {
       runId = await this.store.startCrawlRun(`api-sync-${params.mode}`).catch(() => null);
-      const sourceCache = await this.store.listJobSourceCache().catch(() => new Map());
+      const [sourceCache, boards] = await Promise.all([
+        this.store.listJobSourceCache().catch(() => new Map()),
+        this.buildMergedBoards()
+      ]);
 
       const discovery = await this.syncRunner({
         mode: params.mode,
-        boards: loadCompanyRegistry(),
+        boards,
         existingSourceCache: sourceCache,
         profile: params.profile,
         respectRefreshTiers: !params.force,

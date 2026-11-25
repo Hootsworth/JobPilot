@@ -1,7 +1,8 @@
 import type { ExtensionMessage, WebConfigSyncPayload, WebSessionSyncPayload } from '../src/lib/messaging';
+import type { TailorHandoffPayload } from '../src/lib/storage';
 
 export default defineContentScript({
-  matches: ['https://jobpilot.singulr.tech/*'],
+  matches: ['https://jobpilot.singulr.tech/*', 'http://localhost:3000/*'],
   runAt: 'document_idle',
 
   main() {
@@ -37,6 +38,15 @@ export default defineContentScript({
           .sendMessage({
             type: 'WEB_CONFIG_SYNC',
             payload: data.payload as WebConfigSyncPayload
+          } satisfies ExtensionMessage)
+          .catch(() => {
+            // Ignore
+          });
+      } else if (data.type === 'TAILOR_HANDOFF' && data.payload) {
+        void chrome.runtime
+          .sendMessage({
+            type: 'WEB_TAILOR_HANDOFF',
+            payload: data.payload as TailorHandoffPayload
           } satisfies ExtensionMessage)
           .catch(() => {
             // Ignore

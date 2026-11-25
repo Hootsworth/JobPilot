@@ -35,6 +35,7 @@ import {
   Textarea
 } from '@/components/ui/primitives';
 import { api, ApiError } from '@/lib/api';
+import { handoffToExtensionAndApply } from '@/lib/extension-handoff';
 import { pluralize } from '@/lib/format';
 
 type StudioMode = 'resume' | 'cover-letter';
@@ -901,10 +902,39 @@ function TailorStudioInner() {
               </Badge>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {(() => {
+                const linkedJob = selectedVersion.jobId
+                  ? catalogJobs.find((item) => item.job.id === selectedVersion.jobId)?.job
+                  : undefined;
+                const applyHref = linkedJob?.applyUrl ?? linkedJob?.sourceUrl;
+                if (!linkedJob || !applyHref) return null;
+                return (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="primary"
+                    onClick={() => {
+                      handoffToExtensionAndApply({
+                        applyUrl: applyHref,
+                        jobId: linkedJob.id,
+                        jobTitle: linkedJob.title,
+                        companyName: linkedJob.companyName,
+                        resumeVersionId: selectedVersion.id,
+                        profileVariantId: selectedVersion.profileVariantId ?? undefined
+                      });
+                      moToast(
+                        `Tailored v${selectedVersion.versionNumber} queued for JobPilot Autofill.`
+                      );
+                    }}
+                  >
+                    Apply via JobPilot
+                  </Button>
+                );
+              })()}
               <Button
                 type="button"
                 size="sm"
-                variant="primary"
+                variant="secondary"
                 onClick={() => setResumeStage('compose')}
               >
                 New resume

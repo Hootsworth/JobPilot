@@ -18,7 +18,8 @@ import {
   getExtensionSettings,
   saveCachedUserData,
   saveExtensionSession,
-  saveExtensionSettings
+  saveExtensionSettings,
+  saveTailorHandoff
 } from '../src/lib/storage';
 
 const MENU_OPEN_PANEL = 'jobpilot-open-panel';
@@ -567,6 +568,36 @@ export default defineBackground(() => {
               ? { supabaseAnonKey: message.payload.supabaseAnonKey }
               : {})
           });
+          sendResponse({ ok: true });
+        } catch (err) {
+          sendResponse({ ok: false, error: String(err) });
+        }
+      })();
+      return true;
+    }
+
+    if (message?.type === 'HIDE_CTA_FOR_DOMAIN') {
+      (async () => {
+        try {
+          const host = message.hostname.trim().toLowerCase();
+          if (host) {
+            const current = await getExtensionSettings();
+            await saveExtensionSettings({
+              hiddenCtaDomains: Array.from(new Set([...current.hiddenCtaDomains, host]))
+            });
+          }
+          sendResponse({ ok: true });
+        } catch (err) {
+          sendResponse({ ok: false, error: String(err) });
+        }
+      })();
+      return true;
+    }
+
+    if (message?.type === 'WEB_TAILOR_HANDOFF') {
+      (async () => {
+        try {
+          await saveTailorHandoff(message.payload);
           sendResponse({ ok: true });
         } catch (err) {
           sendResponse({ ok: false, error: String(err) });

@@ -4,12 +4,14 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import {
+  AddCompanyBoardRequestSchema,
   ApplicationStatusSchema,
   AtsScoreRequestSchema,
   CaptureExtensionJobRequestSchema,
   CreateCheckoutRequestSchema,
   CreateManualApplicationRequestSchema,
   CreateProfileVariantRequestSchema,
+  CreateSavedJobSearchRequestSchema,
   CREDIT_PACKS,
   DismissJobRequestSchema,
   DraftAnswersRequestSchema,
@@ -19,6 +21,7 @@ import {
   GithubImportRequestSchema,
   JdRequirementsSchema,
   JobFeedQuerySchema,
+  JobSourceTypeSchema,
   LlmProviderIdSchema,
   PaymentProviderSchema,
   PLAN_CATALOG,
@@ -40,9 +43,12 @@ import {
   type LlmProviderId,
   type LlmSettingsItem,
   type MasterProfile,
-  type RecommendationsResponse
+  type RecommendationsResponse,
+  type SavedJobSearch,
+  type SavedJobSearchWithCounts
 } from '@jobpilot/shared';
 import {
+  parseCompanyBoardUrl,
   runDiscoverySync,
   runThreeStageMatching,
   type JobForMatching
@@ -903,6 +909,175 @@ export async function buildApp(deps: BuildAppDeps): Promise<FastifyInstance> {
 
   app.get('/api/jobs/sources', { preHandler: requireAuth }, async () => {
     return store.listJobSourcesAndRuns();
+  });
+
+  app.post('/api/jobs/sources/boards', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = AddCompanyBoardRequestSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid company board request', issues: parsed.error.issues });
+    }
+
+    const board = parseCompanyBoardUrl(parsed.data.boardUrl, {
+      displayName: parsed.data.displayName,
+      regionFocus: parsed.data.regionFocus
+    });
+    if (!board) {
+      return reply.code(400).send({
+        error:
+          'Unsupported careers URL. Paste a public Greenhouse, Lever, Ashby, SmartRecruiters, or Workable job board URL.'
+      });
+    }
+
+    try {
+      const result = await jobSync.syncSingleBoard(board);
+      try {
+        await computeUserMatches({
+          user: request.authUser!,
+          useLlm: false,
+          topKVector: 250,
+          topKLlm: 0,
+          forceRecompute: false
+        });
+      } catch {
+        // Best-effort match computation; new board is still saved
+      }
+      return reply.code(201).send(result);
+    } catch (err) {
+      return reply.code(400).send({
+        error: err instanceof Error ? err.message : 'Unable to sync jobs from that company board.'
+      });
+    }
+  });
+
+  app.get('/api/jobs/saved-searches', { preHandler: requireAuth }, async (request) => {
+    const user = request.authUser!;
+    const profile = await store.getOrCreateProfile(user);
+    const savedSearches = profile.searchPreferences.savedSearches ?? [];
+
+    const items: SavedJobSearchWithCounts[] = await Promise.all(
+      savedSearches.map(async (search) => {
+        const sourceParsed = search.source ? JobSourceTypeSchema.safeParse(search.source) : null;
+        const query = JobFeedQuerySchema.parse({
+          q: search.q || undefined,
+          country: search.country || undefined,
+          workMode: search.workMode || undefined,
+          seniority: search.seniority || undefined,
+          source: sourceParsed?.success ? sourceParsed.data : undefined,
+          minSalaryLpa: search.minSalaryLpa ?? undefined,
+          onlyPassed: search.onlyPassed,
+          sortBy: 'recent',
+          limit: 100,
+          offset: 0
+        });
+        const feed = await store.listJobsFeed(user.id, profile.activeProfileVersion, query);
+        const cutoffMs = Date.parse(search.lastCheckedAt ?? search.createdAt);
+        const newCount = Number.isFinite(cutoffMs)
+          ? feed.items.filter((entry) => {
+              const ts = Date.parse(entry.job.postedAt ?? entry.job.lastSeenAt);
+              return Number.isFinite(ts) && ts > cutoffMs;
+            }).length
+          : 0;
+        return {
+          ...search,
+          matchCount: feed.total,
+          newCount
+        };
+      })
+    );
+
+    return { items };
+  });
+
+  app.post('/api/jobs/saved-searches', { preHandler: requireAuth }, async (request, reply) => {
+    const parsed = CreateSavedJobSearchRequestSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'Invalid saved search payload', issues: parsed.error.issues });
+    }
+
+    const user = request.authUser!;
+    const profile = await store.getOrCreateProfile(user);
+    const current = profile.searchPreferences.savedSearches ?? [];
+    if (current.length >= 20) {
+      return reply.code(400).send({ error: 'Maximum of 20 saved searches reached.' });
+    }
+
+    const nowIso = new Date().toISOString();
+    const created: SavedJobSearch = {
+      id: randomUUID(),
+      name: parsed.data.name.trim(),
+      ...(parsed.data.q?.trim() ? { q: parsed.data.q.trim() } : {}),
+      ...(parsed.data.country?.trim() ? { country: parsed.data.country.trim() } : {}),
+      ...(parsed.data.workMode ? { workMode: parsed.data.workMode } : {}),
+      ...(parsed.data.seniority ? { seniority: parsed.data.seniority } : {}),
+      ...(parsed.data.source?.trim() ? { source: parsed.data.source.trim() } : {}),
+      ...(parsed.data.minSalaryLpa != null ? { minSalaryLpa: parsed.data.minSalaryLpa } : {}),
+      onlyPassed: parsed.data.onlyPassed,
+      sortBy: parsed.data.sortBy,
+      createdAt: nowIso,
+      lastCheckedAt: nowIso
+    };
+
+    await store.updateProfile(
+      user.id,
+      {
+        searchPreferences: {
+          ...profile.searchPreferences,
+          savedSearches: [created, ...current]
+        }
+      },
+      false
+    );
+
+    return reply.code(201).send(created);
+  });
+
+  app.post('/api/jobs/saved-searches/:searchId/seen', { preHandler: requireAuth }, async (request, reply) => {
+    const { searchId } = request.params as { searchId: string };
+    const user = request.authUser!;
+    const profile = await store.getOrCreateProfile(user);
+    const current = profile.searchPreferences.savedSearches ?? [];
+    if (!current.some((s) => s.id === searchId)) {
+      return reply.code(404).send({ error: 'Saved search not found' });
+    }
+    const nowIso = new Date().toISOString();
+    const updated = current.map((s) => (s.id === searchId ? { ...s, lastCheckedAt: nowIso } : s));
+    await store.updateProfile(
+      user.id,
+      {
+        searchPreferences: {
+          ...profile.searchPreferences,
+          savedSearches: updated
+        }
+      },
+      false
+    );
+    return { ok: true, lastCheckedAt: nowIso };
+  });
+
+  app.delete('/api/jobs/saved-searches/:searchId', { preHandler: requireAuth }, async (request, reply) => {
+    const { searchId } = request.params as { searchId: string };
+    const user = request.authUser!;
+    const profile = await store.getOrCreateProfile(user);
+    const current = profile.searchPreferences.savedSearches ?? [];
+    const next = current.filter((s) => s.id !== searchId);
+    if (next.length === current.length) {
+      return reply.code(404).send({ error: 'Saved search not found' });
+    }
+    await store.updateProfile(
+      user.id,
+      {
+        searchPreferences: {
+          ...profile.searchPreferences,
+          savedSearches: next
+        }
+      },
+      false
+    );
+    return { ok: true };
   });
 
   async function getUserSyncStaleHours(userId: string): Promise<number | undefined> {

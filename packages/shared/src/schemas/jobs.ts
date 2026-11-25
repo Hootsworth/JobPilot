@@ -344,3 +344,18 @@ export const RecommendationsResponseSchema = z.object({
   autoMatchedCount: z.number().int().min(0)
 });
 export type RecommendationsResponse = z.infer<typeof RecommendationsResponseSchema>;
+
+export const AddCompanyBoardRequestSchema = z.object({
+  boardUrl: z.string().url().max(400),
+  displayName: z.string().min(1).max(120).optional(),
+  regionFocus: z.enum(['india', 'global', 'hybrid']).default('india')
+});
+export type AddCompanyBoardRequest = z.infer<typeof AddCompanyBoardRequestSchema>;
+
+export const AddCompanyBoardResponseSchema = z.object({
+  source: JobSourceStatusSchema,
+  syncedJobsCount: z.number().int().min(0),
+  insertedCount: z.number().int().min(0),
+  updatedCount: z.number().int().min(0)
+});
+export type AddCompanyBoardResponse = z.infer<typeof AddCompanyBoardResponseSchema>;

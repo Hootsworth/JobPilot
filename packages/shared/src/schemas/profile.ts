@@ -14,6 +14,41 @@ export const SeniorityLevelSchema = z.enum([
   'manager'
 ]);
 
+export const SavedJobSearchSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(80),
+  q: z.string().max(120).optional(),
+  country: z.string().max(10).optional(),
+  workMode: WorkModePreferenceSchema.optional(),
+  seniority: SeniorityLevelSchema.optional(),
+  source: z.string().max(40).optional(),
+  minSalaryLpa: z.number().min(0).max(500).nullable().optional(),
+  onlyPassed: z.boolean().default(true),
+  sortBy: z.enum(['match_score', 'recent', 'salary_lpa']).default('match_score'),
+  createdAt: z.string(),
+  lastCheckedAt: z.string().optional()
+});
+export type SavedJobSearch = z.infer<typeof SavedJobSearchSchema>;
+
+export const CreateSavedJobSearchRequestSchema = z.object({
+  name: z.string().min(1).max(80),
+  q: z.string().max(120).optional(),
+  country: z.string().max(10).optional(),
+  workMode: WorkModePreferenceSchema.optional(),
+  seniority: SeniorityLevelSchema.optional(),
+  source: z.string().max(40).optional(),
+  minSalaryLpa: z.number().min(0).max(500).nullable().optional(),
+  onlyPassed: z.boolean().default(true),
+  sortBy: z.enum(['match_score', 'recent', 'salary_lpa']).default('match_score')
+});
+export type CreateSavedJobSearchRequest = z.infer<typeof CreateSavedJobSearchRequestSchema>;
+
+export const SavedJobSearchWithCountsSchema = SavedJobSearchSchema.extend({
+  matchCount: z.number().int().min(0),
+  newCount: z.number().int().min(0)
+});
+export type SavedJobSearchWithCounts = z.infer<typeof SavedJobSearchWithCountsSchema>;
+
 export const SearchPreferencesSchema = z.object({
   targetRoles: z.array(z.string()).default([]),
   workModes: z.array(WorkModePreferenceSchema).default(['remote', 'hybrid', 'onsite']),
@@ -21,7 +56,8 @@ export const SearchPreferencesSchema = z.object({
   countries: z.array(z.string()).default(['IN']),
   minSalaryLpa: z.number().min(0).max(500).nullable().default(null),
   minExperienceYears: z.number().min(0).max(50).nullable().default(null),
-  maxExperienceYears: z.number().min(0).max(50).nullable().default(null)
+  maxExperienceYears: z.number().min(0).max(50).nullable().default(null),
+  savedSearches: z.array(SavedJobSearchSchema).max(20).default([])
 });
 
 export type SearchPreferences = z.infer<typeof SearchPreferencesSchema>;

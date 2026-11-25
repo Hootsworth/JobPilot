@@ -18,6 +18,20 @@ import type {
   TailorResumeRequest,
   UpsertSavedAnswerRequest
 } from '@jobpilot/shared';
+import type { TailorHandoffPayload } from './storage';
+
+export interface PageValidationError {
+  fieldId?: string;
+  label: string;
+  message: string;
+}
+
+export interface LearnedFieldEdit {
+  fieldId: string;
+  label: string;
+  canonicalKey: string;
+  value: string;
+}
 
 export interface PageScanPayload {
   adapterId: AtsAdapterId;
@@ -70,10 +84,19 @@ export type ExtensionMessage =
     }
   | { type: 'UNDO_FILL' }
   | { type: 'CLEAR_HIGHLIGHTS' }
+  | { type: 'GET_PAGE_VALIDATION_ERRORS' }
+  | { type: 'HIDE_CTA_FOR_DOMAIN'; hostname: string }
+  | { type: 'USER_EDITED_FILLED_FIELD'; payload: LearnedFieldEdit }
   | {
       type: 'PAGE_STRUCTURE_UPDATED';
       adapterId: AtsAdapterId;
       fieldCount: number;
+      stepChanged?: boolean;
+      validationErrors?: PageValidationError[];
+    }
+  | {
+      type: 'WEB_TAILOR_HANDOFF';
+      payload: TailorHandoffPayload;
     }
   | {
       type: 'WEB_CONFIG_SYNC';

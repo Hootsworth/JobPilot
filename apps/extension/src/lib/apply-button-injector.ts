@@ -116,13 +116,30 @@ export function isLikelyJobOrApplicationPage(url: string, doc: Document): boolea
 
 export class ApplyButtonInjector {
   private readonly onTrigger: () => void;
+  private readonly onHideDomain?: () => void;
   private readonly hostByTarget = new WeakMap<HTMLElement, HTMLElement>();
   private readonly activeHosts = new Set<HTMLElement>();
   private rafId: number | null = null;
   private destroyed = false;
 
-  constructor(onTrigger: () => void) {
+  constructor(onTrigger: () => void, onHideDomain?: () => void) {
     this.onTrigger = onTrigger;
+    this.onHideDomain = onHideDomain;
+  }
+
+  setPaused(paused: boolean): void {
+    if (paused) {
+      if (this.rafId !== null) {
+        window.cancelAnimationFrame(this.rafId);
+        this.rafId = null;
+      }
+      for (const host of this.activeHosts) {
+        host.remove();
+      }
+      this.activeHosts.clear();
+    } else if (!this.destroyed) {
+      this.scheduleSync();
+    }
   }
 
   scheduleSync(): void {
@@ -178,6 +195,15 @@ export class ApplyButtonInjector {
           align-items: center;
           vertical-align: middle;
         }
+        .jp-wrap {
+          display: inline-flex;
+          align-items: center;
+          border-radius: 6px;
+          background: #141212;
+          border: 1px solid #3f3b3b;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+          overflow: hidden;
+        }
         button {
           all: unset;
           box-sizing: border-box;
@@ -185,11 +211,9 @@ export class ApplyButtonInjector {
           align-items: center;
           gap: 6px;
           min-height: 34px;
-          padding: 0 12px;
-          border-radius: 6px;
-          background: #141212;
+          padding: 0 11px;
+          background: transparent;
           color: #ffffff;
-          border: 1px solid #3f3b3b;
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           font-size: 12px;
           font-weight: 600;
@@ -197,15 +221,21 @@ export class ApplyButtonInjector {
           letter-spacing: 0.01em;
           cursor: pointer;
           white-space: nowrap;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
-          transition: background 120ms ease, transform 120ms ease;
+          transition: background 120ms ease;
         }
         button:hover {
           background: #272323;
-          border-color: #6b6565;
         }
-        button:active {
-          transform: translateY(1px);
+        .jp-dismiss {
+          padding: 0 8px;
+          border-left: 1px solid #3f3b3b;
+          color: #b4afaf;
+          font-size: 13px;
+          font-weight: 500;
+        }
+        .jp-dismiss:hover {
+          background: #2f1f1f;
+          color: #ffffff;
         }
         .jp-dot {
           width: 7px;
@@ -215,13 +245,24 @@ export class ApplyButtonInjector {
           flex-shrink: 0;
         }
       </style>
-      <button type="button" part="button" aria-label="Autofill via JobPilot">
-        <span class="jp-dot" aria-hidden="true"></span>
-        <span class="jp-cta-text">Autofill via JobPilot</span>
-      </button>
+      <div class="jp-wrap">
+        <button type="button" class="jp-main" part="button" aria-label="Autofill via JobPilot">
+          <span class="jp-dot" aria-hidden="true"></span>
+          <span class="jp-cta-text">Autofill via JobPilot</span>
+        </button>
+        <button
+          type="button"
+          class="jp-dismiss"
+          title="Hide Autofill via JobPilot on this website"
+          aria-label="Hide Autofill via JobPilot on this site"
+        >
+          &times;
+        </button>
+      </div>
     `;
 
-    const btn = shadow.querySelector('button');
+    const btn = shadow.querySelector('.jp-main');
+    const dismissBtn = shadow.querySelector('.jp-dismiss');
     const labelEl = shadow.querySelector('.jp-cta-text');
     btn?.addEventListener('click', (event) => {
       event.preventDefault();
@@ -235,6 +276,12 @@ export class ApplyButtonInjector {
         }, 1800);
       }
       this.onTrigger();
+    });
+    dismissBtn?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.onHideDomain?.();
+      this.setPaused(true);
     });
 
     return host;

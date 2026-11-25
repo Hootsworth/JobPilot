@@ -1,6 +1,8 @@
 'use client';
 
 import type {
+  AddCompanyBoardRequest,
+  AddCompanyBoardResponse,
   ApplicationEventRecord,
   ApplicationRecord,
   ApplicationStatus,
@@ -13,6 +15,7 @@ import type {
   CreateCheckoutRequest,
   CreateManualApplicationRequest,
   CreateProfileVariantRequest,
+  CreateSavedJobSearchRequest,
   CreditPackDefinition,
   DismissReason,
   GenerateCoverLetterRequest,
@@ -36,6 +39,8 @@ import type {
   RefreshMatchesRequest,
   ResumeVersionRecord,
   SavedAnswer,
+  SavedJobSearch,
+  SavedJobSearchWithCounts,
   SyncJobsRequest,
   TailorResumeRequest,
   TestLlmKeyRequest,
@@ -294,6 +299,30 @@ export const api = {
     apiFetch<{ item: JobFeedItem; sightings: JobSighting[] }>(`/api/jobs/${jobId}`),
   listJobSources: () =>
     apiFetch<{ sources: JobSourceStatus[]; recentRuns: CrawlRunSummary[] }>('/api/jobs/sources'),
+  addCompanyBoard: (payload: AddCompanyBoardRequest) =>
+    apiFetch<AddCompanyBoardResponse>('/api/jobs/sources/boards', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  listSavedSearches: () =>
+    apiFetch<{ items: SavedJobSearchWithCounts[] }>('/api/jobs/saved-searches'),
+  createSavedSearch: (payload: CreateSavedJobSearchRequest) =>
+    apiFetch<SavedJobSearch>('/api/jobs/saved-searches', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  markSavedSearchSeen: (searchId: string) =>
+    apiFetch<{ ok: boolean; lastCheckedAt: string }>(
+      `/api/jobs/saved-searches/${encodeURIComponent(searchId)}/seen`,
+      {
+        method: 'POST',
+        body: JSON.stringify({})
+      }
+    ),
+  deleteSavedSearch: (searchId: string) =>
+    apiFetch<{ ok: boolean }>(`/api/jobs/saved-searches/${encodeURIComponent(searchId)}`, {
+      method: 'DELETE'
+    }),
   getRecommendations: () => apiFetch<RecommendationsResponse>('/api/jobs/recommendations'),
   getJobSyncStatus: () => apiFetch<JobSyncStatus>('/api/jobs/sync/status'),
   syncJobs: (payload: Partial<SyncJobsRequest> = {}) =>

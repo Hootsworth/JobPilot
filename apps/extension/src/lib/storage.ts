@@ -24,6 +24,18 @@ export interface ExtensionSettingsState {
   supabaseUrl: string;
   supabaseAnonKey: string;
   enabledAdapters: AdapterEnabledMap;
+  hiddenCtaDomains: string[];
+}
+
+export interface TailorHandoffPayload {
+  applyUrl: string;
+  jobId?: string;
+  jobTitle?: string;
+  companyName?: string;
+  resumeVersionId?: string;
+  coverLetterId?: string;
+  profileVariantId?: string;
+  createdAt: number;
 }
 
 export interface CachedUserData {
@@ -39,7 +51,8 @@ export interface CachedUserData {
 const STORAGE_KEYS = {
   session: 'jobpilot_ext_session',
   settings: 'jobpilot_ext_settings',
-  cachedData: 'jobpilot_ext_cached_data'
+  cachedData: 'jobpilot_ext_cached_data',
+  tailorHandoff: 'jobpilot_tailor_handoff'
 } as const;
 
 const extEnv = (
@@ -52,8 +65,20 @@ export const DEFAULT_SETTINGS: ExtensionSettingsState = {
   supabaseUrl: (extEnv['VITE_SUPABASE_URL'] || '').replace(/\/$/, ''),
   supabaseAnonKey:
     extEnv['VITE_SUPABASE_PUBLISHABLE_KEY'] || extEnv['VITE_SUPABASE_ANON_KEY'] || '',
-  enabledAdapters: getDefaultEnabledAdapterMap()
+  enabledAdapters: getDefaultEnabledAdapterMap(),
+  hiddenCtaDomains: []
 };
+
+function normalizeHiddenDomains(domains: string[] | undefined): string[] {
+  if (!Array.isArray(domains)) return [];
+  return Array.from(
+    new Set(
+      domains
+        .map((d) => d.trim().toLowerCase())
+        .filter((d) => d.length > 0 && d.length <= 200)
+    )
+  );
+}
 
 export async function getExtensionSettings(): Promise<ExtensionSettingsState> {
   const res = await chrome.storage.local.get(STORAGE_KEYS.settings);
@@ -75,7 +100,8 @@ export async function getExtensionSettings(): Promise<ExtensionSettingsState> {
       instahyre: raw?.enabledAdapters?.instahyre ?? defaults.instahyre,
       wellfound: raw?.enabledAdapters?.wellfound ?? defaults.wellfound,
       linkedin: raw?.enabledAdapters?.linkedin ?? defaults.linkedin
-    }
+    },
+    hiddenCtaDomains: normalizeHiddenDomains(raw?.hiddenCtaDomains)
   };
 }
 
@@ -92,7 +118,8 @@ export async function saveExtensionSettings(
     enabledAdapters: {
       ...current.enabledAdapters,
       ...(patch.enabledAdapters ?? {})
-    }
+    },
+    hiddenCtaDomains: normalizeHiddenDomains(patch.hiddenCtaDomains ?? current.hiddenCtaDomains)
   };
   await chrome.storage.local.set({ [STORAGE_KEYS.settings]: next });
   return next;
@@ -135,4 +162,25 @@ export async function saveCachedUserData(data: CachedUserData | null): Promise<v
     return;
   }
   await chrome.storage.local.set({ [STORAGE_KEYS.cachedData]: data });
+}
+
+export async function saveTailorHandoff(payload: TailorHandoffPayload | null): Promise<void> {
+  if (!payload) {
+    await chrome.storage.session.remove(STORAGE_KEYS.tailorHandoff).catch(() => {});
+    return;
+  }
+  await chrome.storage.session.set({ [STORAGE_KEYS.tailorHandoff]: payload }).catch(() => {});
+}
+
+export async function getTailorHandoff(): Promise<TailorHandoffPayload | null> {
+  const res = await chrome.storage.session.get(STORAGE_KEYS.tailorHandoff).catch(() => ({}));
+  const raw = (res as Record<string, unknown>)[STORAGE_KEYS.tailorHandoff] as
+    | TailorHandoffPayload
+    | undefined;
+  if (!raw?.applyUrl || !raw.createdAt) return null;
+  if (Date.now() - raw.createdAt > 15 * 60_000) {
+    await saveTailorHandoff(null);
+    return null;
+  }
+  return raw;
 }

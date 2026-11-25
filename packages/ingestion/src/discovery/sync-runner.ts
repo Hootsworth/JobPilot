@@ -56,6 +56,7 @@ export interface RunDiscoverySyncParams {
   existingSourceCache?: Map<string, SourceCacheEntry>;
   profile?: MasterProfile | null;
   respectRefreshTiers?: boolean;
+  skipAggregators?: boolean;
   envKeys?: {
     adzunaAppId?: string;
     adzunaAppKey?: string;
@@ -441,49 +442,51 @@ export async function runDiscoverySync(
     }
   });
 
-  const aggregatorsPromise = Promise.all(
-    aggregatorTasks.map(async (task) => {
-      const key = `${task.sourceType}:${task.slug}`;
-      const prev = cache.get(key);
-      const nowIso = new Date().toISOString();
-      try {
-        const res = await task.run();
-        if (res.skippedReason) return;
-        rawJobs.push(...res.jobs);
-        aggregatorCount++;
-        sourceUpdates.push({
-          sourceType: task.sourceType,
-          slug: task.slug,
-          displayName: task.displayName,
-          regionFocus: task.regionFocus,
-          enabled: true,
-          etag: res.etag,
-          lastModified: res.lastModified,
-          lastCrawledAt: nowIso,
-          lastStatus: res.notModified ? '304_not_modified' : `ok:${res.jobs.length}`,
-          consecutiveFailures: 0,
-          jobsCount: res.jobs.length,
-          failed: false
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        sourceUpdates.push({
-          sourceType: task.sourceType,
-          slug: task.slug,
-          displayName: task.displayName,
-          regionFocus: task.regionFocus,
-          enabled: true,
-          etag: prev?.etag ?? null,
-          lastModified: prev?.lastModified ?? null,
-          lastCrawledAt: nowIso,
-          lastStatus: `error:${msg.slice(0, 120)}`,
-          consecutiveFailures: (prev?.consecutiveFailures ?? 0) + 1,
-          jobsCount: 0,
-          failed: true
-        });
-      }
-    })
-  );
+  const aggregatorsPromise = params.skipAggregators
+    ? Promise.resolve()
+    : Promise.all(
+        aggregatorTasks.map(async (task) => {
+          const key = `${task.sourceType}:${task.slug}`;
+          const prev = cache.get(key);
+          const nowIso = new Date().toISOString();
+          try {
+            const res = await task.run();
+            if (res.skippedReason) return;
+            rawJobs.push(...res.jobs);
+            aggregatorCount++;
+            sourceUpdates.push({
+              sourceType: task.sourceType,
+              slug: task.slug,
+              displayName: task.displayName,
+              regionFocus: task.regionFocus,
+              enabled: true,
+              etag: res.etag,
+              lastModified: res.lastModified,
+              lastCrawledAt: nowIso,
+              lastStatus: res.notModified ? '304_not_modified' : `ok:${res.jobs.length}`,
+              consecutiveFailures: 0,
+              jobsCount: res.jobs.length,
+              failed: false
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            sourceUpdates.push({
+              sourceType: task.sourceType,
+              slug: task.slug,
+              displayName: task.displayName,
+              regionFocus: task.regionFocus,
+              enabled: true,
+              etag: prev?.etag ?? null,
+              lastModified: prev?.lastModified ?? null,
+              lastCrawledAt: nowIso,
+              lastStatus: `error:${msg.slice(0, 120)}`,
+              consecutiveFailures: (prev?.consecutiveFailures ?? 0) + 1,
+              jobsCount: 0,
+              failed: true
+            });
+          }
+        })
+      );
 
   await Promise.all([boardsPromise, aggregatorsPromise]);
 
