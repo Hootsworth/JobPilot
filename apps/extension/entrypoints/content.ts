@@ -19,6 +19,10 @@ import type {
   PageValidationError,
   PdfBytesResponse
 } from '../src/lib/messaging';
+import {
+  isExtensionContextValid,
+  safeSendRuntimeMessage
+} from '../src/lib/runtime-safe';
 import { getExtensionSettings } from '../src/lib/storage';
 
 const HIGHLIGHT_CLASS_OK = '2px solid #007aff';
@@ -135,7 +139,7 @@ export default defineContentScript({
   allFrames: true,
   runAt: 'document_idle',
 
-  async main() {
+  async main(ctx) {
     if (
       window.location.hostname === 'localhost' &&
       (window.location.port === '3000' || window.location.port === '4000')
@@ -152,6 +156,9 @@ export default defineContentScript({
     let observerStarted = false;
     let hasExecutedFillOnPage = false;
     let previousFieldIds = new Set<string>();
+    let stopObserver: (() => void) | null = null;
+    let tornDown = false;
+    const abortController = new AbortController();
     const filledValuesById = new Map<
       string,
       { value: string; label: string; canonicalKey: string }
@@ -160,12 +167,11 @@ export default defineContentScript({
     const currentHostname = window.location.hostname.toLowerCase();
 
     const triggerAutofillFromPage = (source: 'apply_cta') => {
-      void chrome.runtime
-        .sendMessage({
-          type: 'TRIGGER_AUTOFILL_VIA_JOBPILOT',
-          source
-        } satisfies ExtensionMessage)
-        .catch(() => {});
+      if (tornDown || ctx.isInvalid || !isExtensionContextValid()) return;
+      void safeSendRuntimeMessage({
+        type: 'TRIGGER_AUTOFILL_VIA_JOBPILOT',
+        source
+      });
     };
 
     const injector = isTopFrame
@@ -174,31 +180,27 @@ export default defineContentScript({
             triggerAutofillFromPage('apply_cta');
           },
           () => {
-            void chrome.runtime
-              .sendMessage({
-                type: 'HIDE_CTA_FOR_DOMAIN',
-                hostname: currentHostname
-              } satisfies ExtensionMessage)
-              .catch(() => {});
+            void safeSendRuntimeMessage({
+              type: 'HIDE_CTA_FOR_DOMAIN',
+              hostname: currentHostname
+            });
           }
         )
       : null;
 
-    const syncInjectorHiddenState = async () => {
-      if (!injector) return;
-      const settings = await getExtensionSettings();
-      const shouldShow =
-        settings.showInlineApplyButton &&
-        !settings.hiddenCtaDomains.includes(currentHostname) &&
-        isLikelyJobOrApplicationPage(window.location.href, document);
-      injector.setPaused(!shouldShow);
-    };
-
-    if (isTopFrame) {
-      chrome.storage.onChanged.addListener((changes, areaName) => {
-        if (areaName === 'local' && changes['jobpilot_ext_settings']) {
-          void (async () => {
+    const onStorageChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string
+    ) => {
+      if (tornDown || ctx.isInvalid || !isExtensionContextValid()) {
+        teardown();
+        return;
+      }
+      if (areaName === 'local' && changes['jobpilot_ext_settings']) {
+        void (async () => {
+          try {
             await syncInjectorHiddenState();
+            if (tornDown || ctx.isInvalid || !isExtensionContextValid()) return;
             const updatedSettings = await getExtensionSettings();
             if (
               updatedSettings.showInlineApplyButton &&
@@ -208,13 +210,53 @@ export default defineContentScript({
             ) {
               await startPageMonitoring();
             }
-          })();
-        }
-      });
+          } catch {
+            // Extension reloaded mid-update
+          }
+        })();
+      }
+    };
+
+    const teardown = () => {
+      if (tornDown) return;
+      tornDown = true;
+      abortController.abort();
+      stopObserver?.();
+      stopObserver = null;
+      injector?.destroy();
+      winFlag.__jobpilotContentLoaded = false;
+      try {
+        chrome.storage?.onChanged?.removeListener(onStorageChanged);
+      } catch {
+        // Ignore invalidated context
+      }
+    };
+
+    ctx.onInvalidated(teardown);
+
+    const isDead = () => tornDown || ctx.isInvalid || !isExtensionContextValid();
+
+    const syncInjectorHiddenState = async () => {
+      if (!injector || isDead()) return;
+      try {
+        const settings = await getExtensionSettings();
+        if (isDead()) return;
+        const shouldShow =
+          settings.showInlineApplyButton &&
+          !settings.hiddenCtaDomains.includes(currentHostname) &&
+          isLikelyJobOrApplicationPage(window.location.href, document);
+        injector.setPaused(!shouldShow);
+      } catch {
+        // Context invalidated
+      }
+    };
+
+    if (isTopFrame && isExtensionContextValid()) {
+      chrome.storage.onChanged.addListener(onStorageChanged);
     }
 
     const checkPostSubmitConfirmation = () => {
-      if (!isTopFrame) return;
+      if (!isTopFrame || isDead()) return;
       try {
         const raw = sessionStorage.getItem(PENDING_SUBMIT_KEY);
         if (!raw) return;
@@ -237,17 +279,15 @@ export default defineContentScript({
 
         if (urlLooksConfirmed || textLooksConfirmed) {
           sessionStorage.removeItem(PENDING_SUBMIT_KEY);
-          void chrome.runtime
-            .sendMessage({
-              type: 'APPLICATION_SUBMIT_DETECTED',
-              payload: {
-                url: parsed.url || window.location.href,
-                title: parsed.title || lastScan?.jobMetadata.title || document.title || 'Application',
-                companyName:
-                  parsed.companyName || lastScan?.jobMetadata.companyName || window.location.hostname
-              }
-            } satisfies ExtensionMessage)
-            .catch(() => {});
+          void safeSendRuntimeMessage({
+            type: 'APPLICATION_SUBMIT_DETECTED',
+            payload: {
+              url: parsed.url || window.location.href,
+              title: parsed.title || lastScan?.jobMetadata.title || document.title || 'Application',
+              companyName:
+                parsed.companyName || lastScan?.jobMetadata.companyName || window.location.hostname
+            }
+          });
         }
       } catch {
         // Ignore sessionStorage restrictions
@@ -296,6 +336,7 @@ export default defineContentScript({
     document.addEventListener(
       'click',
       (evt) => {
+        if (isDead()) return;
         const target = evt.target as Element | null;
         const submitBtn = target?.closest('button, input[type="submit"]');
         if (!submitBtn || !isSubmitControl(submitBtn)) return;
@@ -309,18 +350,19 @@ export default defineContentScript({
               companyName: lastScan?.jobMetadata.companyName || window.location.hostname
             })
           );
-          setTimeout(checkPostSubmitConfirmation, 1500);
+          ctx.setTimeout(checkPostSubmitConfirmation, 1500);
         } catch {
           // Ignore sessionStorage errors
         }
       },
-      { capture: true, passive: true }
+      { capture: true, passive: true, signal: abortController.signal }
     );
 
     // Post-edit Answer Bank learning: notify Side Panel if user edits a JobPilot-filled field
     document.addEventListener(
       'change',
       (evt) => {
+        if (isDead()) return;
         const target = evt.target;
         if (
           !(target instanceof HTMLInputElement) &&
@@ -349,61 +391,67 @@ export default defineContentScript({
             : target.value.trim();
 
         if (nextValue.length >= 2 && nextValue !== recorded.value) {
-          void chrome.runtime
-            .sendMessage({
-              type: 'USER_EDITED_FILLED_FIELD',
-              payload: {
-                fieldId: matchedFieldId,
-                label: recorded.label,
-                canonicalKey: recorded.canonicalKey,
-                value: nextValue
-              }
-            } satisfies ExtensionMessage)
-            .catch(() => {});
+          void safeSendRuntimeMessage({
+            type: 'USER_EDITED_FILLED_FIELD',
+            payload: {
+              fieldId: matchedFieldId,
+              label: recorded.label,
+              canonicalKey: recorded.canonicalKey,
+              value: nextValue
+            }
+          });
         }
       },
-      { capture: true, passive: true }
+      { capture: true, passive: true, signal: abortController.signal }
     );
 
     const ensureMultiStepObserver = (disabledByUser: boolean) => {
-      if (observerStarted || disabledByUser || !document.body) return;
+      if (isDead() || observerStarted || disabledByUser || !document.body) return;
       observerStarted = true;
-      observeMultiStepForm(document.body, () => {
+      stopObserver = observeMultiStepForm(document.body, () => {
+        if (isDead()) {
+          teardown();
+          return;
+        }
         checkPostSubmitConfirmation();
         void syncInjectorHiddenState();
         void (async () => {
-          const updated = await performScan();
-          const newFieldsCount = updated.fields.filter(
-            (f) => !previousFieldIds.has(f.fieldId)
-          ).length;
-          const stepChanged = hasExecutedFillOnPage && newFieldsCount >= 2;
-          previousFieldIds = new Set(updated.fields.map((f) => f.fieldId));
-          const validationErrors = collectPageValidationErrors(document, lastScan);
           try {
-            await chrome.runtime.sendMessage({
+            const updated = await performScan();
+            if (isDead()) return;
+            const newFieldsCount = updated.fields.filter(
+              (f) => !previousFieldIds.has(f.fieldId)
+            ).length;
+            const stepChanged = hasExecutedFillOnPage && newFieldsCount >= 2;
+            previousFieldIds = new Set(updated.fields.map((f) => f.fieldId));
+            const validationErrors = collectPageValidationErrors(document, lastScan);
+            await safeSendRuntimeMessage({
               type: 'PAGE_STRUCTURE_UPDATED',
               adapterId: updated.adapterId,
               fieldCount: updated.fields.length,
               stepChanged,
               validationErrors
-            } satisfies ExtensionMessage);
+            });
           } catch {
-            // Side panel not open
+            // Extension invalidated during callback
           }
         })();
       });
     };
 
     const startPageMonitoring = async () => {
-      if (observerStarted) return;
+      if (isDead() || observerStarted) return;
       const initial = await performScan();
+      if (isDead()) return;
       previousFieldIds = new Set(initial.fields.map((f) => f.fieldId));
       await syncInjectorHiddenState();
+      if (isDead()) return;
       checkPostSubmitConfirmation();
       ensureMultiStepObserver(initial.disabledByUser);
     };
 
     const initialSettings = await getExtensionSettings();
+    if (isDead()) return;
     const initialRelevant =
       isTopFrame &&
       initialSettings.showInlineApplyButton &&
@@ -415,36 +463,54 @@ export default defineContentScript({
     } else if (isTopFrame) {
       checkPostSubmitConfirmation();
       const recheckJobPage = () => {
+        if (isDead()) return;
         void (async () => {
-          const latest = await getExtensionSettings();
-          if (
-            !observerStarted &&
-            latest.showInlineApplyButton &&
-            !latest.hiddenCtaDomains.includes(currentHostname) &&
-            isLikelyJobOrApplicationPage(window.location.href, document)
-          ) {
-            await startPageMonitoring();
+          try {
+            const latest = await getExtensionSettings();
+            if (isDead()) return;
+            if (
+              !observerStarted &&
+              latest.showInlineApplyButton &&
+              !latest.hiddenCtaDomains.includes(currentHostname) &&
+              isLikelyJobOrApplicationPage(window.location.href, document)
+            ) {
+              await startPageMonitoring();
+            }
+          } catch {
+            // Context invalidated
           }
         })();
       };
-      window.addEventListener('popstate', recheckJobPage);
-      window.addEventListener('hashchange', recheckJobPage);
+      window.addEventListener('popstate', recheckJobPage, { signal: abortController.signal });
+      window.addEventListener('hashchange', recheckJobPage, { signal: abortController.signal });
     }
 
-    chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
+    const onRuntimeMessage = (
+      message: ExtensionMessage,
+      _sender: chrome.runtime.MessageSender,
+      sendResponse: (response?: unknown) => void
+    ) => {
+      if (isDead()) return false;
+
       if (message?.type === 'SCAN_PAGE') {
         if (!isTopFrame && collectRawFormControls(document).length === 0) {
           return false;
         }
         (async () => {
-          const payload = await performScan();
-          previousFieldIds = new Set(payload.fields.map((f) => f.fieldId));
-          ensureMultiStepObserver(payload.disabledByUser);
-          await syncInjectorHiddenState();
-          if (isTopFrame && payload.fields.length === 0) {
-            await new Promise((r) => setTimeout(r, 40));
+          try {
+            const payload = await performScan();
+            if (isDead()) return;
+            previousFieldIds = new Set(payload.fields.map((f) => f.fieldId));
+            ensureMultiStepObserver(payload.disabledByUser);
+            await syncInjectorHiddenState();
+            if (isDead()) return;
+            if (isTopFrame && payload.fields.length === 0) {
+              await new Promise((r) => setTimeout(r, 40));
+            }
+            if (!isDead()) sendResponse(payload);
+          } catch {
+            // Context invalidated
           }
-          sendResponse(payload);
         })();
         return true;
       }
@@ -458,122 +524,154 @@ export default defineContentScript({
           return false;
         }
         (async () => {
-          const current =
-            lastScan ??
-            (await (async () => {
-              await performScan();
-              return lastScan;
-            })());
-          if (!current) {
-            sendResponse({ ok: false, error: 'Unable to inspect form DOM.' });
-            return;
-          }
-
-          let resumeFile: { bytes: Uint8Array; filename: string } | undefined;
-          let coverLetterFile: { bytes: Uint8Array; filename: string } | undefined;
-
-          const wantsResumeUpload = message.planItems.some(
-            (i) => i.included && i.controlType === 'file' && i.canonicalKey !== 'cover_letter'
-          );
-          const wantsCoverLetterUpload = message.planItems.some(
-            (i) => i.included && i.controlType === 'file' && i.canonicalKey === 'cover_letter'
-          );
-
-          if (wantsResumeUpload && message.resumeVersionId) {
-            const pdfRes = (await chrome.runtime.sendMessage({
-              type: 'API_FETCH_PDF_BYTES',
-              versionId: message.resumeVersionId
-            } satisfies ExtensionMessage)) as ApiProxyResponse<PdfBytesResponse>;
-
-            if (pdfRes?.ok) {
-              resumeFile = {
-                bytes: base64ToUint8(pdfRes.data.base64),
-                filename: pdfRes.data.filename
-              };
+          try {
+            const current =
+              lastScan ??
+              (await (async () => {
+                await performScan();
+                return lastScan;
+              })());
+            if (isDead()) return;
+            if (!current) {
+              sendResponse({ ok: false, error: 'Unable to inspect form DOM.' });
+              return;
             }
-          }
 
-          if (wantsCoverLetterUpload && message.coverLetterId) {
-            const clPdfRes = (await chrome.runtime.sendMessage({
-              type: 'API_FETCH_COVER_LETTER_PDF_BYTES',
-              coverLetterId: message.coverLetterId
-            } satisfies ExtensionMessage)) as ApiProxyResponse<PdfBytesResponse>;
+            let resumeFile: { bytes: Uint8Array; filename: string } | undefined;
+            let coverLetterFile: { bytes: Uint8Array; filename: string } | undefined;
 
-            if (clPdfRes?.ok) {
-              coverLetterFile = {
-                bytes: base64ToUint8(clPdfRes.data.base64),
-                filename: clPdfRes.data.filename
-              };
-            }
-          }
+            const wantsResumeUpload = message.planItems.some(
+              (i) => i.included && i.controlType === 'file' && i.canonicalKey !== 'cover_letter'
+            );
+            const wantsCoverLetterUpload = message.planItems.some(
+              (i) => i.included && i.controlType === 'file' && i.canonicalKey === 'cover_letter'
+            );
 
-          // Strictly executes form fill (with async combobox portal waiting) and NEVER clicks Submit
-          const exec = await executeFillPlanAsync(current.controlsById, message.planItems, {
-            resumeFile,
-            coverLetterFile
-          });
-          lastUndo = exec.undo;
-          hasExecutedFillOnPage = true;
-          const planById = new Map(message.planItems.map((p) => [p.fieldId, p]));
-          for (const r of exec.results) {
-            if (r.status === 'filled') {
-              const p = planById.get(r.fieldId);
-              if (p) {
-                filledValuesById.set(r.fieldId, {
-                  value: p.proposedValue.trim(),
-                  label: p.label,
-                  canonicalKey: p.canonicalKey
-                });
+            if (wantsResumeUpload && message.resumeVersionId) {
+              const pdfRes = await safeSendRuntimeMessage<ApiProxyResponse<PdfBytesResponse>>({
+                type: 'API_FETCH_PDF_BYTES',
+                versionId: message.resumeVersionId
+              });
+
+              if (pdfRes?.ok) {
+                resumeFile = {
+                  bytes: base64ToUint8(pdfRes.data.base64),
+                  filename: pdfRes.data.filename
+                };
               }
             }
+
+            if (wantsCoverLetterUpload && message.coverLetterId) {
+              const clPdfRes = await safeSendRuntimeMessage<ApiProxyResponse<PdfBytesResponse>>({
+                type: 'API_FETCH_COVER_LETTER_PDF_BYTES',
+                coverLetterId: message.coverLetterId
+              });
+
+              if (clPdfRes?.ok) {
+                coverLetterFile = {
+                  bytes: base64ToUint8(clPdfRes.data.base64),
+                  filename: clPdfRes.data.filename
+                };
+              }
+            }
+
+            // Strictly executes form fill (with async combobox portal waiting) and NEVER clicks Submit
+            const exec = await executeFillPlanAsync(current.controlsById, message.planItems, {
+              resumeFile,
+              coverLetterFile
+            });
+            if (isDead()) return;
+            lastUndo = exec.undo;
+            hasExecutedFillOnPage = true;
+            const planById = new Map(message.planItems.map((p) => [p.fieldId, p]));
+            for (const r of exec.results) {
+              if (r.status === 'filled') {
+                const p = planById.get(r.fieldId);
+                if (p) {
+                  filledValuesById.set(r.fieldId, {
+                    value: p.proposedValue.trim(),
+                    label: p.label,
+                    canonicalKey: p.canonicalKey
+                  });
+                }
+              }
+            }
+
+            const toHighlight = exec.results
+              .map((r) => {
+                const ctrl = current.controlsById.get(r.fieldId);
+                return ctrl
+                  ? { element: ctrl.element, status: r.status, confidence: r.confidence }
+                  : null;
+              })
+              .filter((x): x is NonNullable<typeof x> => Boolean(x));
+
+            await batchHighlightElements(toHighlight);
+
+            if (!isDead()) {
+              sendResponse({
+                ok: true,
+                filledCount: exec.filledCount,
+                skippedAlreadyFilledCount: exec.skippedAlreadyFilledCount,
+                results: exec.results
+              });
+            }
+          } catch {
+            // Context invalidated
           }
-
-          const toHighlight = exec.results
-            .map((r) => {
-              const ctrl = current.controlsById.get(r.fieldId);
-              return ctrl
-                ? { element: ctrl.element, status: r.status, confidence: r.confidence }
-                : null;
-            })
-            .filter((x): x is NonNullable<typeof x> => Boolean(x));
-
-          await batchHighlightElements(toHighlight);
-
-          sendResponse({
-            ok: true,
-            filledCount: exec.filledCount,
-            skippedAlreadyFilledCount: exec.skippedAlreadyFilledCount,
-            results: exec.results
-          });
         })();
         return true;
       }
 
       if (message?.type === 'GET_PAGE_VALIDATION_ERRORS') {
-        sendResponse({ ok: true, errors: collectPageValidationErrors(document, lastScan) });
+        try {
+          sendResponse({ ok: true, errors: collectPageValidationErrors(document, lastScan) });
+        } catch {
+          // Channel closed
+        }
         return false;
       }
 
       if (message?.type === 'UNDO_FILL') {
         (async () => {
-          const restoredCount = lastUndo ? lastUndo() : 0;
-          lastUndo = null;
-          await clearAllHighlights();
-          await performScan();
-          sendResponse({ ok: true, restoredCount });
+          try {
+            const restoredCount = lastUndo ? lastUndo() : 0;
+            lastUndo = null;
+            await clearAllHighlights();
+            await performScan();
+            if (!isDead()) sendResponse({ ok: true, restoredCount });
+          } catch {
+            // Context invalidated
+          }
         })();
         return true;
       }
 
       if (message?.type === 'CLEAR_HIGHLIGHTS') {
         (async () => {
-          await clearAllHighlights();
-          sendResponse({ ok: true });
+          try {
+            await clearAllHighlights();
+            if (!isDead()) sendResponse({ ok: true });
+          } catch {
+            // Context invalidated
+          }
         })();
         return true;
       }
 
       return false;
+    };
+
+    if (isExtensionContextValid()) {
+      chrome.runtime.onMessage.addListener(onRuntimeMessage);
+    }
+
+    ctx.onInvalidated(() => {
+      try {
+        chrome.runtime?.onMessage?.removeListener(onRuntimeMessage);
+      } catch {
+        // Ignore invalidated context
+      }
     });
   }
 });
