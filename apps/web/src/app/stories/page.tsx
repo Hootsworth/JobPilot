@@ -36,6 +36,7 @@ export default function StoriesPage() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
   const [form, setForm] = useState<UpsertStoryRequest>(EMPTY_FORM);
   const [skillsText, setSkillsText] = useState('');
   const [saving, setSaving] = useState(false);
@@ -60,12 +61,14 @@ export default function StoriesPage() {
 
   const resetEditor = () => {
     setEditingId(null);
+    setComposerOpen(false);
     setForm(EMPTY_FORM);
     setSkillsText('');
   };
 
   const startEdit = (story: ProfileStory) => {
     setEditingId(story.id);
+    setComposerOpen(true);
     setForm({
       title: story.title,
       category: story.category,
@@ -153,96 +156,130 @@ export default function StoriesPage() {
     categoryFilter === 'all' ? stories : stories.filter((s) => s.category === categoryFilter);
 
   return (
-    <AppShell title="Stories">
+    <AppShell
+      title="Stories"
+      subtitle="Verified STAR impact stories grounded in real project metrics."
+      actions={
+        <Button
+          variant={composerOpen ? 'secondary' : 'primary'}
+          size="sm"
+          onClick={() => {
+            if (composerOpen) {
+              resetEditor();
+            } else {
+              setEditingId(null);
+              setForm(EMPTY_FORM);
+              setSkillsText('');
+              setComposerOpen(true);
+            }
+          }}
+        >
+          {composerOpen ? 'Close form' : '+ Add Story'}
+        </Button>
+      }
+    >
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
       {successMsg ? <AlertBanner tone="success" message={successMsg} /> : null}
 
-      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-stretch">
-        <div className="xl:col-span-2">
-          <SectionBlock title={editingId ? 'Edit Story' : 'Add STAR Story'}>
+      <div className="space-y-6">
+        {composerOpen ? (
+          <SectionBlock
+            title={editingId ? 'Edit Story' : 'Add STAR Story'}
+            action={
+              <Button size="sm" variant="ghost" onClick={resetEditor}>
+                Cancel
+              </Button>
+            }
+          >
             <form onSubmit={handleSave} className="space-y-4">
-              <Field label="Story Title" htmlFor="story-title" required>
-                {(props) => (
-                  <Input
-                    {...props}
-                    required
-                    value={form.title}
-                    onChange={(e) => setForm({ ...form, title: e.target.value })}
-                    placeholder="Cut checkout p95 latency by 62%"
-                  />
-                )}
-              </Field>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Story Title" htmlFor="story-title" required>
+                  {(props) => (
+                    <Input
+                      {...props}
+                      required
+                      value={form.title}
+                      onChange={(e) => setForm({ ...form, title: e.target.value })}
+                      placeholder="Cut checkout p95 latency by 62%"
+                    />
+                  )}
+                </Field>
 
-              <Field label="Category" htmlFor="story-cat">
-                {(props) => (
-                  <Select
-                    {...props}
-                    value={form.category}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        category: e.target.value as UpsertStoryRequest['category']
-                      })
-                    }
-                  >
-                    <option value="project">Project</option>
-                    <option value="optimization">Optimization</option>
-                    <option value="incident">Incident / Debugging</option>
-                    <option value="leadership">Leadership</option>
-                    <option value="academic">Academic / Research</option>
-                    <option value="hackathon">Hackathon</option>
-                    <option value="other">Other</option>
-                  </Select>
-                )}
-              </Field>
+                <Field label="Category" htmlFor="story-cat">
+                  {(props) => (
+                    <Select
+                      {...props}
+                      value={form.category}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          category: e.target.value as UpsertStoryRequest['category']
+                        })
+                      }
+                    >
+                      <option value="project">Project</option>
+                      <option value="optimization">Optimization</option>
+                      <option value="incident">Incident / Debugging</option>
+                      <option value="leadership">Leadership</option>
+                      <option value="academic">Academic / Research</option>
+                      <option value="hackathon">Hackathon</option>
+                      <option value="other">Other</option>
+                    </Select>
+                  )}
+                </Field>
+              </div>
 
-              <Field label="Situation" htmlFor="story-s">
-                {(props) => (
-                  <Textarea
-                    {...props}
-                    rows={2}
-                    value={form.situation}
-                    onChange={(e) => setForm({ ...form, situation: e.target.value })}
-                    placeholder="Context & bottleneck..."
-                  />
-                )}
-              </Field>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Situation" htmlFor="story-s">
+                  {(props) => (
+                    <Textarea
+                      {...props}
+                      rows={2}
+                      value={form.situation}
+                      onChange={(e) => setForm({ ...form, situation: e.target.value })}
+                      placeholder="Context & bottleneck..."
+                    />
+                  )}
+                </Field>
 
-              <Field label="Task" htmlFor="story-t">
-                {(props) => (
-                  <Textarea
-                    {...props}
-                    rows={2}
-                    value={form.task}
-                    onChange={(e) => setForm({ ...form, task: e.target.value })}
-                    placeholder="Your specific ownership..."
-                  />
-                )}
-              </Field>
+                <Field label="Task" htmlFor="story-t">
+                  {(props) => (
+                    <Textarea
+                      {...props}
+                      rows={2}
+                      value={form.task}
+                      onChange={(e) => setForm({ ...form, task: e.target.value })}
+                      placeholder="Your specific ownership..."
+                    />
+                  )}
+                </Field>
+              </div>
 
-              <Field label="Action" htmlFor="story-a">
-                {(props) => (
-                  <Textarea
-                    {...props}
-                    rows={3}
-                    value={form.action}
-                    onChange={(e) => setForm({ ...form, action: e.target.value })}
-                    placeholder="Architecture decisions, tools, and implementation..."
-                  />
-                )}
-              </Field>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Action" htmlFor="story-a">
+                  {(props) => (
+                    <Textarea
+                      {...props}
+                      rows={3}
+                      value={form.action}
+                      onChange={(e) => setForm({ ...form, action: e.target.value })}
+                      placeholder="Architecture decisions, tools, and implementation..."
+                    />
+                  )}
+                </Field>
 
-              <Field label="Result" htmlFor="story-r">
-                {(props) => (
-                  <Textarea
-                    {...props}
-                    rows={2}
-                    value={form.result}
-                    onChange={(e) => setForm({ ...form, result: e.target.value })}
-                    placeholder="Verified outcome..."
-                  />
-                )}
-              </Field>
+                <Field label="Result" htmlFor="story-r">
+                  {(props) => (
+                    <Textarea
+                      {...props}
+                      rows={3}
+                      value={form.result}
+                      onChange={(e) => setForm({ ...form, result: e.target.value })}
+                      placeholder="Verified outcome..."
+                    />
+                  )}
+                </Field>
+              </div>
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -312,98 +349,101 @@ export default function StoriesPage() {
                 <Button type="submit" variant="primary" disabled={saving}>
                   {saving ? 'Saving...' : editingId ? 'Update Story' : 'Save Story'}
                 </Button>
-                {editingId ? (
-                  <Button variant="secondary" onClick={resetEditor}>
-                    Cancel Edit
-                  </Button>
-                ) : null}
+                <Button variant="secondary" onClick={resetEditor}>
+                  Cancel
+                </Button>
               </div>
             </form>
           </SectionBlock>
-        </div>
+        ) : null}
 
-        <div className="xl:col-span-3 space-y-4">
-          <SectionBlock
-            title={`Saved Stories (${visibleStories.length})`}
-            action={
-              <Select
-                aria-label="Filter stories by category"
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="w-auto min-h-[36px] text-xs py-1"
-              >
-                <option value="all">All categories</option>
-                <option value="project">Project</option>
-                <option value="optimization">Optimization</option>
-                <option value="incident">Incident</option>
-                <option value="leadership">Leadership</option>
-                <option value="academic">Academic</option>
-                <option value="hackathon">Hackathon</option>
-                <option value="other">Other</option>
-              </Select>
-            }
-          >
-            {loading ? (
-              <div className="space-y-3">
-                <SkeletonBlock className="h-24 w-full" />
-                <SkeletonBlock className="h-24 w-full" />
-              </div>
-            ) : visibleStories.length === 0 ? (
-              <EmptyState
-                title="No stories yet"
-                description="Add concrete project or internship impact stories with real numbers. JobPilot's resume verifier checks tailored bullets against these facts."
-              />
-            ) : (
-              <div className="divide-y divide-[var(--hairline)]">
-                {visibleStories.map((story) => (
-                  <article key={story.id} className="py-4 first:pt-0 last:pb-0 space-y-2">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <h3 className="text-sm font-bold text-[var(--ink)]">{story.title}</h3>
-                        <div className="flex flex-wrap gap-1.5 mt-1">
-                          <Badge tone="neutral">{story.category}</Badge>
-                          {story.metrics.map((m, i) => (
-                            <Badge key={i} tone="accent">
-                              {m.label}: {m.value}
-                              {m.unit}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="secondary" onClick={() => startEdit(story)}>
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setDeleteTarget(story)}
-                        >
-                          Delete
-                        </Button>
+        <SectionBlock
+          title={`Saved Stories (${visibleStories.length})`}
+          action={
+            <Select
+              aria-label="Filter stories by category"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="w-auto min-h-[36px] text-xs py-1"
+            >
+              <option value="all">All categories</option>
+              <option value="project">Project</option>
+              <option value="optimization">Optimization</option>
+              <option value="incident">Incident</option>
+              <option value="leadership">Leadership</option>
+              <option value="academic">Academic</option>
+              <option value="hackathon">Hackathon</option>
+              <option value="other">Other</option>
+            </Select>
+          }
+        >
+          {loading ? (
+            <div className="space-y-3">
+              <SkeletonBlock className="h-24 w-full" />
+              <SkeletonBlock className="h-24 w-full" />
+            </div>
+          ) : visibleStories.length === 0 ? (
+            <EmptyState
+              title="No stories yet"
+              description="Add concrete project or internship impact stories with real numbers. JobPilot's resume verifier checks tailored bullets against these facts."
+              action={
+                !composerOpen ? (
+                  <Button variant="primary" size="sm" onClick={() => setComposerOpen(true)}>
+                    + Add your first story
+                  </Button>
+                ) : undefined
+              }
+            />
+          ) : (
+            <div className="divide-y divide-[var(--hairline)]">
+              {visibleStories.map((story) => (
+                <article key={story.id} className="py-4 first:pt-0 last:pb-0 space-y-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-bold text-[var(--ink)]">{story.title}</h3>
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        <Badge tone="neutral">{story.category}</Badge>
+                        {story.metrics.map((m, i) => (
+                          <Badge key={i} tone="accent">
+                            {m.label}: {m.value}
+                            {m.unit}
+                          </Badge>
+                        ))}
                       </div>
                     </div>
-                    {story.action ? (
-                      <p className="text-xs text-[var(--body)]">
-                        <strong>Action:</strong> {story.action}
-                      </p>
-                    ) : null}
-                    {story.result ? (
-                      <p className="text-xs text-[var(--body)]">
-                        <strong>Result:</strong> {story.result}
-                      </p>
-                    ) : null}
-                    {story.skillsUsed.length > 0 ? (
-                      <p className="text-xs text-[var(--mute)]">
-                        Skills: {story.skillsUsed.join(' · ')}
-                      </p>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            )}
-          </SectionBlock>
-        </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="secondary" onClick={() => startEdit(story)}>
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleteTarget(story)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                  {story.action ? (
+                    <p className="text-xs text-[var(--body)]">
+                      <strong>Action:</strong> {story.action}
+                    </p>
+                  ) : null}
+                  {story.result ? (
+                    <p className="text-xs text-[var(--body)]">
+                      <strong>Result:</strong> {story.result}
+                    </p>
+                  ) : null}
+                  {story.skillsUsed.length > 0 ? (
+                    <p className="text-xs text-[var(--mute)]">
+                      Skills: {story.skillsUsed.join(' · ')}
+                    </p>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          )}
+        </SectionBlock>
       </div>
 
       <ConfirmDialog

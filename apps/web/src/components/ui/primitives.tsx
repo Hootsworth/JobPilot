@@ -299,41 +299,118 @@ export function TabStrip<T extends string>({
   tabs,
   activeTab,
   onChange,
-  label
+  label,
+  orientation = 'horizontal',
+  className
 }: {
   tabs: Array<{ id: T; label: string; badge?: string | number }>;
   activeTab: T;
   onChange: (id: T) => void;
   label: string;
+  orientation?: 'horizontal' | 'vertical';
+  className?: string;
 }) {
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, idx: number) => {
+    const prevKey = orientation === 'vertical' ? 'ArrowUp' : 'ArrowLeft';
+    const nextKey = orientation === 'vertical' ? 'ArrowDown' : 'ArrowRight';
+    let targetIdx: number | null = null;
+    if (e.key === nextKey) {
+      targetIdx = (idx + 1) % tabs.length;
+    } else if (e.key === prevKey) {
+      targetIdx = (idx - 1 + tabs.length) % tabs.length;
+    } else if (e.key === 'Home') {
+      targetIdx = 0;
+    } else if (e.key === 'End') {
+      targetIdx = tabs.length - 1;
+    }
+    if (targetIdx === null) return;
+    e.preventDefault();
+    const targetTab = tabs[targetIdx];
+    const el = tabRefs.current[targetIdx];
+    if (targetTab) {
+      onChange(targetTab.id);
+    }
+    if (el) {
+      el.focus();
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  };
+
   return (
-    <nav
+    <div
+      role="tablist"
       aria-label={label}
-      className="flex items-center gap-1 overflow-x-auto border-b border-[var(--hairline)]"
+      aria-orientation={orientation}
+      className={cn(orientation === 'vertical' ? 'oc-tabs-vertical' : 'oc-tabs', className)}
     >
-      {tabs.map((tab) => {
+      {tabs.map((tab, idx) => {
         const active = tab.id === activeTab;
         return (
           <button
             key={tab.id}
+            ref={(el) => {
+              tabRefs.current[idx] = el;
+            }}
             type="button"
-            onClick={() => onChange(tab.id)}
-            aria-current={active ? 'page' : undefined}
-            className={cn(
-              'px-3.5 py-2.5 text-sm font-medium whitespace-nowrap shrink-0 rounded-none border-b-2 transition-colors cursor-pointer min-h-[42px]',
-              active
-                ? 'text-[var(--ink)] border-[var(--ink)] font-semibold'
-                : 'text-[var(--mute)] border-transparent hover:text-[var(--ink)]'
-            )}
+            role="tab"
+            aria-selected={active}
+            tabIndex={active ? 0 : -1}
+            onClick={(e) => {
+              onChange(tab.id);
+              e.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            }}
+            onKeyDown={(e) => handleKeyDown(e, idx)}
+            className={orientation === 'vertical' ? 'oc-tab-vertical' : 'oc-tab'}
           >
-            {tab.label}
+            <span>{tab.label}</span>
             {tab.badge !== undefined ? (
-              <span className="ml-1.5 text-xs text-[var(--mute)] tabular-nums">{tab.badge}</span>
+              <span className="text-xs text-[var(--mute)] tabular-nums">{tab.badge}</span>
             ) : null}
           </button>
         );
       })}
-    </nav>
+    </div>
+  );
+}
+
+/**
+ * Progressive-disclosure container built on native <details>/<summary>.
+ * Never wraps headings inside <summary> so screen readers preserve heading navigation.
+ */
+export function Disclosure({
+  id,
+  title,
+  summaryMeta,
+  open,
+  defaultOpen = false,
+  onToggle,
+  children,
+  className
+}: {
+  id?: string;
+  title: string;
+  summaryMeta?: React.ReactNode;
+  open?: boolean;
+  defaultOpen?: boolean;
+  onToggle?: (isOpen: boolean) => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <details
+      id={id}
+      {...(open !== undefined ? { open } : defaultOpen ? { open: true } : {})}
+      onToggle={(e) => onToggle?.((e.currentTarget as HTMLDetailsElement).open)}
+      className={cn('oc-disclosure border border-[var(--hairline)] bg-[var(--canvas)]', className)}
+    >
+      <summary className="px-4 py-3 text-sm font-bold text-[var(--ink)] bg-[var(--surface-soft)] hover:bg-[var(--surface-card)]">
+        <span className="oc-disclosure-label">{title}</span>
+        {summaryMeta ? <span className="shrink-0 flex items-center gap-2">{summaryMeta}</span> : null}
+      </summary>
+      <div className="border-t border-[var(--hairline)] p-4 sm:p-5">{children}</div>
+    </details>
   );
 }
 

@@ -424,3 +424,226 @@ dialog::backdrop {
     scroll-behavior: auto !important;
   }
 }
+
+/* ============================================================================
+ * Accessible Tabs, Disclosures, and Responsive Tables (modern-web-guidance)
+ * ========================================================================== */
+
+.oc-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.25rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: inline proximity;
+  scrollbar-width: none;
+  border-block-end: 1px solid var(--hairline);
+}
+
+.oc-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.oc-tab {
+  position: relative;
+  flex: none;
+  scroll-snap-align: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-block-size: 42px;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--mute);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.oc-tab:hover {
+  color: var(--ink);
+}
+
+.oc-tab[aria-selected="true"] {
+  color: var(--ink);
+}
+
+.oc-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  border-block-end: 2px solid var(--ink);
+}
+
+.oc-tabs-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.oc-tab-vertical {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-block-size: 40px;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--mute);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.oc-tab-vertical:hover {
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+.oc-tab-vertical[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--surface-soft);
+  border-color: var(--hairline);
+}
+
+.oc-tab-vertical[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 6px auto 6px 0;
+  border-inline-start: 2px solid var(--ink);
+}
+
+/* Native <details> progressive disclosure */
+.oc-disclosure > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.oc-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.oc-disclosure-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.oc-disclosure-label::before {
+  content: "";
+  inline-size: 0.42rem;
+  block-size: 0.42rem;
+  flex-shrink: 0;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 150ms ease;
+}
+
+.oc-disclosure[open] > summary .oc-disclosure-label::before {
+  transform: rotate(45deg);
+}
+
+.oc-disclosure::details-content {
+  interpolate-size: allow-keywords;
+  overflow: clip;
+  contain: layout;
+}
+
+.oc-disclosure:not([open])::details-content {
+  block-size: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .oc-disclosure::details-content {
+    transition: block-size 0.24s ease-in-out, content-visibility 0.24s ease-in-out;
+    transition-behavior: allow-discrete;
+  }
+}
+
+/* Container-responsive scrollable data tables */
+.oc-table-wrap {
+  overflow: auto;
+  max-inline-size: 100%;
+  max-block-size: min(520px, 75vh);
+  container-type: inline-size;
+  overscroll-behavior: contain;
+}
+
+.oc-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.oc-table thead th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  background: var(--canvas);
+  border-block-end: 1px solid var(--hairline-strong);
+}
+
+.oc-table tbody td {
+  border-block-end: 1px solid var(--hairline);
+}
+
+@container (width < 600px) {
+  .oc-table,
+  .oc-table thead,
+  .oc-table tbody,
+  .oc-table tr,
+  .oc-table th,
+  .oc-table td {
+    display: block;
+  }
+
+  .oc-table thead {
+    display: none;
+  }
+
+  .oc-table tbody tr {
+    padding: 0.65rem 0.75rem;
+    margin-block-end: 0.75rem;
+    border: 1px solid var(--hairline);
+    background: var(--surface-soft);
+  }
+
+  .oc-table tbody td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.25rem 0;
+    border-block-end: 0;
+    max-width: none;
+    text-align: right;
+  }
+
+  .oc-table tbody td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--mute);
+    font-weight: 600;
+    text-align: left;
+    flex-shrink: 0;
+  }
+}

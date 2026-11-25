@@ -58,6 +58,11 @@ export default function JobsFeedPage() {
   const [minSalaryLpa, setMinSalaryLpa] = useState('');
   const [sortBy, setSortBy] = useState<'match_score' | 'recent' | 'salary_lpa'>('match_score');
   const [onlyPassed, setOnlyPassed] = useState(true);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const activeFilterCount =
+    [country, workMode, seniority, source, minSalaryLpa].filter(Boolean).length +
+    (onlyPassed ? 0 : 1);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -231,8 +236,8 @@ export default function JobsFeedPage() {
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
       {statusMsg ? <AlertBanner tone="success" message={statusMsg} /> : null}
 
-      {/* Clean 2-Row Balanced Filter Bar */}
-      <SectionBlock title="Filters">
+      {/* Compact Single-Row Search Toolbar + Collapsible Advanced Filters */}
+      <section className="border border-[var(--hairline)] bg-[var(--canvas)] p-3 sm:p-4 space-y-3">
         <search>
           <form
             onSubmit={(e) => {
@@ -241,10 +246,10 @@ export default function JobsFeedPage() {
             }}
             className="space-y-3"
           >
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-              <div className="md:col-span-5 flex flex-col gap-1">
-                <label htmlFor="feed-search" className="text-xs text-[var(--mute)]">
-                  Keyword, company, or skill
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="flex-1 min-w-[220px]">
+                <label htmlFor="feed-search" className="sr-only">
+                  Search jobs by keyword, company, or skill
                 </label>
                 <Input
                   ref={searchInputRef}
@@ -255,154 +260,183 @@ export default function JobsFeedPage() {
                   spellCheck={false}
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="TypeScript, Bengaluru, Razorpay..."
+                  placeholder="Search keyword, company, location, or skill..."
                 />
               </div>
 
-              <div className="md:col-span-2 flex flex-col gap-1">
-                <label htmlFor="feed-country" className="text-xs text-[var(--mute)]">
-                  Country
+              <div className="w-40 shrink-0">
+                <label htmlFor="feed-sort" className="sr-only">
+                  Sort jobs by
                 </label>
                 <Select
-                  id="feed-country"
-                  value={country}
-                  onChange={(e) => setCountry(e.target.value)}
+                  id="feed-sort"
+                  value={sortBy}
+                  onChange={(e) =>
+                    setSortBy(e.target.value as 'match_score' | 'recent' | 'salary_lpa')
+                  }
                 >
-                  <option value="">All</option>
-                  <option value="IN">India</option>
-                  <option value="US">United States</option>
-                  <option value="GB">United Kingdom</option>
-                  <option value="SG">Singapore</option>
-                  <option value="DE">Germany</option>
+                  <option value="match_score">Best match</option>
+                  <option value="recent">Most recent</option>
+                  <option value="salary_lpa">Highest salary</option>
                 </Select>
               </div>
 
-              <div className="md:col-span-2 flex flex-col gap-1">
-                <label htmlFor="feed-mode" className="text-xs text-[var(--mute)]">
-                  Work Mode
-                </label>
-                <Select
-                  id="feed-mode"
-                  value={workMode}
-                  onChange={(e) => setWorkMode(e.target.value)}
+              <Button
+                type="button"
+                size="sm"
+                variant={filtersOpen || activeFilterCount > 0 ? 'primary' : 'secondary'}
+                aria-expanded={filtersOpen}
+                onClick={() => setFiltersOpen((v) => !v)}
+              >
+                {activeFilterCount > 0 ? `Filters (${activeFilterCount})` : 'Filters'}
+              </Button>
+
+              {activeFilterCount > 0 || q.trim() ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setQ('');
+                    setCountry('');
+                    setWorkMode('');
+                    setSeniority('');
+                    setSource('');
+                    setMinSalaryLpa('');
+                    setOnlyPassed(true);
+                  }}
                 >
-                  <option value="">Any</option>
-                  <option value="remote">Remote</option>
-                  <option value="hybrid">Hybrid</option>
-                  <option value="onsite">On-site</option>
-                </Select>
-              </div>
-
-              <div className="md:col-span-3 flex flex-col gap-1">
-                <label htmlFor="feed-seniority" className="text-xs text-[var(--mute)]">
-                  Level
-                </label>
-                <Select
-                  id="feed-seniority"
-                  value={seniority}
-                  onChange={(e) => setSeniority(e.target.value)}
-                >
-                  <option value="">Any level</option>
-                  <option value="intern">Intern</option>
-                  <option value="fresher">Fresher</option>
-                  <option value="junior">Junior / SDE-1</option>
-                  <option value="mid">Mid / SDE-2</option>
-                  <option value="senior">Senior</option>
-                </Select>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-end justify-between gap-3 pt-3 border-t border-[var(--hairline)]">
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="w-44 flex flex-col gap-1">
-                  <label htmlFor="feed-source" className="text-xs text-[var(--mute)]">
-                    Source
-                  </label>
-                  <Select
-                    id="feed-source"
-                    value={source}
-                    onChange={(e) => setSource(e.target.value)}
-                  >
-                    <option value="">All sources</option>
-                    <option value="greenhouse">Greenhouse</option>
-                    <option value="lever">Lever</option>
-                    <option value="ashby">Ashby</option>
-                    <option value="workable">Workable</option>
-                    <option value="smartrecruiters">SmartRecruiters</option>
-                    <option value="workday">Workday</option>
-                    <option value="himalayas">Himalayas</option>
-                    <option value="jobicy">Jobicy</option>
-                    <option value="themuse">The Muse</option>
-                    <option value="hackernews">Hacker News</option>
-                    <option value="remotive">Remotive</option>
-                    <option value="arbeitnow">Arbeitnow</option>
-                    <option value="remoteok">RemoteOK</option>
-                    <option value="adzuna">Adzuna</option>
-                    <option value="jooble">Jooble</option>
-                    <option value="jsearch">JSearch</option>
-                  </Select>
-                </div>
-
-                <div className="w-28 flex flex-col gap-1">
-                  <label htmlFor="feed-lpa" className="text-xs text-[var(--mute)]">
-                    Min LPA
-                  </label>
-                  <Input
-                    id="feed-lpa"
-                    type="number"
-                    min={0}
-                    step="1"
-                    value={minSalaryLpa}
-                    onChange={(e) => setMinSalaryLpa(e.target.value)}
-                    placeholder="e.g. 12"
-                  />
-                </div>
-
-                <div className="w-44 flex flex-col gap-1">
-                  <label htmlFor="feed-sort" className="text-xs text-[var(--mute)]">
-                    Sort by
-                  </label>
-                  <Select
-                    id="feed-sort"
-                    value={sortBy}
-                    onChange={(e) =>
-                      setSortBy(e.target.value as 'match_score' | 'recent' | 'salary_lpa')
-                    }
-                  >
-                    <option value="match_score">Best match</option>
-                    <option value="recent">Most recent</option>
-                    <option value="salary_lpa">Highest salary</option>
-                  </Select>
-                </div>
-
-                <label className="h-11 inline-flex items-center gap-2 text-xs cursor-pointer px-1">
-                  <input
-                    type="checkbox"
-                    checked={onlyPassed}
-                    onChange={(e) => setOnlyPassed(e.target.checked)}
-                    className="w-4 h-4"
-                  />
-                  <span>Hide near mismatches</span>
-                </label>
-              </div>
-
-              <div className="flex items-center gap-3 text-xs text-[var(--mute)]">
-                {activeSourcesCount > 0 ? (
-                  <span>
-                    {pluralize(activeSourcesCount, 'source')}
-                    {lastRun?.finishedAt
-                      ? ` · Synced ${formatRelativeTime(lastRun.finishedAt)}`
-                      : ''}
-                  </span>
-                ) : null}
-                <Button type="submit" size="sm" variant="secondary">
-                  Apply
+                  Reset
                 </Button>
-              </div>
+              ) : null}
+
+              {activeSourcesCount > 0 ? (
+                <span className="hidden xl:inline text-xs text-[var(--mute)] tabular-nums ml-auto">
+                  {pluralize(activeSourcesCount, 'source')}
+                  {lastRun?.finishedAt ? ` · Synced ${formatRelativeTime(lastRun.finishedAt)}` : ''}
+                </span>
+              ) : null}
             </div>
+
+            {filtersOpen ? (
+              <div className="pt-3 border-t border-[var(--hairline)] space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="feed-country" className="text-xs text-[var(--mute)]">
+                      Country
+                    </label>
+                    <Select
+                      id="feed-country"
+                      value={country}
+                      onChange={(e) => setCountry(e.target.value)}
+                    >
+                      <option value="">All</option>
+                      <option value="IN">India</option>
+                      <option value="US">United States</option>
+                      <option value="GB">United Kingdom</option>
+                      <option value="SG">Singapore</option>
+                      <option value="DE">Germany</option>
+                    </Select>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="feed-mode" className="text-xs text-[var(--mute)]">
+                      Work Mode
+                    </label>
+                    <Select
+                      id="feed-mode"
+                      value={workMode}
+                      onChange={(e) => setWorkMode(e.target.value)}
+                    >
+                      <option value="">Any</option>
+                      <option value="remote">Remote</option>
+                      <option value="hybrid">Hybrid</option>
+                      <option value="onsite">On-site</option>
+                    </Select>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="feed-seniority" className="text-xs text-[var(--mute)]">
+                      Level
+                    </label>
+                    <Select
+                      id="feed-seniority"
+                      value={seniority}
+                      onChange={(e) => setSeniority(e.target.value)}
+                    >
+                      <option value="">Any level</option>
+                      <option value="intern">Intern</option>
+                      <option value="fresher">Fresher</option>
+                      <option value="junior">Junior / SDE-1</option>
+                      <option value="mid">Mid / SDE-2</option>
+                      <option value="senior">Senior</option>
+                    </Select>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="feed-source" className="text-xs text-[var(--mute)]">
+                      Source
+                    </label>
+                    <Select
+                      id="feed-source"
+                      value={source}
+                      onChange={(e) => setSource(e.target.value)}
+                    >
+                      <option value="">All sources</option>
+                      <option value="greenhouse">Greenhouse</option>
+                      <option value="lever">Lever</option>
+                      <option value="ashby">Ashby</option>
+                      <option value="workable">Workable</option>
+                      <option value="smartrecruiters">SmartRecruiters</option>
+                      <option value="workday">Workday</option>
+                      <option value="himalayas">Himalayas</option>
+                      <option value="jobicy">Jobicy</option>
+                      <option value="themuse">The Muse</option>
+                      <option value="hackernews">Hacker News</option>
+                      <option value="remotive">Remotive</option>
+                      <option value="arbeitnow">Arbeitnow</option>
+                      <option value="remoteok">RemoteOK</option>
+                      <option value="adzuna">Adzuna</option>
+                      <option value="jooble">Jooble</option>
+                      <option value="jsearch">JSearch</option>
+                    </Select>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="feed-lpa" className="text-xs text-[var(--mute)]">
+                      Min LPA
+                    </label>
+                    <Input
+                      id="feed-lpa"
+                      type="number"
+                      min={0}
+                      step="1"
+                      value={minSalaryLpa}
+                      onChange={(e) => setMinSalaryLpa(e.target.value)}
+                      placeholder="e.g. 12"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <label className="inline-flex items-center gap-2 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={onlyPassed}
+                      onChange={(e) => setOnlyPassed(e.target.checked)}
+                      className="w-4 h-4"
+                    />
+                    <span>Hide near mismatches</span>
+                  </label>
+                  <Button type="submit" size="sm" variant="primary">
+                    Apply filters
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </form>
         </search>
-      </SectionBlock>
+      </section>
 
       {loading ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

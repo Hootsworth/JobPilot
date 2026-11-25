@@ -10,7 +10,7 @@ import type {
   ResumeVersionRecord
 } from '@jobpilot/shared';
 import { AppShell } from '@/components/layout/app-shell';
-import { MoCount, MoDecode, moToast } from '@/components/ui/mo';
+import { MoDecode, moToast } from '@/components/ui/mo';
 import {
   AlertBanner,
   Badge,
@@ -21,6 +21,7 @@ import {
   SectionBlock,
   Select,
   SkeletonBlock,
+  TabStrip,
   Textarea
 } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
@@ -450,53 +451,20 @@ export default function TrackerPage() {
         </div>
       ) : null}
 
-      {/* Status Pipeline Strip */}
-      <div
-        role="tablist"
-        aria-label="Filter applications by status"
-        className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-px bg-[var(--hairline)] border border-[var(--hairline)]"
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={statusFilter === 'all'}
-          onClick={() => setStatusFilter('all')}
-          className={`p-3 text-left cursor-pointer transition-colors ${
-            statusFilter === 'all'
-              ? 'bg-[var(--ink)] text-[var(--on-primary)]'
-              : 'bg-[var(--surface-card)] hover:bg-[var(--surface-soft)]'
-          }`}
-        >
-          <div className="text-[11px] uppercase tracking-wider opacity-80">All</div>
-          <div className="text-xl font-bold tabular-nums mt-0.5">
-            <MoCount to={countsByStatus['all'] ?? 0} />
-          </div>
-        </button>
-        {STATUS_OPTIONS.map((opt) => {
-          const active = statusFilter === opt.value;
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setStatusFilter(opt.value)}
-              className={`p-3 text-left cursor-pointer transition-colors ${
-                active
-                  ? 'bg-[var(--ink)] text-[var(--on-primary)]'
-                  : 'bg-[var(--surface-card)] hover:bg-[var(--surface-soft)]'
-              }`}
-            >
-              <div className="text-[11px] uppercase tracking-wider opacity-80">
-                {opt.label}
-              </div>
-              <div className="text-xl font-bold tabular-nums mt-0.5">
-                <MoCount to={countsByStatus[opt.value] ?? 0} />
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      {/* Compact Single-Row Status Pipeline TabStrip */}
+      <TabStrip<'all' | ApplicationStatus>
+        label="Filter applications by status"
+        activeTab={statusFilter}
+        onChange={setStatusFilter}
+        tabs={[
+          { id: 'all', label: 'All', badge: countsByStatus['all'] ?? 0 },
+          ...STATUS_OPTIONS.map((opt) => ({
+            id: opt.value,
+            label: opt.label,
+            badge: countsByStatus[opt.value] ?? 0
+          }))
+        ]}
+      />
 
       {/* Collapsible Manual Log Application Form */}
       {showNewForm ? (

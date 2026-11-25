@@ -1731,11 +1731,153 @@ export default function ProfilePage() {
           </div>
 
           {tab === 'overview' ? (
-            <div className="space-y-6">
-              {renderWorkSection()}
-              {renderProjectsSection()}
-              {renderEducationSection()}
-              {renderSkillsSection()}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
+              <div className="border border-[var(--hairline)] bg-[var(--canvas)] p-5 flex flex-col justify-between gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-bold text-[var(--ink)]">Experience</h2>
+                    <Badge tone="neutral">{resume.work.length}</Badge>
+                  </div>
+                  {resume.work.length === 0 ? (
+                    <p className="text-xs text-[var(--mute)]">
+                      No roles added yet. Add internships or full-time positions.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1.5 text-xs text-[var(--body)] list-none p-0 m-0">
+                      {resume.work.slice(0, 3).map((w) => (
+                        <li key={w.id} className="truncate">
+                          <strong className="text-[var(--ink)]">{w.position || 'Role'}</strong> @{' '}
+                          {w.name || 'Company'}
+                        </li>
+                      ))}
+                      {resume.work.length > 3 ? (
+                        <li className="text-[var(--mute)]">
+                          +{resume.work.length - 3} more roles
+                        </li>
+                      ) : null}
+                    </ul>
+                  )}
+                </div>
+                <div>
+                  <Button size="sm" variant="secondary" onClick={() => setTab('work')}>
+                    Manage Experience →
+                  </Button>
+                </div>
+              </div>
+
+              <div className="border border-[var(--hairline)] bg-[var(--canvas)] p-5 flex flex-col justify-between gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-bold text-[var(--ink)]">Projects</h2>
+                    <Badge tone="neutral">{resume.projects.length}</Badge>
+                  </div>
+                  {resume.projects.length === 0 ? (
+                    <p className="text-xs text-[var(--mute)]">
+                      No projects added yet. Add shipped software, capstones, or OSS work.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1.5 text-xs text-[var(--body)] list-none p-0 m-0">
+                      {resume.projects.slice(0, 3).map((p) => (
+                        <li key={p.id} className="truncate">
+                          <strong className="text-[var(--ink)]">{p.name}</strong>
+                          {p.keywords && p.keywords.length > 0
+                            ? ` · ${p.keywords.slice(0, 3).join(', ')}`
+                            : ''}
+                        </li>
+                      ))}
+                      {resume.projects.length > 3 ? (
+                        <li className="text-[var(--mute)]">
+                          +{resume.projects.length - 3} more projects
+                        </li>
+                      ) : null}
+                    </ul>
+                  )}
+                </div>
+                <div>
+                  <Button size="sm" variant="secondary" onClick={() => setTab('projects')}>
+                    Manage Projects →
+                  </Button>
+                </div>
+              </div>
+
+              <div className="border border-[var(--hairline)] bg-[var(--canvas)] p-5 flex flex-col justify-between gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-bold text-[var(--ink)]">Education</h2>
+                    <Badge tone="neutral">{resume.education.length}</Badge>
+                  </div>
+                  {resume.education.length === 0 ? (
+                    <p className="text-xs text-[var(--mute)]">
+                      No academic degrees added yet.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1.5 text-xs text-[var(--body)] list-none p-0 m-0">
+                      {resume.education.slice(0, 3).map((e) => (
+                        <li key={e.id} className="truncate">
+                          <strong className="text-[var(--ink)]">{e.institution}</strong>
+                          {e.studyType ? ` · ${e.studyType}` : ''}
+                          {e.area ? ` (${e.area})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div>
+                  <Button size="sm" variant="secondary" onClick={() => setTab('education')}>
+                    Manage Education →
+                  </Button>
+                </div>
+              </div>
+
+              <div className="border border-[var(--hairline)] bg-[var(--canvas)] p-5 flex flex-col justify-between gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-bold text-[var(--ink)]">Skills Inventory</h2>
+                    <Badge tone="neutral">
+                      {resume.skills.reduce((a, g) => a + g.keywords.length, 0)}
+                    </Badge>
+                  </div>
+                  {resume.skills.every((g) => g.keywords.length === 0) ? (
+                    <p className="text-xs text-[var(--mute)]">
+                      No skills categorized yet.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {resume.skills
+                        .flatMap((g) => g.keywords)
+                        .slice(0, 10)
+                        .map((kw) => (
+                          <Badge key={kw} tone="neutral">
+                            {kw}
+                          </Badge>
+                        ))}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <Button size="sm" variant="secondary" onClick={() => setTab('skills')}>
+                    Manage Skills →
+                  </Button>
+                </div>
+              </div>
+
+              <div className="md:col-span-2 border border-[var(--hairline)] bg-[var(--surface-soft)] p-5 flex flex-wrap items-center justify-between gap-4">
+                <div className="space-y-1 min-w-0">
+                  <h2 className="text-sm font-bold text-[var(--ink)]">
+                    Job Preferences, Compensation &amp; Locations
+                  </h2>
+                  <p className="text-xs text-[var(--mute)] truncate">
+                    {india.preferredCities.length > 0
+                      ? `Hubs: ${india.preferredCities.slice(0, 4).join(', ')}${india.preferredCities.length > 4 ? ` +${india.preferredCities.length - 4}` : ''}`
+                      : 'No preferred cities set'}
+                    {india.expectedCtcLpa != null ? ` · Expected: ${india.expectedCtcLpa} LPA` : ''}
+                    {india.collegeName ? ` · ${india.collegeName}` : ''}
+                  </p>
+                </div>
+                <Button size="sm" variant="secondary" onClick={() => setTab('india')}>
+                  Edit Preferences →
+                </Button>
+              </div>
             </div>
           ) : tab === 'work' ? (
             renderWorkSection()

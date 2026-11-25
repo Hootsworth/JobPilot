@@ -20,14 +20,19 @@ import {
   Badge,
   Button,
   ConfirmDialog,
+  Disclosure,
   Field,
   Input,
+  SectionBlock,
   Select,
-  SkeletonBlock
+  SkeletonBlock,
+  TabStrip
 } from '@/components/ui/primitives';
 import { api, ApiError, getApiBaseUrl } from '@/lib/api';
 import { setCachedBillingSnapshot } from '@/lib/billing-cache';
 import { getSupabaseClient, getSupabasePublishableKey } from '@/lib/supabase';
+
+type SettingsSection = 'general' | 'ai' | 'privacy' | 'account';
 
 const PROVIDER_META: Record<
   LlmProviderId,
@@ -98,6 +103,7 @@ const INITIAL_DRAFT: CardDraftState = {
 
 export default function SettingsPage() {
   const router = useRouter();
+  const [section, setSection] = useState<SettingsSection>('general');
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<LlmSettingsItem[]>([]);
   const [defaultEnvProvider, setDefaultEnvProvider] = useState<LlmProviderId>('gemini');
@@ -115,6 +121,13 @@ export default function SettingsPage() {
   const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
   const [copiedExt, setCopiedExt] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#byok') {
+      setSection('ai');
+      setByokOpen(true);
+    }
+  }, []);
 
   const loadAll = async () => {
     setLoading(true);
@@ -173,7 +186,10 @@ export default function SettingsPage() {
   };
 
   const activeItem = useMemo(
-    () => items.find((i) => i.isActive) ?? items.find((i) => i.provider === defaultEnvProvider) ?? items[0],
+    () =>
+      items.find((i) => i.isActive) ??
+      items.find((i) => i.provider === defaultEnvProvider) ??
+      items[0],
     [items, defaultEnvProvider]
   );
 
@@ -373,13 +389,25 @@ export default function SettingsPage() {
   const focusedMeta = PROVIDER_META[focusedProvider];
   const focusedDraft = drafts[focusedProvider];
 
+  const sectionTabs: Array<{ id: SettingsSection; label: string; badge?: string }> = [
+    { id: 'general', label: 'General' },
+    {
+      id: 'ai',
+      label: 'AI & Models',
+      badge: billing?.executionMode === 'byok' ? 'BYOK' : billing?.subscription.aiModePreference
+    },
+    { id: 'privacy', label: 'Privacy & Data' },
+    { id: 'account', label: 'Account' }
+  ];
+
   return (
     <AppShell
       title="Settings"
+      subtitle="Manage appearance, AI routing preferences, browser pairing, and account data."
       actions={
-        <Link href="/usage">
+        <Link href="/billing">
           <Button variant="secondary" size="sm">
-            Usage logs
+            Plans &amp; Credits
           </Button>
         </Link>
       }
@@ -388,534 +416,547 @@ export default function SettingsPage() {
       {globalSuccess ? <AlertBanner tone="success" message={globalSuccess} /> : null}
 
       {loading ? (
-        <div className="space-y-6">
-          <SkeletonBlock className="h-24 w-full" />
+        <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-6">
+          <SkeletonBlock className="h-44 w-full" />
           <SkeletonBlock className="h-80 w-full" />
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <SkeletonBlock className="h-56 w-full" />
-            <SkeletonBlock className="h-56 w-full" />
-          </div>
         </div>
       ) : (
-        <div className="space-y-6">
-          {/* 1. Managed AI & Plan Summary */}
-          <section className="border border-[var(--hairline)] bg-[var(--canvas)] p-5 sm:p-6 space-y-5">
-            <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-[var(--hairline)]">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base font-bold text-[var(--ink)]">Managed AI &amp; Plan</h2>
-                  {billing ? (
-                    <Badge tone={billing.executionMode === 'byok' ? 'accent' : 'success'}>
-                      {billing.executionMode === 'byok' ? 'Developer BYOK Active' : `${billing.plan.name} · ${billing.totalCreditsRemaining} cr`}
-                    </Badge>
-                  ) : null}
-                </div>
-                <p className="text-xs text-[var(--mute)]">
-                  JobPilot includes managed Fast and Precision AI routing out of the box—no API key setup needed.
-                </p>
-              </div>
-              <Link href="/billing">
-                <Button variant="primary" size="sm">
-                  Plans &amp; Credits -&gt;
-                </Button>
-              </Link>
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-6 items-start">
+          {/* Categorized Navigation: Horizontal on Mobile, Vertical Sticky Sidebar on Desktop */}
+          <div className="md:hidden">
+            <TabStrip<SettingsSection>
+              label="Settings categories"
+              activeTab={section}
+              onChange={setSection}
+              tabs={sectionTabs}
+            />
+          </div>
 
-            {billing ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-[var(--ink)]">Default AI Quality Mode</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(['fast', 'precision'] as AiQualityMode[]).map((mode) => {
-                      const allowed = billing.entitlements.allowedAiModes.includes(mode);
-                      const selected = billing.subscription.aiModePreference === mode;
-                      return (
-                        <button
-                          key={mode}
-                          type="button"
-                          disabled={savingBillingPref || (!allowed && !billing.subscription.useByokOverride)}
-                          onClick={() => void handleUpdateAiPreferences({ aiModePreference: mode })}
-                          className={`p-3 text-left border rounded-[4px] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
-                            selected
-                              ? 'border-[var(--ink)] bg-[var(--surface-soft)] font-semibold'
-                              : 'border-[var(--hairline)] bg-[var(--canvas)] hover:border-[var(--hairline-strong)]'
-                          }`}
+          <aside className="hidden md:block md:sticky md:top-6">
+            <TabStrip<SettingsSection>
+              label="Settings categories"
+              orientation="vertical"
+              activeTab={section}
+              onChange={setSection}
+              tabs={sectionTabs}
+            />
+          </aside>
+
+          {/* Focused Content Panel */}
+          <div role="tabpanel" aria-label={`${section} settings`} className="space-y-6 min-w-0">
+            {section === 'general' ? (
+              <>
+                <SectionBlock
+                  title="Appearance"
+                  description="Match your system theme or lock Light or Dark mode."
+                >
+                  <ThemeSettingsControl />
+                </SectionBlock>
+
+                <SectionBlock
+                  title="Chrome Extension"
+                  description="Sign in once here and the JobPilot extension connects automatically."
+                >
+                  <div className="space-y-4">
+                    <div className="p-3 bg-[var(--surface-soft)] border border-[var(--hairline)] text-xs space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[var(--mute)]">API Endpoint</span>
+                        <code className="font-bold text-[var(--ink)] truncate">
+                          {getApiBaseUrl()}
+                        </code>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[var(--mute)]">Browser Sync</span>
+                        <span className="text-[var(--body)]">Automatic via web login</span>
+                      </div>
+                    </div>
+
+                    <Disclosure title="Manual pairing fallback">
+                      <div className="space-y-2 text-xs">
+                        <p className="text-[var(--mute)]">
+                          Only needed for isolated Chrome profiles not signed into this site.
+                        </p>
+                        <Button
+                          variant={copiedExt ? 'primary' : 'secondary'}
+                          size="sm"
+                          onClick={() => void handleCopyExtensionSession()}
                         >
-                          <div className="flex items-center justify-between gap-1 text-xs">
-                            <span className="capitalize font-bold text-[var(--ink)]">{mode}</span>
-                            {!allowed ? <Badge tone="neutral">Plus</Badge> : null}
-                          </div>
-                          <p className="text-[11px] text-[var(--mute)] mt-1">
-                            {mode === 'fast'
-                              ? 'Fast Gemini 3.5 Flash-Lite routing'
-                              : 'Precision Gemini 3.8 Flash routing'}
-                          </p>
-                        </button>
-                      );
-                    })}
+                          {copiedExt ? 'Copied Session JSON' : 'Copy Session JSON'}
+                        </Button>
+                      </div>
+                    </Disclosure>
                   </div>
-                </div>
+                </SectionBlock>
 
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-[var(--ink)]">Execution Mode</p>
-                  <label className="flex items-start gap-3 p-3 bg-[var(--surface-soft)] border border-[var(--hairline)] cursor-pointer">
+                <SectionBlock
+                  title="Support & Legal"
+                  description="Report broken application forms, parsing issues, or request features."
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <a
+                        href="https://github.com/Hootsworth/JobPilot/issues/new?labels=bug&title=%5BBug%5D+"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Button type="button" variant="secondary" size="sm">
+                          Report a bug
+                        </Button>
+                      </a>
+                      <a
+                        href="https://github.com/Hootsworth/JobPilot/issues/new?labels=enhancement&title=%5BFeature%5D+"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Button type="button" variant="secondary" size="sm">
+                          Request a feature
+                        </Button>
+                      </a>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          const info = {
+                            app: 'jobpilot-web',
+                            version: '0.1.0',
+                            apiBaseUrl: getApiBaseUrl(),
+                            activeProvider: activeItem?.provider ?? defaultEnvProvider,
+                            userAgent:
+                              typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown'
+                          };
+                          void navigator.clipboard?.writeText(JSON.stringify(info, null, 2));
+                          moToast('Copied debug info');
+                        }}
+                      >
+                        Copy debug info
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-[var(--mute)]">
+                      <Link href="/privacy" className="text-[var(--ink)] underline">
+                        Privacy Policy
+                      </Link>
+                      <span>·</span>
+                      <Link href="/terms" className="text-[var(--ink)] underline">
+                        Terms of Service
+                      </Link>
+                    </div>
+                  </div>
+                </SectionBlock>
+              </>
+            ) : null}
+
+            {section === 'ai' ? (
+              <>
+                <SectionBlock
+                  title="Managed AI Routing"
+                  description="JobPilot includes managed Fast and Precision AI routing out of the box."
+                  action={
+                    billing ? (
+                      <Badge tone={billing.executionMode === 'byok' ? 'accent' : 'success'}>
+                        {billing.executionMode === 'byok'
+                          ? 'Developer BYOK Active'
+                          : `${billing.plan.name} · ${billing.totalCreditsRemaining} cr`}
+                      </Badge>
+                    ) : undefined
+                  }
+                >
+                  {billing ? (
+                    <div className="space-y-5">
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-[var(--ink)]">
+                          Default AI Quality Mode
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {(['fast', 'precision'] as AiQualityMode[]).map((mode) => {
+                            const allowed = billing.entitlements.allowedAiModes.includes(mode);
+                            const selected = billing.subscription.aiModePreference === mode;
+                            return (
+                              <button
+                                key={mode}
+                                type="button"
+                                disabled={
+                                  savingBillingPref ||
+                                  (!allowed && !billing.subscription.useByokOverride)
+                                }
+                                onClick={() =>
+                                  void handleUpdateAiPreferences({ aiModePreference: mode })
+                                }
+                                className={`p-3.5 text-left border rounded-[4px] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
+                                  selected
+                                    ? 'border-[var(--ink)] bg-[var(--surface-soft)] font-semibold'
+                                    : 'border-[var(--hairline)] bg-[var(--canvas)] hover:border-[var(--hairline-strong)]'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1 text-xs">
+                                  <span className="capitalize font-bold text-[var(--ink)]">
+                                    {mode} Mode
+                                  </span>
+                                  {!allowed ? <Badge tone="neutral">Plus</Badge> : null}
+                                </div>
+                                <p className="text-[11px] text-[var(--mute)] mt-1">
+                                  {mode === 'fast'
+                                    ? 'Fast Gemini 3.5 Flash-Lite routing'
+                                    : 'Precision Gemini 3.8 Flash routing'}
+                                </p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <label className="flex items-start gap-3 p-3.5 bg-[var(--surface-soft)] border border-[var(--hairline)] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={billing.subscription.useByokOverride}
+                          disabled={savingBillingPref}
+                          onChange={(e) =>
+                            void handleUpdateAiPreferences({ useByokOverride: e.target.checked })
+                          }
+                          className="mt-0.5 w-4 h-4 shrink-0"
+                        />
+                        <span className="text-xs text-[var(--body)] leading-relaxed">
+                          <strong className="text-[var(--ink)] block">
+                            Enable Developer BYOK Override
+                          </strong>
+                          Route AI calls through your own encrypted API key below (0 managed credits
+                          deducted; requires a saved key).
+                        </span>
+                      </label>
+                    </div>
+                  ) : null}
+                </SectionBlock>
+
+                <Disclosure
+                  id="byok"
+                  title="Developer BYOK Keys (Gemini / OpenAI / Meta Llama)"
+                  summaryMeta={
+                    activeItem?.hasKey ? (
+                      <Badge tone="success">Key saved ({activeItem.keyHint})</Badge>
+                    ) : (
+                      <Badge tone="neutral">Optional</Badge>
+                    )
+                  }
+                  open={byokOpen}
+                  onToggle={setByokOpen}
+                >
+                  <div className="space-y-5">
+                    <div
+                      role="tablist"
+                      aria-label="Select AI Provider to configure"
+                      className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[var(--hairline)] border border-[var(--hairline)]"
+                    >
+                      {PROVIDER_ORDER.map((provId) => {
+                        const item = items.find((i) => i.provider === provId);
+                        const meta = PROVIDER_META[provId];
+                        const isFocused = focusedProvider === provId;
+                        const isActive = item?.isActive ?? false;
+
+                        return (
+                          <button
+                            key={provId}
+                            type="button"
+                            role="tab"
+                            aria-selected={isFocused}
+                            onClick={() => setFocusedProvider(provId)}
+                            className={`p-3.5 text-left transition-colors cursor-pointer ${
+                              isFocused
+                                ? 'bg-[var(--canvas)] border-t-2 border-t-[var(--ink)]'
+                                : 'bg-[var(--surface-soft)] hover:bg-[var(--surface-card)]'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-bold text-[var(--ink)]">
+                                {meta.shortName}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                {isActive ? <Badge tone="dark">Active</Badge> : null}
+                                {item?.hasKey ? (
+                                  <Badge tone="success">{item.keyHint}</Badge>
+                                ) : (
+                                  <Badge tone="neutral">Not set</Badge>
+                                )}
+                              </div>
+                            </div>
+                            <p className="text-[11px] text-[var(--mute)] mt-1 truncate">
+                              {item?.selectedModel || meta.tagline}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {currentItem ? (
+                      <div className="space-y-5">
+                        <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-[var(--hairline)]">
+                          <div>
+                            <h3 className="text-sm font-bold text-[var(--ink)]">
+                              {focusedMeta.name}
+                            </h3>
+                            <p className="text-xs text-[var(--mute)] mt-0.5">
+                              {focusedMeta.docsNote}
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => void handleTestKey(focusedProvider)}
+                            disabled={focusedDraft.testing}
+                          >
+                            {focusedDraft.testing ? 'Testing...' : 'Test connection'}
+                          </Button>
+                        </div>
+
+                        {focusedDraft.error ? (
+                          <AlertBanner tone="error" message={focusedDraft.error} />
+                        ) : null}
+                        {focusedDraft.info ? (
+                          <AlertBanner tone="success" message={focusedDraft.info} />
+                        ) : null}
+                        {focusedDraft.testResult ? (
+                          <AlertBanner
+                            tone={focusedDraft.testResult.ok ? 'success' : 'error'}
+                            title={
+                              focusedDraft.testResult.ok
+                                ? `Verified (${focusedDraft.testResult.modelTested ?? 'default'}) · ${focusedDraft.testResult.latencyMs} ms`
+                                : 'Connection test failed'
+                            }
+                            message={focusedDraft.testResult.message}
+                          />
+                        ) : null}
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <label
+                                htmlFor={`key-${focusedProvider}`}
+                                className="text-sm font-medium text-[var(--ink)]"
+                              >
+                                API Key
+                              </label>
+                              <span className="text-xs text-[var(--mute)]">
+                                {currentItem.hasKey ? `Saved: ${currentItem.keyHint}` : 'No key saved'}
+                              </span>
+                            </div>
+                            <div className="flex gap-2">
+                              <Input
+                                id={`key-${focusedProvider}`}
+                                type={focusedDraft.showKey ? 'text' : 'password'}
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="none"
+                                spellCheck={false}
+                                value={focusedDraft.apiKey}
+                                onChange={(e) =>
+                                  updateDraft(focusedProvider, { apiKey: e.target.value })
+                                }
+                                placeholder={
+                                  currentItem.hasKey
+                                    ? '•••••••••••• (leave blank to keep)'
+                                    : `Paste ${focusedMeta.shortName} API key...`
+                                }
+                              />
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() =>
+                                  updateDraft(focusedProvider, { showKey: !focusedDraft.showKey })
+                                }
+                              >
+                                {focusedDraft.showKey ? 'Hide' : 'Show'}
+                              </Button>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <label
+                                htmlFor={`model-${focusedProvider}`}
+                                className="text-sm font-medium text-[var(--ink)]"
+                              >
+                                Model
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => void handleFetchModels(focusedProvider)}
+                                disabled={focusedDraft.loadingModels}
+                                className="text-xs font-medium text-[var(--accent-text)] hover:underline cursor-pointer disabled:opacity-50"
+                              >
+                                {focusedDraft.loadingModels
+                                  ? 'Loading...'
+                                  : focusedDraft.models.length > 0
+                                    ? `Refresh (${focusedDraft.models.length})`
+                                    : 'Fetch models'}
+                              </button>
+                            </div>
+                            {focusedDraft.models.length > 0 ? (
+                              <Select
+                                id={`model-${focusedProvider}`}
+                                value={focusedDraft.selectedModel}
+                                onChange={(e) =>
+                                  updateDraft(focusedProvider, { selectedModel: e.target.value })
+                                }
+                              >
+                                <option value="">Use provider default</option>
+                                {focusedDraft.models.map((m) => (
+                                  <option key={m.id} value={m.id}>
+                                    {m.displayName && m.displayName !== m.id
+                                      ? `${m.displayName} (${m.id})`
+                                      : m.id}
+                                  </option>
+                                ))}
+                              </Select>
+                            ) : (
+                              <Input
+                                id={`model-${focusedProvider}`}
+                                autoCorrect="off"
+                                autoCapitalize="none"
+                                spellCheck={false}
+                                value={focusedDraft.selectedModel}
+                                onChange={(e) =>
+                                  updateDraft(focusedProvider, { selectedModel: e.target.value })
+                                }
+                                placeholder={focusedMeta.suggestedModelPlaceholder}
+                              />
+                            )}
+                          </div>
+                        </div>
+
+                        {focusedProvider === 'meta' ? (
+                          <Field
+                            label="Custom Base URL"
+                            htmlFor="meta-base-url"
+                            hint={`Defaults to ${focusedMeta.defaultEndpoint}`}
+                          >
+                            {(props) => (
+                              <Input
+                                {...props}
+                                type="url"
+                                autoCorrect="off"
+                                autoCapitalize="none"
+                                spellCheck={false}
+                                value={focusedDraft.baseUrlOverride}
+                                onChange={(e) =>
+                                  updateDraft('meta', { baseUrlOverride: e.target.value })
+                                }
+                                placeholder="https://api.llama.com/compat/v1/"
+                              />
+                            )}
+                          </Field>
+                        ) : null}
+
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[var(--hairline)]">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              onClick={() => void handleSaveProvider(focusedProvider, true)}
+                              disabled={focusedDraft.saving}
+                            >
+                              {focusedDraft.saving
+                                ? 'Saving...'
+                                : currentItem.isActive
+                                  ? 'Save changes'
+                                  : 'Save & activate'}
+                            </Button>
+                            {!currentItem.isActive ? (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => void handleSaveProvider(focusedProvider, false)}
+                                disabled={focusedDraft.saving}
+                              >
+                                Save only
+                              </Button>
+                            ) : null}
+                            {currentItem.hasKey ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => void handleClearKey(focusedProvider)}
+                                disabled={focusedDraft.saving}
+                              >
+                                Remove key
+                              </Button>
+                            ) : null}
+                          </div>
+
+                          <span className="text-xs text-[var(--mute)]">
+                            {currentItem.lastTestedAt
+                              ? `Last checked ${new Date(currentItem.lastTestedAt).toLocaleString()}`
+                              : 'AES-256-GCM encrypted at rest'}
+                          </span>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </Disclosure>
+              </>
+            ) : null}
+
+            {section === 'privacy' ? (
+              <SectionBlock
+                title="Privacy & Data Portability"
+                description="Your profile, tailored resumes, and application history belong to your account."
+              >
+                <div className="space-y-5">
+                  <label className="flex items-start gap-3 p-3.5 bg-[var(--surface-soft)] border border-[var(--hairline)] cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={billing.subscription.useByokOverride}
-                      disabled={savingBillingPref}
-                      onChange={(e) =>
-                        void handleUpdateAiPreferences({ useByokOverride: e.target.checked })
-                      }
+                      checked={profile?.telemetryOptIn ?? false}
+                      onChange={(e) => void handleToggleTelemetry(e.target.checked)}
                       className="mt-0.5 w-4 h-4 shrink-0"
                     />
                     <span className="text-xs text-[var(--body)] leading-relaxed">
                       <strong className="text-[var(--ink)] block">
-                        Enable Developer BYOK Override
+                        Share anonymous diagnostics
                       </strong>
-                      Route AI calls through your own encrypted API key below (0 managed credits deducted; requires a saved key).
+                      Off by default. Your personal usage logs and credit ledger remain visible
+                      either way.
                     </span>
                   </label>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[var(--hairline)]">
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-medium text-[var(--ink)]">Export Account Data</p>
+                      <p className="text-xs text-[var(--mute)]">
+                        Download your complete profile, resumes, cover letters, and tracker history
+                        as JSON.
+                      </p>
+                    </div>
+                    <Button variant="secondary" size="sm" onClick={() => void handleExportData()}>
+                      Export JSON
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              </SectionBlock>
             ) : null}
-          </section>
 
-          {/* 2. Advanced: Developer BYOK Console */}
-          <details
-            id="byok"
-            open={byokOpen}
-            onToggle={(e) => setByokOpen((e.currentTarget as HTMLDetailsElement).open)}
-            className="border border-[var(--hairline)] bg-[var(--canvas)]"
-          >
-            <summary className="px-5 py-4 cursor-pointer flex flex-wrap items-center justify-between gap-2 bg-[var(--surface-soft)] hover:bg-[var(--surface-card)]">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-bold text-[var(--ink)]">
-                  Advanced: Developer BYOK Mode (OpenAI / Gemini / Meta Llama)
-                </span>
-                {activeItem?.hasKey ? (
-                  <Badge tone="success">Key saved ({activeItem.keyHint})</Badge>
-                ) : (
-                  <Badge tone="neutral">Optional</Badge>
-                )}
-              </div>
-              <span className="text-xs text-[var(--mute)]">
-                {byokOpen ? 'Hide [-]' : 'Expand [+]'}
-              </span>
-            </summary>
-
-            <div className="border-t border-[var(--hairline)]">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-[var(--hairline)] border-b border-[var(--hairline)]">
-                <div className="p-4 bg-[var(--surface-soft)]">
-                  <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                    Provider
-                  </div>
-                  <div className="text-sm font-bold text-[var(--ink)] mt-1">
-                    {activeItem ? PROVIDER_META[activeItem.provider].shortName : defaultEnvProvider}
-                  </div>
-                </div>
-
-                <div className="p-4 bg-[var(--surface-soft)]">
-                  <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                    Model
-                  </div>
-                  <div className="text-sm font-bold text-[var(--ink)] truncate mt-1">
-                    {activeItem?.selectedModel || 'Default'}
-                  </div>
-                </div>
-
-                <div className="p-4 bg-[var(--surface-soft)]">
-                  <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                    API Key
-                  </div>
-                  <div className="text-sm font-bold text-[var(--ink)] mt-1">
-                    {activeItem?.hasKey
-                      ? `Saved (${activeItem.keyHint})`
-                      : activeItem?.usingEnvFallback
-                        ? 'Server default'
-                        : 'Not set'}
-                  </div>
-                </div>
-
-                <div className="p-4 bg-[var(--surface-soft)]">
-                  <div className="text-[11px] uppercase tracking-wider text-[var(--mute)]">
-                    Security
-                  </div>
-                  <div className="text-sm font-bold text-[var(--ink)] mt-1">AES-256-GCM</div>
-                </div>
-              </div>
-
-              <div
-                role="tablist"
-                aria-label="Select AI Provider to configure"
-                className="grid grid-cols-1 md:grid-cols-3 gap-px bg-[var(--hairline)] border-b border-[var(--hairline)]"
-              >
-              {PROVIDER_ORDER.map((provId) => {
-                const item = items.find((i) => i.provider === provId);
-                const meta = PROVIDER_META[provId];
-                const isFocused = focusedProvider === provId;
-                const isActive = item?.isActive ?? false;
-
-                return (
-                  <button
-                    key={provId}
-                    type="button"
-                    role="tab"
-                    aria-selected={isFocused}
-                    onClick={() => setFocusedProvider(provId)}
-                    className={`p-4 text-left transition-colors cursor-pointer ${
-                      isFocused
-                        ? 'bg-[var(--canvas)] border-t-2 border-t-[var(--ink)]'
-                        : 'bg-[var(--surface-soft)] hover:bg-[var(--surface-card)]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-bold text-[var(--ink)]">
-                        {meta.shortName}
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        {isActive ? <Badge tone="dark">Active</Badge> : null}
-                        {item?.hasKey ? (
-                          <Badge tone="success">{item.keyHint}</Badge>
-                        ) : item?.usingEnvFallback ? (
-                          <Badge tone="accent">Default</Badge>
-                        ) : (
-                          <Badge tone="neutral">Not set</Badge>
-                        )}
-                      </div>
-                    </div>
-                    <p className="text-xs text-[var(--mute)] mt-1.5 truncate">
-                      {item?.selectedModel || meta.tagline}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
-
-            {currentItem ? (
-              <div className="p-5 sm:p-6 space-y-6">
-                <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-[var(--hairline)]">
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-base font-bold text-[var(--ink)]">{focusedMeta.name}</h2>
-                      {currentItem.isActive ? <Badge tone="dark">Active</Badge> : null}
-                    </div>
-                    <p className="text-xs text-[var(--mute)]">{focusedMeta.docsNote}</p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {!currentItem.isActive ? (
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        onClick={() => void handleSaveProvider(focusedProvider, true)}
-                        disabled={focusedDraft.saving}
-                      >
-                        Set as active
+            {section === 'account' ? (
+              <>
+                <SectionBlock
+                  title="Subscription & Usage"
+                  description="Review your active plan, credit balance, and AI call activity."
+                >
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Link href="/billing">
+                      <Button variant="secondary" size="sm">
+                        Manage Plans &amp; Credits
                       </Button>
-                    ) : null}
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void handleTestKey(focusedProvider)}
-                      disabled={focusedDraft.testing}
-                    >
-                      {focusedDraft.testing ? 'Testing...' : 'Test key'}
-                    </Button>
-                  </div>
-                </div>
-
-                {focusedDraft.error ? (
-                  <AlertBanner tone="error" message={focusedDraft.error} />
-                ) : null}
-                {focusedDraft.info ? (
-                  <AlertBanner tone="success" message={focusedDraft.info} />
-                ) : null}
-                {focusedDraft.testResult ? (
-                  <AlertBanner
-                    tone={focusedDraft.testResult.ok ? 'success' : 'error'}
-                    title={
-                      focusedDraft.testResult.ok
-                        ? `Verified (${focusedDraft.testResult.modelTested ?? 'default'}) · ${focusedDraft.testResult.latencyMs} ms`
-                        : 'Connection test failed'
-                    }
-                    message={focusedDraft.testResult.message}
-                  />
-                ) : null}
-
-                {/* 2-Column Credentials & Model Form */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label
-                        htmlFor={`key-${focusedProvider}`}
-                        className="text-sm font-medium text-[var(--ink)]"
-                      >
-                        API Key
-                      </label>
-                      <span className="text-xs text-[var(--mute)]">
-                        {currentItem.hasKey
-                          ? `Saved: ${currentItem.keyHint}`
-                          : currentItem.usingEnvFallback
-                            ? 'Using server default'
-                            : 'No key saved'}
-                      </span>
-                    </div>
-                    <p className="text-xs text-[var(--mute)]">
-                      Stored encrypted on the server and never exposed in browser logs.
-                    </p>
-                    <div className="flex gap-2">
-                      <Input
-                        id={`key-${focusedProvider}`}
-                        type={focusedDraft.showKey ? 'text' : 'password'}
-                        autoComplete="off"
-                        autoCorrect="off"
-                        autoCapitalize="none"
-                        spellCheck={false}
-                        value={focusedDraft.apiKey}
-                        onChange={(e) =>
-                          updateDraft(focusedProvider, { apiKey: e.target.value })
-                        }
-                        placeholder={
-                          currentItem.hasKey
-                            ? '•••••••••••• (leave blank to keep)'
-                            : `Paste ${focusedMeta.shortName} API key...`
-                        }
-                      />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() =>
-                          updateDraft(focusedProvider, { showKey: !focusedDraft.showKey })
-                        }
-                      >
-                        {focusedDraft.showKey ? 'Hide' : 'Show'}
+                    </Link>
+                    <Link href="/usage">
+                      <Button variant="secondary" size="sm">
+                        View AI Usage Logs
                       </Button>
-                    </div>
+                    </Link>
                   </div>
+                </SectionBlock>
 
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label
-                        htmlFor={`model-${focusedProvider}`}
-                        className="text-sm font-medium text-[var(--ink)]"
-                      >
-                        Model
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => void handleFetchModels(focusedProvider)}
-                        disabled={focusedDraft.loadingModels}
-                        className="text-xs font-medium text-[var(--accent-text)] hover:underline cursor-pointer disabled:opacity-50"
-                      >
-                        {focusedDraft.loadingModels
-                          ? 'Loading models...'
-                          : focusedDraft.models.length > 0
-                            ? `Refresh list (${focusedDraft.models.length})`
-                            : 'Fetch live models'}
-                      </button>
-                    </div>
-                    <p className="text-xs text-[var(--mute)]">
-                      Pick from available models or enter a model identifier directly.
-                    </p>
-                    {focusedDraft.models.length > 0 ? (
-                      <Select
-                        id={`model-${focusedProvider}`}
-                        value={focusedDraft.selectedModel}
-                        onChange={(e) =>
-                          updateDraft(focusedProvider, { selectedModel: e.target.value })
-                        }
-                      >
-                        <option value="">Use provider default</option>
-                        {focusedDraft.models.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.displayName && m.displayName !== m.id
-                              ? `${m.displayName} (${m.id})`
-                              : m.id}
-                          </option>
-                        ))}
-                      </Select>
-                    ) : (
-                      <Input
-                        id={`model-${focusedProvider}`}
-                        autoCorrect="off"
-                        autoCapitalize="none"
-                        spellCheck={false}
-                        value={focusedDraft.selectedModel}
-                        onChange={(e) =>
-                          updateDraft(focusedProvider, { selectedModel: e.target.value })
-                        }
-                        placeholder={focusedMeta.suggestedModelPlaceholder}
-                      />
-                    )}
-                  </div>
-                </div>
-
-                {focusedProvider === 'meta' ? (
-                  <div className="pt-2 border-t border-[var(--hairline)]">
-                    <Field
-                      label="Custom Base URL"
-                      htmlFor="meta-base-url"
-                      hint={`Defaults to ${focusedMeta.defaultEndpoint}`}
-                    >
-                      {(props) => (
-                        <Input
-                          {...props}
-                          type="url"
-                          autoCorrect="off"
-                          autoCapitalize="none"
-                          spellCheck={false}
-                          value={focusedDraft.baseUrlOverride}
-                          onChange={(e) =>
-                            updateDraft('meta', { baseUrlOverride: e.target.value })
-                          }
-                          placeholder="https://api.llama.com/compat/v1/"
-                        />
-                      )}
-                    </Field>
-                  </div>
-                ) : null}
-
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-[var(--hairline)]">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={() => void handleSaveProvider(focusedProvider, true)}
-                      disabled={focusedDraft.saving}
-                    >
-                      {focusedDraft.saving
-                        ? 'Saving...'
-                        : currentItem.isActive
-                          ? 'Save changes'
-                          : 'Save & activate'}
-                    </Button>
-                    {!currentItem.isActive ? (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => void handleSaveProvider(focusedProvider, false)}
-                        disabled={focusedDraft.saving}
-                      >
-                        Save only
-                      </Button>
-                    ) : null}
-                    {currentItem.hasKey ? (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => void handleClearKey(focusedProvider)}
-                        disabled={focusedDraft.saving}
-                      >
-                        Remove key
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  <span className="text-xs text-[var(--mute)]">
-                    {currentItem.lastTestedAt
-                      ? `Last checked ${new Date(currentItem.lastTestedAt).toLocaleString()}`
-                      : focusedMeta.defaultEndpoint}
-                  </span>
-                </div>
-              </div>
-            ) : null}
-            </div>
-          </details>
-
-          {/* 3. Lower Equal-Height 2-Column Workspace Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-            {/* Left Column: Extension & Theme */}
-            <div className="border border-[var(--hairline)] bg-[var(--canvas)] divide-y divide-[var(--hairline)] flex flex-col justify-between">
-              <div className="p-5 sm:p-6 space-y-4">
-                <div>
-                  <h2 className="text-base font-bold text-[var(--ink)]">Chrome Extension</h2>
-                  <p className="text-xs text-[var(--mute)] mt-0.5">
-                    Sign in once here and the JobPilot extension connects automatically.
-                  </p>
-                </div>
-
-                <div className="p-3 bg-[var(--surface-soft)] border border-[var(--hairline)] text-xs space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[var(--mute)]">API Endpoint</span>
-                    <code className="font-bold text-[var(--ink)] truncate">{getApiBaseUrl()}</code>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[var(--mute)]">Browser Sync</span>
-                    <span className="text-[var(--body)]">Automatic via web login</span>
-                  </div>
-                </div>
-
-                <details className="text-xs">
-                  <summary className="cursor-pointer text-[var(--mute)] hover:text-[var(--ink)] font-medium">
-                    Manual pairing fallback
-                  </summary>
-                  <div className="mt-3 space-y-2">
-                    <Button
-                      variant={copiedExt ? 'primary' : 'secondary'}
-                      size="sm"
-                      onClick={() => void handleCopyExtensionSession()}
-                    >
-                      {copiedExt ? 'Copied Session JSON' : 'Copy Session JSON'}
-                    </Button>
-                    <p className="text-[var(--mute)]">
-                      Only needed for isolated Chrome profiles not signed into this site.
-                    </p>
-                  </div>
-                </details>
-              </div>
-
-              <div className="p-5 sm:p-6 space-y-3">
-                <div>
-                  <h2 className="text-base font-bold text-[var(--ink)]">Appearance</h2>
-                  <p className="text-xs text-[var(--mute)] mt-0.5">
-                    Match your system theme or lock Light or Dark mode.
-                  </p>
-                </div>
-                <ThemeSettingsControl />
-              </div>
-            </div>
-
-            {/* Right Column: Privacy, Data Portability & Danger Zone */}
-            <div className="border border-[var(--hairline)] bg-[var(--canvas)] divide-y divide-[var(--hairline)] flex flex-col justify-between">
-              <div className="p-5 sm:p-6 space-y-4">
-                <div>
-                  <h2 className="text-base font-bold text-[var(--ink)]">Privacy &amp; Data</h2>
-                  <p className="text-xs text-[var(--mute)] mt-0.5">
-                    Your profile, resumes, and application history belong to your account.
-                  </p>
-                </div>
-
-                <label className="flex items-start gap-3 p-3 bg-[var(--surface-soft)] border border-[var(--hairline)] cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={profile?.telemetryOptIn ?? false}
-                    onChange={(e) => void handleToggleTelemetry(e.target.checked)}
-                    className="mt-0.5 w-4 h-4 shrink-0"
-                  />
-                  <span className="text-xs text-[var(--body)] leading-relaxed">
-                    <strong className="text-[var(--ink)] block">
-                      Share anonymous diagnostics
-                    </strong>
-                    Off by default. Your personal token and cost ledger remains visible either way.
-                  </span>
-                </label>
-
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                  <span className="text-xs text-[var(--mute)]">
-                    Download your complete account archive as JSON.
-                  </span>
-                  <Button variant="secondary" size="sm" onClick={() => void handleExportData()}>
-                    Export data
-                  </Button>
-                </div>
-              </div>
-
-              <div className="p-5 sm:p-6 bg-[var(--danger-bg)]/40 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
+                <section className="border border-[var(--danger-text)]/40 bg-[var(--danger-bg)]/40 p-5 flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <h2 className="text-sm font-bold text-[var(--danger-text)]">Delete Account</h2>
-                    <p className="text-xs text-[var(--body)] mt-0.5">
+                    <p className="text-xs text-[var(--body)] mt-1">
                       Permanently remove your profile, resumes, keys, and applications.
                     </p>
                   </div>
@@ -926,65 +967,10 @@ export default function SettingsPage() {
                   >
                     Delete account
                   </Button>
-                </div>
-              </div>
-            </div>
+                </section>
+              </>
+            ) : null}
           </div>
-
-          {/* 4. Feedback & Support */}
-          <section className="border border-[var(--hairline)] bg-[var(--canvas)] p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4">
-            <div className="space-y-1">
-              <h2 className="text-base font-bold text-[var(--ink)]">Feedback &amp; Support</h2>
-              <p className="text-xs text-[var(--mute)]">
-                Report broken application forms, parsing issues, or request features.{' '}
-                <Link href="/privacy" className="text-[var(--ink)] underline">
-                  Privacy Policy
-                </Link>{' '}
-                ·{' '}
-                <Link href="/terms" className="text-[var(--ink)] underline">
-                  Terms of Service
-                </Link>
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <a
-                href="https://github.com/Hootsworth/JobPilot/issues/new?labels=bug&title=%5BBug%5D+"
-                target="_blank"
-                rel="noreferrer"
-              >
-                <Button type="button" variant="secondary" size="sm">
-                  Report a bug
-                </Button>
-              </a>
-              <a
-                href="https://github.com/Hootsworth/JobPilot/issues/new?labels=enhancement&title=%5BFeature%5D+"
-                target="_blank"
-                rel="noreferrer"
-              >
-                <Button type="button" variant="secondary" size="sm">
-                  Request a feature
-                </Button>
-              </a>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  const info = {
-                    app: 'jobpilot-web',
-                    version: '0.1.0',
-                    apiBaseUrl: getApiBaseUrl(),
-                    activeProvider: activeItem?.provider ?? defaultEnvProvider,
-                    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown'
-                  };
-                  void navigator.clipboard?.writeText(JSON.stringify(info, null, 2));
-                  moToast('Copied debug info');
-                }}
-              >
-                Copy debug info
-              </Button>
-            </div>
-          </section>
         </div>
       )}
 

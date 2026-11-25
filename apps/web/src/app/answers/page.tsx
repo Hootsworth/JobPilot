@@ -13,6 +13,7 @@ import {
   Badge,
   Button,
   ConfirmDialog,
+  Disclosure,
   EmptyState,
   Field,
   Input,
@@ -34,6 +35,7 @@ export default function SavedAnswersPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
   const [form, setForm] = useState<UpsertSavedAnswerRequest>(EMPTY_ANSWER);
   const [tagsText, setTagsText] = useState('');
   const [saving, setSaving] = useState(false);
@@ -51,12 +53,14 @@ export default function SavedAnswersPage() {
 
   const resetForm = () => {
     setEditingId(null);
+    setComposerOpen(false);
     setForm(EMPTY_ANSWER);
     setTagsText('');
   };
 
   const applyTemplate = (tpl: (typeof COMMON_QUESTION_TEMPLATES)[number]) => {
     setEditingId(null);
+    setComposerOpen(true);
     setForm({
       questionKey: tpl.questionKey,
       questionPattern: tpl.questionPattern,
@@ -68,6 +72,7 @@ export default function SavedAnswersPage() {
 
   const startEdit = (item: SavedAnswer) => {
     setEditingId(item.id);
+    setComposerOpen(true);
     setForm({
       questionKey: item.questionKey,
       questionPattern: item.questionPattern,
@@ -139,66 +144,99 @@ export default function SavedAnswersPage() {
     : answers;
 
   return (
-    <AppShell title="Saved Answers">
+    <AppShell
+      title="Saved Answers"
+      subtitle="Reusable answers for application portal prompts and Chrome Extension autofill."
+      actions={
+        <Button
+          variant={composerOpen ? 'secondary' : 'primary'}
+          size="sm"
+          onClick={() => {
+            if (composerOpen) {
+              resetForm();
+            } else {
+              setEditingId(null);
+              setForm(EMPTY_ANSWER);
+              setTagsText('');
+              setComposerOpen(true);
+            }
+          }}
+        >
+          {composerOpen ? 'Close form' : '+ New Answer'}
+        </Button>
+      }
+    >
       {errorMsg ? <AlertBanner tone="error" message={errorMsg} /> : null}
       {successMsg ? <AlertBanner tone="success" message={successMsg} /> : null}
 
-      <SectionBlock title="Quick-Start Templates">
-        <div className="flex flex-wrap gap-2">
-          {COMMON_QUESTION_TEMPLATES.map((tpl) => (
-            <Button
-              key={tpl.questionKey}
-              size="sm"
-              variant="secondary"
-              onClick={() => applyTemplate(tpl)}
-            >
-              {formatTemplateLabel(tpl.questionKey)}
-            </Button>
-          ))}
-        </div>
-      </SectionBlock>
-
-      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-stretch">
-        <div className="xl:col-span-2">
-          <SectionBlock title={editingId ? 'Edit Saved Answer' : 'New Saved Answer'}>
-            <form onSubmit={handleSave} className="space-y-4">
-              <Field
-                label="Question Key"
-                htmlFor="ans-key"
-                hint="Slug identifier (e.g. ctc_expectation_india)"
-                required
+      <div className="space-y-6">
+        <Disclosure
+          title="Quick-start question templates"
+          summaryMeta={<Badge tone="neutral">{COMMON_QUESTION_TEMPLATES.length} templates</Badge>}
+        >
+          <div className="flex flex-wrap gap-2">
+            {COMMON_QUESTION_TEMPLATES.map((tpl) => (
+              <Button
+                key={tpl.questionKey}
+                size="sm"
+                variant="secondary"
+                onClick={() => applyTemplate(tpl)}
               >
-                {(props) => (
-                  <Input
-                    {...props}
-                    required
-                    autoCorrect="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    value={form.questionKey}
-                    onChange={(e) => setForm({ ...form, questionKey: e.target.value })}
-                    placeholder="why_this_company"
-                  />
-                )}
-              </Field>
+                {formatTemplateLabel(tpl.questionKey)}
+              </Button>
+            ))}
+          </div>
+        </Disclosure>
 
-              <Field label="Question Pattern" htmlFor="ans-pattern" required>
-                {(props) => (
-                  <Input
-                    {...props}
-                    required
-                    value={form.questionPattern}
-                    onChange={(e) => setForm({ ...form, questionPattern: e.target.value })}
-                    placeholder="What is your expected CTC (LPA)?"
-                  />
-                )}
-              </Field>
+        {composerOpen ? (
+          <SectionBlock
+            title={editingId ? 'Edit Saved Answer' : 'New Saved Answer'}
+            action={
+              <Button size="sm" variant="ghost" onClick={resetForm}>
+                Cancel
+              </Button>
+            }
+          >
+            <form onSubmit={handleSave} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field
+                  label="Question Key"
+                  htmlFor="ans-key"
+                  hint="Slug identifier (e.g. ctc_expectation_india)"
+                  required
+                >
+                  {(props) => (
+                    <Input
+                      {...props}
+                      required
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      value={form.questionKey}
+                      onChange={(e) => setForm({ ...form, questionKey: e.target.value })}
+                      placeholder="why_this_company"
+                    />
+                  )}
+                </Field>
+
+                <Field label="Question Pattern" htmlFor="ans-pattern" required>
+                  {(props) => (
+                    <Input
+                      {...props}
+                      required
+                      value={form.questionPattern}
+                      onChange={(e) => setForm({ ...form, questionPattern: e.target.value })}
+                      placeholder="What is your expected CTC (LPA)?"
+                    />
+                  )}
+                </Field>
+              </div>
 
               <Field label="Saved Answer" htmlFor="ans-body" required>
                 {(props) => (
                   <Textarea
                     {...props}
-                    rows={5}
+                    rows={4}
                     required
                     value={form.answer}
                     onChange={(e) => setForm({ ...form, answer: e.target.value })}
@@ -222,82 +260,85 @@ export default function SavedAnswersPage() {
                 <Button type="submit" variant="primary" disabled={saving}>
                   {saving ? 'Saving...' : editingId ? 'Update Answer' : 'Save Answer'}
                 </Button>
-                {editingId ? (
-                  <Button variant="secondary" onClick={resetForm}>
-                    Cancel
-                  </Button>
-                ) : null}
+                <Button variant="secondary" onClick={resetForm}>
+                  Cancel
+                </Button>
               </div>
             </form>
           </SectionBlock>
-        </div>
+        ) : null}
 
-        <div className="xl:col-span-3">
-          <SectionBlock
-            title={`Saved Answers (${filtered.length})`}
-            action={
-              <search>
-                <Input
-                  type="search"
-                  aria-label="Filter saved answers"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search questions or tags..."
-                  className="min-h-[36px] text-xs w-full sm:w-52"
-                />
-              </search>
-            }
-          >
-            {loading ? (
-              <div className="space-y-3">
-                <SkeletonBlock className="h-20 w-full" />
-                <SkeletonBlock className="h-20 w-full" />
-              </div>
-            ) : filtered.length === 0 ? (
-              <EmptyState
-                title="No saved answers found"
-                description="Use a quick-start template above or create a custom response for recurring form prompts."
+        <SectionBlock
+          title={`Saved Answers (${filtered.length})`}
+          action={
+            <search>
+              <Input
+                type="search"
+                aria-label="Filter saved answers"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search questions or tags..."
+                className="min-h-[36px] text-xs w-full sm:w-56"
               />
-            ) : (
-              <div className="divide-y divide-[var(--hairline)]">
-                {filtered.map((item) => (
-                  <article key={item.id} className="py-4 first:pt-0 last:pb-0 space-y-2">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <p className="text-xs text-[var(--mute)]">{item.questionKey}</p>
-                        <h3 className="text-sm font-bold text-[var(--ink)]">
-                          {item.questionPattern}
-                        </h3>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="secondary" onClick={() => startEdit(item)}>
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setDeleteTarget(item)}
-                        >
-                          Delete
-                        </Button>
-                      </div>
+            </search>
+          }
+        >
+          {loading ? (
+            <div className="space-y-3">
+              <SkeletonBlock className="h-20 w-full" />
+              <SkeletonBlock className="h-20 w-full" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              title="No saved answers found"
+              description="Open quick-start templates above or add a custom response for recurring form prompts."
+              action={
+                !composerOpen ? (
+                  <Button variant="primary" size="sm" onClick={() => setComposerOpen(true)}>
+                    + Add your first answer
+                  </Button>
+                ) : undefined
+              }
+            />
+          ) : (
+            <div className="divide-y divide-[var(--hairline)]">
+              {filtered.map((item) => (
+                <article key={item.id} className="py-4 first:pt-0 last:pb-0 space-y-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs text-[var(--mute)]">{item.questionKey}</p>
+                      <h3 className="text-sm font-bold text-[var(--ink)]">
+                        {item.questionPattern}
+                      </h3>
                     </div>
-                    <p className="text-sm text-[var(--body)] whitespace-pre-wrap">{item.answer}</p>
-                    {item.tags.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {item.tags.map((tag) => (
-                          <Badge key={tag} tone="neutral">
-                            #{tag}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            )}
-          </SectionBlock>
-        </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="secondary" onClick={() => startEdit(item)}>
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleteTarget(item)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="text-sm text-[var(--body)] whitespace-pre-wrap">{item.answer}</p>
+                  {item.tags.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {item.tags.map((tag) => (
+                        <Badge key={tag} tone="neutral">
+                          #{tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          )}
+        </SectionBlock>
       </div>
 
       <ConfirmDialog
